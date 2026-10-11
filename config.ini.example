@@ -1,0 +1,167 @@
+
+[APP]
+language = en
+log_tools_to_notes = true
+
+quit_stops_mcp = true
+
+[API]
+base_url = http://127.0.0.1:8080/v1
+api_key =
+model = your-model
+
+[MODELS]
+
+
+
+[RAG]
+base_url =
+api_key =
+model = nomic-embed
+chunk_size = 25
+chunk_overlap = 5
+search_k = 5
+max_chunk_chars = 1600
+min_similarity_score = 0.18
+
+[BROWSER]
+base_url =
+api_key =
+model =
+use_thinking =
+user_agent =
+headless = false
+structured_output = auto
+flash_mode = auto
+fallback_model =
+viewport_width = 1024
+viewport_height = 768
+locale = es-ES
+use_vision = auto
+wait_between_actions = 1.2
+wait_network_idle = 3.0
+max_steps_default = 30
+max_actions_per_step = 3
+default_skill_category = skills
+skills_index_budget = 6000
+
+[IMAGE]
+
+[HANDS]
+remote_model = ask
+verify = true
+action_delay = 0.4
+screenshot_max_width = 1280
+consent_timeout = 300
+op_timeout = 45
+local_hosts =
+pixel_backend = auto
+
+[SEARCH]
+provider = perplexity
+
+[PERPLEXITY]
+api_key =
+model = sonar-pro
+url = https://api.perplexity.ai
+
+[FIRECRAWL]
+api_key =
+url = https://api.firecrawl.dev
+limit = 5
+max_chars = 0
+
+[EXA]
+api_key =
+url = https://api.exa.ai
+mode = search
+type = auto
+limit = 5
+max_chars = 0
+
+[TAVILY]
+api_key =
+url = https://api.tavily.com
+depth = basic
+limit = 5
+include_answer = true
+
+[CRAWL4AI]
+max_depth = 0
+max_pages = 10
+max_urls = 10
+timeout = 60
+stealth = true
+override_navigator = true
+magic = false
+simulate_user = false
+
+[CHAT]
+auto_route_models = true
+compact_threshold = 0.85    ; compacts at 85% of the context window
+compact_keep_recent = 6     ; recent messages that are NOT compacted
+cron_live_turns = 0
+context_length = 30000
+timeout = 1000
+font_size = 13
+agentic_max_iterations = 20
+client_tool_timeout = 3600
+terminal_timeout = 300
+
+planner_model =
+qa_model =
+escalate_on_stall = true
+escalate_model = auto
+vision_model =
+qa_review = off
+history_transcript = true
+qa_max_rounds = 2
+qa_budget_chars = 40000
+
+metacog = true
+metacog_stall_seconds = 120
+metacog_stall_tools = 4
+heavy_sterile_cut = 3
+
+plan_approval = always
+plan_auto_limit = 3
+plan_ack_timeout = 900
+multi_max_parallel = 4
+multi_max_retries = 2
+council_max_rounds = 4
+council_gate_timeout = 900
+plan_max_expansions = 2
+plan_max_subtasks = 12
+
+
+max_tokens = 8000
+vision = false
+session_inject_context = true
+[MCP]
+url = http://127.0.0.1:9077
+enabled = true
+sync_on_boot = true
+sync_every_min = 15
+
+[MCP_SERVERS]
+
+[SKILLS]
+ask_which = true
+
+[LESSONS]
+enabled = true
+extract_on_feedback = true
+inject_on_chat = true
+
+[MEMORY]
+base_url =
+api_key =
+model =
+auto_review = on
+review_every_hours = 168
+review_facts = 0
+
+[AGENTIC]
+defer_tool_schemas = true
+hot_tools = 12
+tool_result_max_chars = 8000

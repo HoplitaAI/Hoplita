@@ -1,0 +1,596 @@
+# HOPLITA — Federation, step by step
+
+Federation is optional. Without it HOPLITA works fully on one machine. With it
+you get an identity on a federation server, and with that identity you can:
+
+- keep your own machines in sync,
+- add contacts and share note folders, task projects, appointments, skills and
+  code repositories with them,
+- ask a contact's agent to do a task on their machine,
+- run headless agents of your own (children) on other machines.
+
+The server is a relay: what you sync or share is sealed end to end with your
+keys, and the server only stores and forwards blobs it cannot read. The
+concepts are in the user guide
+([Federation](GUIDE.md#federation-optional),
+[Children](GUIDE.md#children-local-packs-and-remote-nodes),
+[Co-work](GUIDE.md#the-co-work-page--sharing-a-repo-and-leaving),
+[Activity](GUIDE.md#what-your-contacts-did-to-what-you-share),
+[Sharing code](GUIDE.md#sharing-code-asks-before-it-builds)). This page
+covers the procedures.
+
+**How to read the steps.** «Chat:» means you type the request in a chat tab and
+the agent calls the tool named in brackets. The same request works from the
+CLI, because the CLI talks to the same agent: `hoplita-cli "<the request>"`.
+The CLI binary lives at `cli/dist/hoplita-cli` inside the install folder
+(`install.py --cli` builds it); run it from there or put it on your `PATH`.
+Every tool is described in [TOOLS.md](TOOLS.md).
+
+---
+
+## 1. Choose a federation server
+
+You have two options:
+
+- **The public server**, `https://hoplita.net`.
+- **Your own server.** The federation server is a separate project:
+  `github.com/HoplitaAI/Hoplita-server`. Its repository explains how to deploy
+  it. A development instance listens on port 8600 (`http://localhost:8600`, or
+  that machine's LAN address).
+
+There is no config key for the server. You give the server URL once, when you
+register (step 2). It is then stored inside your identity, and every later call
+goes to it. All your contacts must be on the same server. To move to a
+different server, leave the federation and register again on the new one
+(step 2, *Leave the federation*).
+
+On the server side:
+
+- A server can be invite-only (it then asks for an invitation code) or open.
+- A server mails the verification PIN when it has mail configured.
+- A development server can return the PIN in the registration reply instead.
+
+## 2. Create your identity
+
+There is no registration form in the GUI. You register from the chat. The
+**Contacts** tab says so until you do: *No federated identity. Register from
+the chat…*
+
+1. Install HOPLITA and start the MCP and the GUI, or the CLI
+   ([Installation](GUIDE.md#installation), [Starting it up](GUIDE.md#starting-it-up)).
+2. Register. Chat: «register me in the federation as `alice`, email
+   `alice@example.com`, server `https://hoplita.net`, invitation code
+   `ABC123`» (`fed_register`). Leave the code out if the server is open.
+   - Your handle is a plain lowercase name, for example `alice`.
+   - Two key pairs are generated on this machine. Only the public keys go to
+     the server.
+   - There is no password: you log in by proving you hold the private key.
+3. Check the inbox of the email you gave. You get a 6-digit PIN, valid for 15
+   minutes. If the reply says the server could **not** send the email, ask the
+   server's operator for the PIN. Do not register again: the handle is
+   already yours.
+4. Verify. Chat: «verify my federation account with PIN 123456»
+   (`fed_verify`).
+5. Log in. Chat: «log me in to the federation» (`fed_login`). After that the
+   session renews itself with your key whenever it expires.
+6. Open the **Contacts** tab. The header shows your handle, *🟢 session
+   active*, your fingerprint and the server URL.
+
+### Where the identity lives, and what protects it
+
+- The identity is one file, `fed_identity.json.encrypted`, in the HOPLITA data
+  folder (the install folder, or `HOPLITA_HOME`). It holds:
+  - your private keys: a Curve25519 key that seals content and an Ed25519 key
+    that signs your contacts and shares,
+  - your handle, the server URL and your session token,
+  - the keys you have pinned for your contacts.
+- The file is encrypted with the vault master password, the one the MCP asks
+  for when it starts.
+- Without that password the file is useless. Without the file you cannot be
+  that handle. Back it up.
+- The rest of the vault (`hoplita.db`) is a separate database. Your synced data
+  travels in the device snapshot (section 3), not in this file.
+
+### Use the same identity on a second machine of yours
+
+1. Install HOPLITA on the second machine.
+2. Before its first start, or with its MCP stopped, copy
+   `fed_identity.json.encrypted` from the first machine into the second
+   machine's data folder.
+3. Start the MCP there with **the same master password** as on the first
+   machine. The file is sealed with that password: a different one fails to
+   open it, and the MCP asks for the password again.
+4. Start the GUI. About 3.5 seconds after launch it pulls your snapshot. Press
+   **⇊ Pull** in the header if you do not want to wait.
+5. Give each machine a name, so that you can tell them apart. Right-click a
+   chat tab → **🏷 Name this machine…**.
+
+Do not run `fed_register` on the second machine: that would create a second,
+different identity.
+
+### Leave the federation, or move to another server
+
+**Contacts** → **🚪 Leave**, then confirm. Chat: «leave the federation»
+(`fed_leave`).
+
+- Your account is deleted on the server, your children are revoked, and the
+  identity file on this machine is cleared.
+- The account is the identity, so this affects **all** your machines: their
+  copies of the identity file stop working on that server.
+- Your notes, projects and calendar stay local. They stop syncing.
+
+If the server does not answer, the dialog offers to clear only the local
+identity.
+
+To move to another server, leave, then register again on the new one (step
+2). Your contacts must add you again there.
+
+## 3. Keep your own machines in sync
+
+Your machines share one identity, and with it one sealed snapshot on the
+server: notes, tasks, appointments, crons, credentials, facts, lessons,
+experience, sessions, canvases, whiteboards, local children's packs and the
+activity log. The snapshot is sealed to your own key. The guide explains how
+deletions and long absences are handled ([Federation](GUIDE.md#federation-optional)).
+
+What does **not** travel:
+
+- note folders marked 🔒 local-only (section 5.7),
+- chat tabs set to local-only or incognito logging,
+- the identity file itself (you copy it by hand, as above).
+
+When sync happens:
+
+| Moment | What happens | Setting |
+|---|---|---|
+| MCP start | Pull | `[MCP] sync_on_boot` (`true` in `config.ini.example`; a `config.ini` without the key counts as `false`) |
+| GUI start | Pull, about 3.5 seconds after launch | Always |
+| While the GUI is open | Pull, then push, every N minutes | `[MCP] sync_every_min` (15; 0 = off) |
+| GUI close | Push | Always |
+| By hand | **⇊ Pull** / **⇈ Push** in the header | — |
+
+Chat or CLI equivalents: «pull my snapshot» (`fed_sync_pull`) and «push my
+snapshot» (`fed_sync_push`). «What does my snapshot weigh?»
+(`fed_sync_breakdown`) lists its size store by store.
+
+When you press **⇊ Pull** or **⇈ Push**, the chat tells you what happened:
+*⇊ Sync: N item(s) merged*, *⇊ Sync: nothing new on the server.* or
+*⇈ Sync: uploaded (vN, M rows).* A push that finds a newer snapshot on the
+server pulls and merges first, then pushes again.
+
+**A machine that is not yours.** `sync_on_boot` writes your snapshot into the
+local database of whatever machine runs the MCP. Set it to `false` in the
+`config.ini` of any machine you do not own, including a headless child running
+on somebody else's server.
+
+## 4. Contacts
+
+### Add a contact
+
+1. **Contacts** tab → **+ Add**.
+2. Type the contact's handle exactly as they registered it, for example `bob`.
+   The handle alone, without `@server`: contacts are looked up on your server.
+3. Pick a **Trust:** level:
+   - `accept`: their requests to your agent ask you first,
+   - `open`: free rein,
+   - `analyze`: your agent pre-filters their requests.
+
+   Then press **OK**. Chat: «add bob as a contact» (`fed_add_contact`).
+4. The contact appears with *pending* until bob accepts.
+
+### Accept a request
+
+The other side sees your row with *Pending your approval*. To accept, they
+right-click the row → **✓ Accept request**. Chat: «accept the contact request
+from alice» (`fed_accept_contact`).
+
+Accepting or adding signs the other side's keys with your own key. That
+signature is what makes them your contact, on every machine that carries your
+identity.
+
+### Presence
+
+The dot on a contact's avatar shows presence: green is online, grey is
+offline. The list refreshes every 5 seconds while the tab is visible, or
+press **↻ Refresh**.
+
+If the tab shows *Your live socket is … — contacts see YOU offline…*, your
+own connection is down: everything still works, but others see you offline
+(section 8).
+
+### Permissions per contact
+
+Double-click a contact, or right-click it → **⚙ Edit permissions**. The dialog
+has one row per resource. Each row is set to **auto-accept**, **review** or
+**no**.
+
+| Row | auto-accept | review | no |
+|---|---|---|---|
+| **Notes** and **Projects** (folder and project offers) | Accepted on their own, when the offer is signed by that contact | The offer waits under **Pending your approval** for you to accept or decline | Same as review: an offer is never declined in the background, so you still decide |
+| **Appointments** | Go straight into your calendar | Wait under **📥 Pending** in the TODO tab | Refused, and the sender is told *you don't have permission* |
+| **Remote sessions** | Their agent requests run without asking | You get an approval prompt | Declined |
+
+Appointments are refused until you set their row. When **Remote sessions** is
+not set, the contact's trust level decides.
+
+### Verify a contact
+
+A contact's keys are learned from the server the first time, and signed by
+you at that moment. From then on, a different key from the server is blocked
+with *⚠ The public key for 'bob' does NOT match…*. The only moment the server
+could lie is that first time.
+
+To rule it out, before you share anything sensitive:
+
+1. Chat: «list my contacts with their fingerprints» (`fed_list_contacts`).
+2. Ask the contact for their fingerprint over another channel: in person, by
+   phone, or in a message you already trust. Their own fingerprint is in the
+   header of their **Contacts** tab.
+3. Compare the two fingerprints. If they differ, remove the contact and do not
+   share with it.
+
+The `fed_verify` tool is something else: it only verifies your email at
+registration.
+
+### Remove a contact
+
+Right-click → **🗑 Remove contact**. Chat: «remove bob from my contacts»
+(`fed_remove_contact`).
+
+Removal is bilateral: neither of you can share with or delegate to the other
+until you add each other again. Copies already shared stay where they are.
+
+## 5. Sharing
+
+What has already been shared cannot be pulled back from the other side.
+Unsharing stops future changes from travelling. It does not delete their copy.
+
+### 5.1 A note folder
+
+1. **NOTES** tab → right-click the folder in the category list → **🔗 Share
+   with…** → pick a contact. Only accepted contacts are listed.
+2. The chat says *✓ Folder "…" shared with bob*. Chat: «share the folder
+   recipes with bob» (`fed_share_folder`).
+3. Unless bob set **Notes** to auto-accept for you, bob gets a **Share
+   invitation** dialog: *alice wants to share the folder “recipes” with you.
+   Accept?* He presses **Accept**.
+
+   If bob presses **Not now**, the dialog comes back at the next start. Bob can
+   also accept from the chat: «accept the folder recipes from alice»
+   (`fed_accept_folder`).
+4. From then on, edits go out on their own a couple of seconds after each
+   save.
+
+To see who has the folder, right-click it:
+
+- **The owner** sees **👥 Shared with N**, with each member (✓ accepted,
+  ⏳ pending) and **— Remove** to drop one member. **🗑 Delete for everyone**
+  deletes the folder for every member, after a confirmation.
+- **A member** sees **👤 Shared by alice**, then **🚪 Leave (keep my copy)** or
+  **🚪🗑 Leave and delete my copy**.
+
+What contacts did in shared folders appears in **Contacts → Activity**.
+
+### 5.2 A task project
+
+1. **TODO** tab → right-click the project → **🔗 Share with…** → pick a
+   contact. Chat: «share the project launch with bob» (`fed_share_project`).
+2. Bob accepts the **Share invitation** for the project, or from the chat
+   (`fed_accept_project`).
+3. Removing members, **Delete for everyone** and the two **Leave** entries work
+   as for folders, from the project's right-click menu.
+
+### 5.3 An appointment
+
+There is no button for this. Chat: «send bob the appointment "Review" on
+Friday at 18:00» (`fed_share_appointment`).
+
+What happens on bob's side depends on bob's **Appointments** permission for you
+(section 4):
+
+- **auto-accept**: the appointment goes straight into bob's calendar.
+- **review**: it waits under **TODO → 📥 Pending** until bob accepts it.
+- **no** or not set: it is refused. Your **Contacts** tab then shows
+  *Appointment rejected — You don't have permission to send appointments to:
+  bob.*
+
+### 5.4 Skills
+
+There are two ways to share skills:
+
+- **One skill.** Chat: «share my skill "deploy checklist" with bob»
+  (`fed_share_skill`). Bob reviews it with «list the shared skills waiting for
+  me» (`fed_list_shared_skills`) and accepts with «accept shared skill 0»
+  (`fed_accept_skill`). Accepted skills go into bob's `shared-skills` folder,
+  which the skill search includes.
+- **A folder of skills.** Mark the folder as skills first (**NOTES** →
+  right-click → **🧠 Add to skills**), then share the folder (5.1). A child of
+  yours uses the folder as skills at once. A contact receives the folder plus
+  an offer: one click on the folder's **🧠 Add to skills** turns it on there.
+
+### 5.5 Code (the Co-work page)
+
+You need a git repository open in the CODE view.
+
+1. Open the **Co-work** page (🤝 in the CODE view's rail). You can also
+   right-click the chat tab of that project → **🤝 Share code with a
+   contact…**.
+2. Under **WHO I INVITE**, select a contact → **🤝 Invite the selected one**
+   (`fed_share_code`). Only a small offer travels at this point.
+3. The other side sees the invite under **INVITES FOR ME**, with its size. They
+   select it → **✓ Accept into a folder…** → choose an **empty** or new
+   folder (`fed_accept_code`).
+
+   The inviting machine then builds the sealed bundle and sends it. It arrives within a
+   couple of minutes while both machines are running. The project's memory
+   folder and task project are accepted along with it.
+4. **⇈ Send my commits** (`fed_code_push`) sends your new commits to every
+   peer. This also happens on its own after a commit made by the agent.
+5. **⇊ Bring in what arrived** (`fed_code_pull`) applies incoming commits
+   under `refs/hoplita/incoming/<peer>/<branch>`. Your branch does not move.
+   This also runs in the background every 90 seconds.
+6. Under **Received, in quarantine**, select a branch:
+   - **👁 Review** shows its commits and files.
+   - **⇓ Integrate into my branch** (`fed_code_take`) brings it in: a
+     fast-forward when possible, otherwise a merge commit. On a conflict
+     nothing changes, and the files are named.
+7. To leave, select a peer under **Already shared with** → **✕ Stop sharing
+   with the selected one** (`fed_code_unshare`). Their clone stays theirs.
+8. On the receiving side, if a transfer died half-way (*This transfer died
+   half-way…*), select it under **INVITES FOR ME** →
+   **🗑 Discard the stuck transfer** (`fed_code_discard`). This frees your
+   mailbox quota. Then ask the sender to invite you again.
+
+### 5.6 Public folders
+
+**Publish:**
+
+1. **NOTES** → right-click the folder → **🔗 Share with…** → **🌍 Make PUBLIC
+   (anyone on the server can subscribe; you write, they read)**
+   (`fed_publish_folder`).
+2. Anyone on the server can now find the folder under your handle and
+   subscribe. Only you can write to it.
+3. To withdraw it, chat: «unpublish the folder recipes»
+   (`fed_unpublish_folder`). Its subscribers are dropped.
+
+**Subscribe:**
+
+1. **Contacts** → right-click an accepted contact → **🌍 Public folders…** →
+   select a folder → **Subscribe**.
+2. For a handle that is not your contact, chat: «show the public folders of
+   carol» (`fed_public_folders`), then «subscribe to carol's folder recipes»
+   (`fed_subscribe_folder`).
+3. Their changes reach you read-only.
+4. To unsubscribe, chat: «unsubscribe from carol's folder recipes»
+   (`fed_unsubscribe_folder`). Your local copy stays.
+
+### 5.7 Keep a folder off the federation (🔒)
+
+1. **NOTES** → right-click the folder → **🔒 This machine only (never
+   federate)**.
+2. From then on the folder cannot be shared or published, and its content
+   leaves the device snapshot. Only its name and the lock travel to your own
+   machines, so they keep it locked too.
+3. A folder that is already shared or published must be unshared or
+   unpublished first. Otherwise you get *🔒 "…" is already shared or
+   published…*.
+4. **🌐 Make federable again** lifts the lock.
+
+A chat tab has the same choice: right-click the tab → **📓 This tab's
+logging** → **🔒 Local only**. The tab is saved and learns on this machine,
+and its session never rides the federation.
+
+## 6. Ask a contact's agent, and tie a tab to one of your machines
+
+### A one-off task, or a whole session
+
+**A one-off task.** Chat: «ask bob's agent to check whether the build server is
+up» (`fed_ask_agent`).
+
+- The task runs on bob's machine, with bob's model and tools.
+- bob must be an accepted contact and online.
+- The answer comes back into your turn.
+
+**A session.** **Contacts** → right-click the contact → **💬 Open session**.
+
+1. A chat tab opens, connected to their agent: *Session opened with bob. Type
+   here to talk to their agent…*
+2. Everything you type there runs on their machine.
+3. Attachments do not travel.
+4. Press ✕ on the banner to end the session.
+
+**On the receiving side**, their **Remote sessions** permission for you
+decides:
+
+- auto-accept: the request runs.
+- review: they get *Incoming session request — "alice" wants your agent to run
+  a task. Approve?* with **Approve** / **Reject**. The prompt needs their GUI
+  open.
+- no: the request is declined. The agent treats a decline as final and does
+  not retry.
+
+### Tie a tab to one of your machines (`/pin`)
+
+This works between machines that share your identity (step 2).
+
+1. On the machine that has the files, services or disks the tab needs, type
+   `/pin` in that tab, or right-click the tab → **📍 Tie to this machine**.
+2. The tab travels to your other machines in the snapshot. Its turns run on
+   the tied machine, wherever you type.
+3. `/pin ?` says which machine the tab is tied to. `/pin off` unties it.
+
+The tied machine must be running and logged in to the federation. If it is
+not, the tab says *Could not reach "…"*.
+
+## 7. Children
+
+There are two kinds of child. The guide explains the difference
+([Children](GUIDE.md#children-local-packs-and-remote-nodes)):
+
+- An **unemancipated child** is a pack that runs here as a sub-agent. It needs
+  no server.
+- An **emancipated child** is a headless node on another machine, with its own
+  identity.
+
+### 7a. A local child (a pack that runs here)
+
+**Create it:**
+
+1. **Contacts** → **+ 🧒 Local child**.
+2. Type a plain name, without `@`, for example `MarketingManager`.
+3. The pack editor opens right away.
+
+Chat equivalent: «create a local child called MarketingManager» (`child_create`).
+
+**Edit its pack.** Right-click the child (marked 🧒) → **✎ Edit its pack…**.
+The editor has these fields:
+
+| Field | What it sets |
+|---|---|
+| **Avatar** | An emoji or up to four characters |
+| **Model** | A pool model, or *the same as the turn that calls it* |
+| **Runs on** | *here, as a sub-agent*, or one of your federated children (7b) |
+| **Role** | A paragraph: what it is and how it works. This field matters most |
+| **What it can do** | Six capability presets: web, research, files, code, terminal, write. Ticking one fills in the tool list |
+| **Its tools** | The tools it may call, by family. The general firewall still has the last word |
+| **Where it may look (and write)** | The note folders it can search, read and write. Nothing ticked means no restriction |
+| **Task projects it works in** | It sees, does and updates their pending tasks |
+| **Its skills folder** | One of your note folders, or *the usual ones* |
+
+**Save** writes the pack exactly as shown.
+
+You can also teach the child in the chat, which adds to the pack: «give my
+child MarketingManager the sales-notes folder and reinforce its role as an
+expert» (`child_teach`). The agent answers with the diff.
+
+**Talk to it.** Right-click → **💬 Open session**. *Talking to MarketingManager,
+your local child: it runs on this machine…* Other ways to give it work:
+
+- Chat: «ask MarketingManager to …» (`fed_ask_agent`),
+- a multi-agent plan with `target: "child:MarketingManager"`,
+- a CRON job with target `child:MarketingManager`.
+
+**Delete it.** Right-click → **🗑 Delete this local child**. The pack goes.
+What it wrote stays.
+
+The pack travels to your other machines in the snapshot.
+
+### 7b. A federated child (a headless node on another machine)
+
+**On your machine: create an enrollment token.** There is no button for this.
+
+1. Chat: «create an enrollment token for a new child labelled kitchen-pc»
+   (`fed_spawn_child`).
+2. The reply holds the token in clear and the exact command to run:
+   `hoplita-cli --spawn --server <your server> --token <TOKEN>`.
+3. The token is single use and valid for 60 minutes. Copy it now: it is not
+   shown again.
+
+**On the child machine: install.** The child is a normal install that runs
+only the MCP. No one uses the GUI there.
+
+1. Download the HOPLITA source (clone github.com/HoplitaAI/Hoplita) and, from
+   that folder, install the core and the CLI:
+   `python install.py --cli --no-shortcuts`.
+   - `--cli` builds the Go CLI and needs Go. You can instead copy a
+     `hoplita-cli` built elsewhere (`cli/compile.sh`).
+   - Add `--browser` if the child must browse the web.
+2. Edit its `config.ini`:
+   - Point `[API]` at a model the child can reach. The child thinks with its
+     own model.
+   - If the machine is not yours, set `[MCP] sync_on_boot = false`.
+
+**On the child machine: start the MCP and enroll.**
+
+1. Start the MCP with a vault password for the child. This is the child's own
+   vault, not yours. For an unattended start, pass the password in the
+   environment:
+
+   ```bash
+   cd ~/hoplita           # the install folder
+   HOPLITA_VAULT_PASSWORD='<child vault password>' venv/bin/python hoplita-mcp.py
+   ```
+
+   On Windows the interpreter is `venv\Scripts\python.exe`.
+
+   Without that variable, the MCP asks in the terminal. With no terminal, it
+   opens a password dialog, which needs a display.
+2. With the MCP running, enroll:
+
+   ```bash
+   cli/dist/hoplita-cli --spawn --server https://hoplita.net --token <TOKEN> --handle kitchen-pc
+   ```
+
+   - `--handle` is optional. Without it, the machine's hostname is used. It
+     must not be taken on the server.
+   - On success: *✓ Child 'kitchen-pc' enrolled under 'alice'.*
+   - No email, PIN or password is involved: the token is the proof.
+3. Keep the MCP running. The child picks up its new identity without a
+   restart, and restarting it is harmless.
+
+HOPLITA does not install a service for this. Run the MCP under your own
+service manager or a terminal multiplexer, with `HOPLITA_VAULT_PASSWORD` set.
+
+**Back on your machine.** The child appears in **Contacts** as an accepted
+contact with presence. Its trust is `open` both ways, because it is yours. Chat:
+«list my children» (`fed_list_children`).
+
+**Give it work:**
+
+- **💬 Open session** on it,
+- Chat: «ask kitchen-pc to …» (`fed_ask_agent`),
+- a plan target `child:kitchen-pc`,
+- a CRON job with target `child:kitchen-pc`. Such a job fires only while the
+  child is online.
+
+**Give it folders.** Sharing works as with any contact (5.1). The child has no
+GUI to press **Accept**, so tell it to accept:
+
+- in a session: «accept the folder recipes from alice», or
+- on the child machine: `hoplita-cli "accept the folder recipes from alice"`.
+
+**Emancipate a pack to it.**
+
+1. Open a local child's pack (7a).
+2. Set **Runs on** to the node (🖥 kitchen-pc), then **Save**.
+3. The pack is sent sealed to the node. The node wears it on incoming turns:
+   its role and its tool list. A node only accepts a pack from its owner.
+4. Saving again re-sends the pack. Setting **Runs on** back to *here, as a
+   sub-agent* brings it home.
+
+**Revoke it.** In the **Contacts** tab a federated child carries 👶; right-click
+it → **🗑 Revoke child**. Or from the chat: «revoke my child kitchen-pc»
+(`fed_revoke_child`).
+
+- Its session dies at once, and its identity and contact are deleted.
+- Packs that ran on it come back home.
+- What it already received stays on that machine.
+- Revoking is irreversible. To bring it back, enroll it again with a new token.
+
+## 8. Troubleshooting
+
+| You see | What it means | What to do |
+|---|---|---|
+| *No federated identity. Register from the chat…* (Contacts header) or *ℹ️ You're not part of a federation (local-only)…* (Pull/Push) | This machine has no identity | Register (step 2), or copy your identity file (step 2, second machine) |
+| *Registration failed: You need an invitation code…* / *…not accepting new accounts.* | The server is invite-only, or closed | Get a code from the server's operator, or use another server |
+| *Registration failed: That handle already exists* | The handle is taken | Pick another handle |
+| *Login failed: … verif…* with a `fed_verify` next step | The email was never verified | Verify with the PIN (step 2.4) |
+| *This server has no account for this handle…* | The account was deleted on the server, or you are on the wrong server | Leave with the local-only option (step 2, *Leave the federation*), then register again |
+| *Verification failed: Wrong PIN* / *PIN expired* | Typo, or more than 15 minutes have passed | Ask the operator for a new PIN. Do not register again |
+| *Could not add contact: Handle not found* | Wrong handle, or the contact is on another server | Type the bare handle, on the same server |
+| *⚠ The public key for 'bob' does NOT match…* — BLOCKED | The key the server returns is not the one you signed | Compare fingerprints with bob over another channel (section 4). If bob really reset their identity, remove bob and add the contact again |
+| *Your live socket is … — contacts see YOU offline…* | The live connection is down; everything else uses REST | Check that a proxy or firewall allows WebSocket to the server, and that `websocket-client` is installed in HOPLITA's venv |
+| *📴 Sync: can't reach the server (offline)…* | No network, or the server is down | Nothing is lost. Sync runs again later |
+| *🔑 Sync: couldn't decrypt the server snapshot…* | This machine has a different identity from the one that pushed | Use the same identity file on both machines (step 2) |
+| *⚠ Sync: the server refused the upload twice…* | Two machines pushed at the same moment | Press **⇊ Pull**, then **⇈ Push** |
+| *🚫 Quota exceeded (…)* | Your tier's limit on the server | Prune heavy stores (`fed_sync_breakdown`), or ask the server's operator |
+| *⚠️ Your last upload on close didn't go through…* | The push on close failed | Press **⇈ Push** |
+| *The folder '…' is marked LOCAL-ONLY…* | The folder is locked (5.7) | Lift the lock first, if you really want to share it |
+| *Appointment rejected — You don't have permission…* | The recipient's **Appointments** permission for you is **no** or not set | Ask them to set it to auto-accept or review |
+| *That invite has not fully arrived yet.* / *This transfer died half-way…* | A code transfer is incomplete | Wait, or discard it and ask for a new invite (5.5) |
+| *'…' exists and is not empty.* | The destination for an accepted code project must be empty | Choose an empty or new folder |
+| *❌ The MCP is not responding at …* (`--spawn`) | The child's MCP is not running | Start it (7b), then run `--spawn` again |
+| *Enrollment failed: …* naming an invalid, used or expired token | Tokens are single use and live 60 minutes | Create a new token |
+| *This instance already has a federated identity…* | A child must enroll into a clean vault | Use a fresh install or data folder for the child |
+| *Could not reach "…"* on a tied tab | The tied machine is off or not logged in | Start it and log it in, or `/pin off` |
+| A federation request does nothing, and the agent says the tool is blocked | The **Tools** firewall blocks the *Federation: …* families | Unblock them in the **Tools** tab |

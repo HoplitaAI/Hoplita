@@ -1,0 +1,3 @@
+playwright>=1.44
+browser-use>=0.13.4
+crawl4ai>=0.3
