@@ -38,8 +38,8 @@ same API.
   firewall, its project and its queue of pending messages.
 - **Agentic by default**: web search (Perplexity, Tavily, Exa, Firecrawl),
   scraping, autonomous browsing with browser-use and Playwright, files, shell,
-  PDF and image input, notes, tasks and calendar, generated pictures and charts
-  on a live canvas.
+  PDF and image input, Word, Excel and PowerPoint read and edited, notes, tasks
+  and calendar, generated pictures and charts on a live canvas.
 - **A definition of done**: `/verify <command>` keeps the turn going until the
   command passes; `/goal <text>` states the bar in words; a **reviewer model**
   checks the answer before you see it, and you can open its review — the

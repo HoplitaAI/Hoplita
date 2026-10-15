@@ -19,6 +19,8 @@ func planAckMode() string {
 	return ""
 }
 
+var lastStep = map[string]string{}
+
 func printOrchEvent(ev map[string]interface{}) {
 	if s, _ := ev["event"].(string); s != "orch" {
 		return
@@ -55,6 +57,20 @@ func printOrchEvent(ev map[string]interface{}) {
 		fmt.Printf("❌ [%s] failed: %s\n", str("id"), truncate(str("error"), 50))
 	case "synthesis_done":
 		fmt.Println("🧬 " + tr("msg.synthesizing_final"))
+	case "intent":
+		items, _ := o["items"].([]interface{})
+		for _, raw := range items {
+			it, _ := raw.(map[string]interface{})
+			if st, _ := it["status"].(string); st != "doing" {
+				continue
+			}
+			goal, _ := it["goal"].(string)
+			if goal != "" && lastStep[str("id")] != goal {
+				lastStep[str("id")] = goal
+				fmt.Printf("   ↳ [%s] %s\n", str("id"), truncate(goal, 70))
+			}
+			break
+		}
 	}
 }
 

@@ -247,7 +247,7 @@ class AutoSpinBox(QSpinBox):
 
 MODEL_FIELDS = [("model", "str"), ("base_url", "str"), ("api_key", "pwd"),
                 ("context_length", "int"), ("profile", "str"),
-                ("vision", "tri"), ("extra_body", "str")]
+                ("vision", "tri"), ("council", "bool"), ("extra_body", "str")]
 
 
 def _keep_inline_comment(old_line, new_line):
@@ -1157,6 +1157,8 @@ class ConfigEditorDialog(QDialog):
             bits.append("👁 " + self._t("cfg.row_sees"))
         elif vis == 2:
             bits.append(self._t("cfg.row_blind"))
+        if not fields["council"][0].isChecked():
+            bits.append(self._t("cfg.row_no_council"))
         return "  ·  ".join(bits)
 
     def _add_model_row(self, name, enabled, data, section=None, expanded=False):
@@ -1229,6 +1231,10 @@ class ConfigEditorDialog(QDialog):
                 w.setCurrentIndex(0 if cur == "" else
                                   1 if cur.lower() in ("true", "1", "yes", "on")
                                   else 2)
+            elif kind == "bool":
+                w = QCheckBox()
+                w.setChecked(cur.lower() not in ("false", "0", "no", "off"))
+                w.setToolTip(self._t(f"cfg.h.MODEL.{key}"))
             else:
                 w = QLineEdit(cur)
             if key == "profile":
@@ -1247,6 +1253,7 @@ class ConfigEditorDialog(QDialog):
         for key in ("model", "base_url"):
             fields[key][0].textChanged.connect(_resum)
         fields["vision"][0].currentIndexChanged.connect(_resum)
+        fields["council"][0].toggled.connect(_resum)
         _resum()
         open_ = expanded or not fields["model"][0].text().strip()
         details.setVisible(open_)

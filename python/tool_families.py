@@ -39,6 +39,7 @@ _PREFIX = (
     ("device_", "device"),
     ("child_", "agents"),
     ("pdf", "system"),
+    ("office", "system"),
 )
 
 _FED_ACCOUNT = {"fed_register", "fed_verify", "fed_login", "fed_status",

@@ -91,7 +91,7 @@ def _http():
 
 
 def _council_available(is_blocked=None, allowed=None):
-    if "call_council" not in TOOLS or len(_model_pool()) < 2:
+    if "call_council" not in TOOLS or len(_council_pool()) < 2:
         return False
     if is_blocked is not None and is_blocked("call_council"):
         return False
@@ -3592,6 +3592,14 @@ def tool_read_file(path):
         return {"error": f"'{path}' is an image, not text",
                 "message": f"Look at it with see_image(path='{path}') — it is "
                            "attached as a picture for you to read."}
+    _ext = os.path.splitext(str(path or ""))[1].lower()
+    if _ext == ".pdf":
+        return {"error": f"'{path}' is a PDF, not text",
+                "message": f"Read it with pdf_info(source='{path}', text='full')."}
+    if _ext in _hoplita_office().OFFICE_EXTS:
+        return {"error": f"'{path}' is an office document, not text",
+                "message": f"Read it with office_info(source='{path}'); "
+                           "edit it with office."}
     try:
         p = os.path.expanduser(path)
         with open(p, "r", encoding="utf-8", errors="replace") as f:
@@ -6272,9 +6280,11 @@ def _git_checkpoint(root, label=""):
 
 
 _CODE_DROPPED = {}
+_CODE_PATCH_FAILED = {}
 
 
 def _checkpoint_push(root, sha, files, created):
+    _CODE_PATCH_FAILED.pop(root, None)
     st = _CODE_CHECKPOINTS.setdefault(root, [])
     st.append({"sha": sha, "ts": datetime.now().isoformat(),
                "files": list(files), "created": list(created)})
@@ -6309,6 +6319,15 @@ def tool_code_undo(path=None, steps=1):
         return {"error": "Not inside a git repository: there is no checkpoint "
                          "to go back to. Run 'git init' in the project."}
     stack = _CODE_CHECKPOINTS.get(root) or []
+    if _CODE_PATCH_FAILED.pop(root, None):
+        return {"error": (
+            "Your last code_apply_patch FAILED and changed nothing: there is "
+            "nothing of it to undo. code_undo would revert the edit BEFORE it, "
+            + (f"to {', '.join(stack[-1]['files'])} at {stack[-1]['ts'][11:19]}, "
+               if stack else "")
+            + "which did apply. To fix the failed patch, read the exact lines "
+            "with code_read_range and apply it again. If you really mean to "
+            "undo that earlier edit, call code_undo again.")}
     if not stack:
         return {"error": f"No checkpoints recorded for {root} in this session."}
     steps = max(1, min(int(steps or 1), len(stack)))
@@ -6431,6 +6450,23 @@ def tool_git_diff(path=None, files=None, staged=False, since_checkpoint=False,
         now = _git_checkpoint(root, "now")
         if not now:
             return {"error": "Could not snapshot the current tree to compare."}
+        _then = stack[0]["sha"] + "^"
+        _ok, _names = _git(["diff", "--name-only", "-z", _then, "HEAD", "--"]
+                           + (files or ["."]), root)
+        committed = [n for n in (_names.split("\0") if _ok else []) if n]
+        if committed:
+            _st = ["--stat"] if stat_only else []
+            ok1, out1 = _git(["diff"] + _st + [stack[0]["sha"], now, "--"]
+                             + (files or ["."])
+                             + [":(exclude,literal)" + n for n in committed], root)
+            ok2, out2 = _git(["diff"] + _st + ["HEAD", now, "--"]
+                             + [":(literal)" + n for n in committed], root)
+            if not (ok1 and ok2):
+                return {"error": "git diff failed"}
+            out = "\n".join(x for x in (out1, out2) if x.strip())
+            body, truncated = _cap(out)
+            return {"root": root, "diff": body, "truncated": truncated,
+                    "empty": not out.strip()}
         args += [stack[0]["sha"], now]
     elif staged:
         args.append("--cached")
@@ -7003,6 +7039,15 @@ def tool_read_note(category, title="", note_id="", start_line=None, end_line=Non
 
 
 def tool_code_apply_patch(path, changes):
+    out = _code_apply_patch(path, changes)
+    if isinstance(out, dict) and out.get("error"):
+        root = _git_root(os.path.expanduser(path))
+        if root:
+            _CODE_PATCH_FAILED[root] = True
+    return out
+
+
+def _code_apply_patch(path, changes):
     p = os.path.expanduser(path)
     root = _git_root(p)
     if not os.path.exists(p) and len(changes) == 1 and not changes[0].get("old"):
@@ -8142,7 +8187,8 @@ def _generate_pdf_legacy(content, title="Document", output_path=None):
             "font": "unicode" if unicode_ok else "latin1-fallback"}
 
 
-_FOLDER_DEFAULT_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.txt', '.md', '.csv'}
+_FOLDER_DEFAULT_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.txt', '.md', '.csv',
+                        '.docx', '.xlsx', '.pptx'}
 _FOLDER_IMG_MIMES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
                      '.gif': 'image/gif', '.webp': 'image/webp'}
 
@@ -8179,6 +8225,9 @@ def tool_read_folder(path, extensions=None):
             except Exception:
                 entry["content"] = "(pdftotext no disponible)"
             entry["type"] = "pdf"
+        elif ext in _hoplita_office().OFFICE_EXTS:
+            entry["content"] = _hoplita_office().plain_text(fp, 10_000)
+            entry["type"] = "office"
         else:
             try:
                 with open(fp, 'r', encoding='utf-8', errors='replace') as f:
@@ -8498,12 +8547,17 @@ def _hoplita_pdf():
     return hoplita_pdf
 
 
+def _hoplita_office():
+    import hoplita_office
+    return hoplita_office
+
+
 def register_tools():
     global TOOLS
     TOOLS = {
         "plan_and_orchestrate":   {"desc": "Breaks a task into sub-agents and runs them: you pass the whole task in 'task', it plans the sub-tasks (each with its role, its goal, its capabilities and its dependencies), runs the independent ones in parallel, and synthesises one answer. EACH SUB-TASK CAN NAME ITS OWN MODEL from the pool, and its own machine ('target': local, child:<handle> or friend:<handle>), which is what this can do that a single pass cannot. The plan is shown to the user for approval before it runs. 'task' must be the full description of what has to be achieved, self-contained: the planner sees it and not your conversation.",
-                                   "fn": lambda a: tool_plan_and_orchestrate(a.get("task", ""))},
-        "call_council":           {"desc": "Puts one matter to several of the person's models and returns their DELIBERATED answer. The round: the first member answers, the others examine that answer on two criteria (are there errors in it? can it be done better?), the first reformulates with their feedback, and the others vote placet or not. You get back the agreed answer plus, signed, whoever did not agree. 'topic' must be self-contained: whoever sits down has not read your conversation, so state the matter, what you have tried and what you need decided. 'members' are pool aliases (empty = the whole pool), 'first' is who answers first (empty = the first of the list), and 'context' carries what they need that does not belong in the statement of the matter. Costs one call per member per phase.",
+                                   "fn": lambda a: tool_plan_and_orchestrate(a.get("task", ""), solo_single=True)},
+        "call_council":           {"desc": "Puts one matter to several of the person's models and returns their DELIBERATED answer. The round: the first member answers, the others examine that answer on two criteria (are there errors in it? can it be done better?), the first reformulates with their feedback, and the others vote placet or not. You get back the agreed answer plus, signed, whoever did not agree. 'topic' must be self-contained: whoever sits down has not read your conversation, so state the matter, what you have tried and what you need decided. 'members' are pool aliases (empty = every pool model that sits on councils; a model marked as not sitting is refused), 'first' is who answers first (empty = the first of the list), and 'context' carries what they need that does not belong in the statement of the matter. Costs one call per member per phase.",
                                    "fn": lambda a: tool_call_council(
                                        a.get("topic", ""), a.get("members"),
                                        a.get("first", ""), a.get("context", ""))},
@@ -8681,6 +8735,20 @@ def register_tools():
                                     "whole recipe; the result narrates every step and every auto "
                                     "decision. Use pdf_info first when unsure of the layout.",
                                    "fn": lambda a: _hoplita_pdf().tool_pdf(a)},
+        "office_info":            {"desc": "Read a Word, Excel or PowerPoint file (.docx/.xlsx/.pptx and their macro "
+                                    "twins): a document's blocks by index (paragraphs with their style, tables), a "
+                                    "workbook's sheets and a cell range with values AND formulas, a deck's slides with "
+                                    "each shape's id, name and text plus the notes. find='text' says where a text lives. "
+                                    "view=true paints the whole file on the canvas as HTML (content faithful, layout "
+                                    "approximate). Read-only. Legacy .doc/.xls/.ppt and OpenDocument are refused.",
+                                   "fn": lambda a: _hoplita_office().tool_office_info(a)},
+        "office":                 {"desc": "Edit a Word, Excel or PowerPoint file with a PIPELINE of steps applied in "
+                                    "order, then written to output (which may be the source). A replace keeps the "
+                                    "formatting, even across Word's split runs. Indexes come from office_info. A step "
+                                    "that fails writes nothing; overwriting keeps a backup; and a part the library "
+                                    "cannot carry (some charts, shapes…) is named, and the source is not overwritten "
+                                    "unless accept_loss=true.",
+                                   "fn": lambda a: _hoplita_office().tool_office(a)},
         "intent":                 {"desc": "Your working intent list for THIS turn — your thinking, "
                                     "visible to the user live. Open any multi-step task by setting "
                                     "it (set=[3-6 short goals]) and keep it honest while you work: "
@@ -9072,7 +9140,7 @@ def register_tool_params():
     global TOOL_PARAMS, TOOLS
     TOOL_PARAMS = {
         "plan_and_orchestrate":   {"properties": {"task": {"type": "string"}}, "required": ["task"]},
-        "call_council":           {"properties": {"topic": {"type": "string", "description": "The matter, stated so it stands on its own: nobody sitting down has read your conversation."}, "members": {"type": "array", "items": {"type": "string"}, "description": "Pool aliases that take a seat. Empty = the whole pool. 'base' is the model you are running on."}, "first": {"type": "string", "description": "Who answers first — the one the others examine. Empty = the first of the list."}, "context": {"type": "string", "description": "What they need that does not belong in the statement of the matter: what you already tried, what came back, the constraints."}}, "required": ["topic"]},
+        "call_council":           {"properties": {"topic": {"type": "string", "description": "The matter, stated so it stands on its own: nobody sitting down has read your conversation."}, "members": {"type": "array", "items": {"type": "string"}, "description": "Pool aliases that take a seat. Empty = every pool model that sits on councils. 'base' is the model you are running on."}, "first": {"type": "string", "description": "Who answers first — the one the others examine. Empty = the first of the list."}, "context": {"type": "string", "description": "What they need that does not belong in the statement of the matter: what you already tried, what came back, the constraints."}}, "required": ["topic"]},
         "search_web":             {"properties": {"query": {"type": "string"}}, "required": ["query"]},
         "run_command":            {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait. Raise it well above the default for installs, builds, migrations and acceptance scripts — 300 or more."}}, "required": ["command"]},
         "render_html":            {"properties": {"html": {"type": "string", "description": "HTML/CSS/JS/SVG to render. Chart.js 4 available; D3/Plotly/three.js via CDN. <body> fragment or complete document."}, "append": {"type": "boolean", "description": "true = ADD this chunk to what is already on the canvas. Use it to build a LARGE document in 2-4 calls: a single huge call gets truncated by the output token cap and the server rejects it."}}, "required": ["html"]},
@@ -9174,6 +9242,30 @@ def register_tool_params():
                                                             "stamp:{text, pages, size, rotate, color, opacity} · watermark:{text,...} (diagonal translucent defaults) · "
                                                             "page_numbers:{start, format:'{n}' or '{n}/{total}', position} · overlay_pdf:{source, pages} · "
                                                             "fill_form:{fields:{name:value}} · encrypt:{password, owner_password}"}},
+                                   "required": ["source", "output", "steps"]},
+        "office_info":            {"properties": {"source": {"type": "string", "description": "Path to the .docx/.xlsx/.pptx."},
+                                                  "range": {"type": "string", "description": "docx: block indexes '10-40' · pptx: slides '2-5' · xlsx: cells 'A1:F30'. Default: the start."},
+                                                  "sheet": {"type": "string", "description": "xlsx: which sheet (default the active one)."},
+                                                  "find": {"type": "string", "description": "Where this text occurs: blocks, cells or slides+shapes."},
+                                                  "match_case": {"type": "boolean", "description": "For find; default true."},
+                                                  "view": {"type": "boolean", "description": "true = also render the file as HTML on the canvas."}},
+                                   "required": ["source"]},
+        "office":                 {"properties": {"source": {"type": "string", "description": "Path to the .docx/.xlsx/.pptx."},
+                                                  "output": {"type": "string", "description": "Where to write the result; the source path itself to edit in place."},
+                                                  "accept_loss": {"type": "boolean", "description": "Overwrite the source even if parts the library cannot carry would be dropped (they are named first)."},
+                                                  "steps": {"type": "array", "items": {"type": "object"},
+                                                            "description": "Applied in order; each step is ONE {verb: {params}}. "
+                                                            "DOCX — replace:{find, replace, match_case} (body, tables, headers, footers) · set_paragraph:{index, text, style} · "
+                                                            "insert_before / insert_after:{index, text, style} · append:{text, style} · delete:{index} (a paragraph or a table) · "
+                                                            "set_cell:{table, row, col, text} · add_row:{table, values} · add_table:{rows:[[...]], after, style}. "
+                                                            "Indexes are block numbers from office_info and refer to the document AS IT IS at that step. "
+                                                            "XLSX — set:{sheet, cell, value} (a value starting with '=' is a formula) · set_range:{sheet, start, rows:[[...]]} · "
+                                                            "insert_rows / delete_rows:{sheet, at, count} · insert_cols / delete_cols:{sheet, at:'C', count} · "
+                                                            "add_sheet:{name, index} · rename_sheet:{sheet, name} · delete_sheet:{sheet} · replace:{find, replace, sheet} (text cells only). "
+                                                            "Moving rows/columns does not rewrite formulas. "
+                                                            "PPTX — replace:{find, replace, notes} · set_text:{slide, shape (id or name), text} (one paragraph per line) · "
+                                                            "add_slide:{layout, title, body (text or list), position} · delete_slide:{slide} · move_slide:{slide, to} · notes:{slide, text}. "
+                                                            "Slides are 1-based."}},
                                    "required": ["source", "output", "steps"]},
         "intent":                 {"properties": {"set": {"type": "array", "items": {"type": "string"}, "description": "Replace the whole list with these goals (short, 3-8 words each), in order."},
                                                   "add": {"type": "array", "items": {"type": "string"}, "description": "Append goals without touching the rest."},
@@ -10438,7 +10530,7 @@ _SHELF_KEEP_DESC = {
     "session_moments", "session_brief", "session_recall", "session_search",
     "browse_web", "scrape_url", "call_api", "screenshot_web",
     "render_html", "canvas_eval", "canvas_see", "dashboard_render",
-    "pdf", "pdf_info", "generate_pdf", "alert",
+    "pdf", "pdf_info", "generate_pdf", "alert", "office", "office_info",
     "propose_memory_change", "working_memory_forget",
     "project_journal", "project_write", "get_agentic_config",
     "cron_set_context", "set_cron_context", "fed_ask_agent", "fed_share",
@@ -11582,7 +11674,8 @@ def prepare_turn_messages(messages, pinned_skills=None, emit=None,
         for name, m in pool.items():
             prof = m.get("profile") or _tr("planner.pool_no_profile")
             mid = f" [{m.get('model')}]" if m.get("model") else ""
-            lines.append(f'  - "{name}"{mid}: {prof}')
+            off = "" if m.get("council", True) else " " + _tr("chat.pool_no_council")
+            lines.append(f'  - "{name}"{mid}: {prof}{off}')
         lines.append(_tr("chat.pool_note_rule"))
         out = _inject_block(out, "\n".join(lines))
 
@@ -11780,8 +11873,18 @@ def _model_pool():
             continue
         base_url, api_key, model = _resolve_endpoint(sec)
         pool[name] = {"base_url": base_url, "api_key": api_key, "model": model,
-                      "profile": CONFIG.get(sec, "profile", fallback="").strip()}
+                      "profile": CONFIG.get(sec, "profile", fallback="").strip(),
+                      "council": _sits_on_council(CONFIG, sec)}
     return pool
+
+
+def _sits_on_council(cfg, sec):
+    return (cfg.get(sec, "council", fallback="") or "").strip().lower() \
+        not in ("false", "0", "no", "off")
+
+
+def _council_pool():
+    return {n: m for n, m in _model_pool().items() if m.get("council", True)}
 
 
 class OrchestrationCtx:
@@ -11801,6 +11904,7 @@ class OrchestrationCtx:
         self.unattended = bool(unattended)
         self.turn_id = turn_id or ""
         self.plan_denied = False
+        self.plan_solo = False
 
     @property
     def can_paint(self):
@@ -11838,11 +11942,25 @@ def _orch_base_endpoint(ctx):
     return _resolve_endpoint("API")
 
 
+def _pool_alias(name):
+    n = str(name or "").strip()
+    if n.lower() in ("", "base", "default"):
+        return ""
+    pool = _model_pool()
+    if n in pool:
+        return n
+    low = n.lower()
+    for alias, m in pool.items():
+        if alias.lower() == low or str(m.get("model") or "").lower() == low:
+            return alias
+    return None
+
+
 def _orch_model_endpoint(alias, ctx):
-    if alias and alias not in ("base", "default"):
-        m = _model_pool().get(alias)
-        if m:
-            return m["base_url"], m["api_key"], m["model"]
+    alias = _pool_alias(alias)
+    if alias:
+        m = _model_pool()[alias]
+        return m["base_url"], m["api_key"], m["model"]
     return _orch_base_endpoint(ctx)
 
 
@@ -12034,6 +12152,12 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
         def delegate(call_id, name, args, _sid=sid):
             return ctx.delegate(f"{_sid}~{call_id}", name, args)
 
+    try:
+        from hoplita_orchestrator import current_subtask_id
+        _card = current_subtask_id()
+    except Exception:
+        _card = ""
+
     def on_event(ev):
         et = ev.get("event")
         if event_sink is not None:
@@ -12047,6 +12171,11 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
             ctx.emit(ev)
         elif et in ("llm_call", "llm_done"):
             ctx.emit({"event": "orch", "orch": {"type": "tick", "id": sid}})
+        elif et == "intent" and _card:
+            ctx.emit({"event": "orch", "orch": {
+                "type": "intent", "id": _card,
+                "items": [dict(it) for it in (ev.get("items") or [])
+                          if isinstance(it, dict)]}})
 
     try:
         _sub_is_blocked, _sub_allowed = _sub_agent_wall(
@@ -12158,7 +12287,7 @@ def _child_run_local(pack, message, terminal=True, event_sink=None):
             ctx.emit({"event": "orch", "orch": {"type": "complete"}})
 
 
-def tool_plan_and_orchestrate(task):
+def tool_plan_and_orchestrate(task, solo_single=False):
     task = (task or "").strip()
     if not task:
         return {"error": _tr("err.task_empty")}
@@ -12170,6 +12299,8 @@ def tool_plan_and_orchestrate(task):
     ctx = getattr(_ORCH, "ctx", None) or OrchestrationCtx()
     if ctx.plan_denied:
         return {"orchestrated": False, "result": _tr("msg.plan_cancelled")}
+    if solo_single and ctx.plan_solo:
+        return {"orchestrated": False, "result": _tr("msg.plan_single_solo")}
 
     planner_block = _orch_planner_block()
 
@@ -12247,6 +12378,8 @@ def tool_plan_and_orchestrate(task):
         max_retries=_int("multi_max_retries", 2),
         max_expansions=_int("plan_max_expansions", 2),
         max_subtasks=_int("plan_max_subtasks", 12),
+        solo_single=solo_single,
+        model_alias=_pool_alias,
         subtask_timeout=_int("subtask_timeout", 1800),
         should_stop=ctx.cancel,
         base_model_label=((ctx.endpoint or {}).get("model")
@@ -12258,6 +12391,10 @@ def tool_plan_and_orchestrate(task):
         print(f"[ORCH] error: {e}", file=sys.stderr)
         return {"error": _tr("msg.orch_error", e=e)}
 
+    if final == "__SOLO__":
+        ctx.plan_solo = True
+        ctx.emit({"event": "orch", "orch": {"type": "note", "key": "plan.solo"}})
+        return {"orchestrated": False, "result": _tr("msg.plan_single_solo")}
     if final == "__CANCELLED__":
         ctx.plan_denied = True
         return {"orchestrated": False, "result": _tr("msg.plan_cancelled")}
@@ -12279,7 +12416,7 @@ _COUNCIL_GATE_TIMEOUT_S = 900
 
 def _council_members(names, first=""):
     pool = _model_pool()
-    members, unknown = [], []
+    members, unknown, benched = [], [], []
     for raw in (names or []):
         n = (raw or "").strip()
         if not n:
@@ -12291,13 +12428,17 @@ def _council_members(names, first=""):
         if n != "base" and n not in pool:
             unknown.append(raw)
             continue
+        if n != "base" and not pool[n].get("council", True):
+            benched.append(n)
+            continue
         if n not in members:
             members.append(n)
     f = (first or "").strip()
     if f:
         f = "base" if f.lower() in ("base", "default") else \
             next((m for m in members if m.lower() == f.lower()), f)
-    return members, (f if f in members else (members[0] if members else "")), unknown
+    return (members, (f if f in members else (members[0] if members else "")),
+            unknown, benched)
 
 
 def _council_gate(state, ctx):
@@ -12345,10 +12486,13 @@ def _run_council(topic, members, first="", context="", ctx=None):
         from hoplita_council import Council
     except Exception as e:
         return {"error": f"council unavailable (hoplita_council.py): {e}"}
-    seats, first, unknown = _council_members(members, first)
+    seats, first, unknown, benched = _council_members(members, first)
     if unknown:
         return {"error": _tr("council.err_unknown", names=", ".join(unknown),
-                             avail=", ".join(sorted(_model_pool())) or "—")}
+                             avail=", ".join(sorted(_council_pool())) or "—")}
+    if benched:
+        return {"error": _tr("council.err_benched", names=", ".join(benched),
+                             avail=", ".join(sorted(_council_pool())) or "—")}
     if not seats:
         return {"error": _tr("council.err_no_members")}
 
@@ -12395,7 +12539,7 @@ def tool_call_council(topic, members=None, first="", context=""):
     if not topic:
         return {"error": _tr("council.err_no_topic")}
     if not members:
-        members = sorted(_model_pool())
+        members = sorted(_council_pool())
     res = _run_council(topic, members, first, context)
     if res.get("error"):
         return res

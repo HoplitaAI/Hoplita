@@ -115,6 +115,13 @@ def urgency_labels():
 
 
 
+_OFFICE_MIMES = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+
 class RAGDocumentStore:
 
     def __init__(self, config):
@@ -548,7 +555,8 @@ class ChatInput(QTextEdit):
         ext = os.path.splitext(path)[1].lower()
         mimes = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
                  '.gif': 'image/gif', '.webp': 'image/webp', '.pdf': 'application/pdf',
-                 '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv'}
+                 '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv',
+                 **_OFFICE_MIMES}
         mime = mimes.get(ext)
         if not mime:
             return False
@@ -2114,6 +2122,15 @@ class ChatAssistantWindow(QMainWindow):
                               path=im.get("path") or im["src"]), "system")
             n += 1
         return n
+
+    def _office_view_to_canvas(self, info):
+        try:
+            with open(str(info.get("path") or ""), encoding="utf-8") as f:
+                page = f.read()
+        except OSError:
+            return False
+        self._render_canvas_html(page)
+        return True
 
     @staticmethod
     def _canvas_local_pictures(html):
@@ -5206,10 +5223,10 @@ enabled = true
 
 
         model = self._base_model_name()
-        self.api_button = QPushButton(f" {model}")
+        self.api_button = QPushButton(" " + t("ui.config_button"))
         self.api_button.setObjectName("api_button")
-        self.api_button.setIcon(self._svg_icon("model", "#38bdf8", 18))
-        self.api_button.setToolTip(t("ui.api_button_tip"))
+        self.api_button.setIcon(self._svg_icon("config", "#38bdf8", 18))
+        self.api_button.setToolTip(t("ui.api_button_tip", model=model))
         self.api_button.clicked.connect(self.open_config_editor)
         hl.addWidget(self.api_button)
 
@@ -5253,7 +5270,7 @@ enabled = true
             ("stats",  "Stats",   self.show_rag_stats,      t("btn.stats_tip"),  "#38bdf8"),
             ("rag",    "RAG",     self.clear_rag_index,     t("btn.rag_tip"),    "#fbbf24"),
             ("fixed",  "@fixed",  self.view_fixed_contexts, t("btn.fixed_tip"),  "#34d399"),
-            ("config", "Config",  self.reload_config,       t("btn.config_tip"), "#a78bfa"),
+            ("config", t("btn.config_reload"), self.reload_config,      t("btn.config_tip"), "#a78bfa"),
             ("chat",   "Chat",    self.clear_chat,          t("btn.chat_tip"),   "#f87171"),
         ]:
             btn = QPushButton(f" {label}")
@@ -5590,8 +5607,11 @@ enabled = true
             kcol = self._COUNCIL_COL
             _kc = self._chat_ctxs.get(self._active_tab_id)
             _seated = getattr(_kc, "council_members", None)
+            _chairs = self._council_pool_names()
             if _seated is None:
-                _seated = [n for n in self._council_pool_names() if n != "base"]
+                _seated = [n for n in _chairs if n != "base"]
+            else:
+                _seated = [n for n in _seated if n in _chairs]
             _waiting = getattr(_kc, "council_ack", None) is not None
             if _waiting:
                 kcol = "#f5b800"
@@ -5773,7 +5793,8 @@ enabled = true
         self._council_welcome()
 
     def _council_pool_names(self):
-        return sorted(self._model_pool().keys()) + ["base"]
+        return sorted(n for n, m in self._model_pool().items()
+                      if m.get("council", True)) + ["base"]
 
     def _council_build_bench(self, ctx):
         from PyQt6.QtWidgets import QCheckBox, QRadioButton
@@ -6145,7 +6166,9 @@ enabled = true
     def _handle_council_convene(self, topic, already_in_history=False):
         tab = getattr(self._tls, "tab_id", None) or self._active_tab_id
         ctx = self._chat_ctxs.get(tab)
-        members = list(getattr(ctx, "council_members", None) or [])
+        _chairs = self._council_pool_names()
+        members = [n for n in (getattr(ctx, "council_members", None) or [])
+                   if n in _chairs]
         first = getattr(ctx, "council_first", "") or ""
         if not members:
             self.thread_msg(t("council.err_no_members"), "error")
@@ -6257,8 +6280,26 @@ enabled = true
                 for k in ("model", "role", "goal", "deps", "peer", "origin"):
                     if not s.get(k) and p.get(k):
                         s[k] = p[k]
+                if ("intent" not in s and p.get("intent")
+                        and s.get("goal") == p.get("goal")):
+                    s["intent"] = p["intent"]
             merged.append(s)
         ctx.agents = merged
+        if getattr(self, "agents_panel", None) is not None:
+            self.agents_panel.update_state(self._agents_cards_for_active())
+
+    def _set_subtask_intent(self, sid, items):
+        ctx = self._turn_ctx()
+        cards = [dict(c) for c in (ctx.agents or [])]
+        hit = False
+        for c in cards:
+            if str(c.get("id")) == str(sid):
+                c["intent"] = [dict(it) for it in (items or [])
+                               if isinstance(it, dict)]
+                hit = True
+        if not hit:
+            return
+        ctx.agents = cards
         if getattr(self, "agents_panel", None) is not None:
             self.agents_panel.update_state(self._agents_cards_for_active())
 
@@ -7117,6 +7158,8 @@ enabled = true
             self._reset_block_format()
             self._chat_scroll_bottom()
             return
+        fragment = ('<p style="margin-top:0px; margin-bottom:0px;">'
+                    + fragment + '</p>')
         doc = tab.get("html", "")
         if "</body>" in doc:
             doc = doc.replace("</body>", fragment + "</body>", 1)
@@ -11612,7 +11655,9 @@ enabled = true
         store = getattr(self, "_qa_reviews", None)
         if store is None:
             store = self._qa_reviews = {}
-        self._qa_review_seq = getattr(self, "_qa_review_seq", 0) + 1
+        import time as _time
+        self._qa_review_seq = max(getattr(self, "_qa_review_seq", 0),
+                                  int(_time.time() * 1000)) + 1
         rid = self._qa_review_seq
         store[rid] = {"ok": ev.get("ok"), "round": ev.get("round", 1),
                       "mode": ev.get("mode", ""), "why": str(ev.get("why") or ""),
@@ -11624,16 +11669,17 @@ enabled = true
         return rid
 
     def _find_anchor(self, href):
+        found = None
         blk = self.chat_display.document().begin()
         while blk.isValid():
             it = blk.begin()
             while not it.atEnd():
                 frag = it.fragment()
                 if frag.isValid() and frag.charFormat().anchorHref() == href:
-                    return frag.position(), frag.length()
+                    found = (frag.position(), frag.length())
                 it += 1
             blk = blk.next()
-        return None
+        return found
 
     @staticmethod
     def _qa_link_html(rid, hide=False):
@@ -11920,8 +11966,10 @@ enabled = true
                 continue
             base_url, api_key, model = self._resolve_endpoint(sec)
             profile = self.config.get(sec, "profile", fallback="").strip()
+            council = (self.config.get(sec, "council", fallback="") or "").strip() \
+                .lower() not in ("false", "0", "no", "off")
             pool[name] = {"base_url": base_url, "api_key": api_key,
-                          "model": model, "profile": profile}
+                          "model": model, "profile": profile, "council": council}
         return pool
 
     def _chat_base_endpoint(self):
@@ -13974,6 +14022,20 @@ enabled = true
             for name, b64, fmime, _ in pending:
                 if fmime.startswith("image/"):
                     images_b64.append((name, b64, fmime))
+                elif fmime in _OFFICE_MIMES.values():
+                    try:
+                        import hoplita_office as _ho
+                        import tempfile
+                        _ext = next(e for e, m in _OFFICE_MIMES.items() if m == fmime)
+                        with tempfile.NamedTemporaryFile(suffix=_ext, delete=False) as tmp:
+                            tmp.write(base64.b64decode(b64)); tmp_path = tmp.name
+                        try:
+                            _otext = _ho.plain_text(tmp_path, 8000)
+                        finally:
+                            os.unlink(tmp_path)
+                    except Exception as _e:
+                        _otext = f"(could not read: {_e})"
+                    text_parts.append(f"[{name}]\n{_otext}")
                 elif fmime == "application/pdf":
                     try:
                         raw = base64.b64decode(b64)
@@ -14693,7 +14755,7 @@ enabled = true
         self.browser_headless = self.config.getboolean("BROWSER", "headless", fallback=False)
         self._update_headless_button()
         model = self._base_model_name()
-        self.api_button.setText(f" {model}")
+        self.api_button.setToolTip(t("ui.api_button_tip", model=model))
         max_iter = self.config.getint("CHAT", "agentic_max_iterations", fallback=5)
         self.add_message(
             t("msg.config_reloaded", model=model, max_iter=max_iter), "system")
@@ -15308,6 +15370,9 @@ enabled = true
     def _paint_orch_event(self, ev):
         et = ev.get("type")
         if et == "tick":
+            return
+        if et == "intent":
+            self._set_subtask_intent(ev.get("id"), ev.get("items"))
             return
         if et == "note":
             key = ev.get("key", "")
@@ -16204,6 +16269,8 @@ enabled = true
                         if ev.get("key") == "wb.open":
                             self.signals.wb_open.emit(
                                 str((ev.get("args") or {}).get("id") or ""))
+                        if ev.get("key") == "office.view":
+                            self._office_view_to_canvas(ev.get("args") or {})
                         if ev.get("key") == "image.generated":
                             self._canvas_show_image(ev.get("args") or {})
                     elif et in ("hands_begin", "hands_action", "hands_end",

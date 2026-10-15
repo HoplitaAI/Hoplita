@@ -123,6 +123,37 @@ _HTML = r"""<!DOCTYPE html>
     text-decoration-color:rgba(239,68,68,.6); text-decoration-thickness:2px;
     color:var(--muted); }
 
+  .steps{ margin-top:9px; }
+  .rail{ display:flex; gap:3px; height:3px; }
+  .seg{ flex:1; border-radius:2px; background:#263247; transition:background .35s; }
+  .seg.done{ background:var(--done); }
+  .seg.failed{ background:var(--failed); }
+  .seg.unfinished{ background:#7c5cff; opacity:.45; }
+  .seg.doing{ background:linear-gradient(90deg,#7a5c00,var(--running),#7a5c00);
+    background-size:220% 100%; animation:shimmer 1.4s linear infinite; }
+  .now{ display:flex; align-items:center; gap:7px; margin-top:6px;
+    font-size:11.5px; color:#cbd5e1; }
+  .now .ntxt{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .now .spinner{ width:10px; height:10px; border-width:1.5px; }
+  .now .nok{ color:var(--done); font-size:11px; }
+  .now .ncount{ color:var(--muted); font-size:10.5px; font-variant-numeric:tabular-nums; }
+  .card.has-steps{ cursor:pointer; align-items:flex-start; }
+  .card.has-steps .led{ margin-top:2px; }
+  .card.has-steps > div:last-child{ margin-top:1px; }
+  .slist{ margin-top:8px; padding-top:7px; border-top:1px solid #222c3e;
+    display:flex; flex-direction:column; gap:5px; }
+  .sitem{ display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cbd5e1; }
+  .sitem .sdot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; background:#3a465c; }
+  .sitem.doing .sdot{ background:var(--running); animation:pulse 1.1s infinite; }
+  .sitem.done .sdot{ background:var(--done); }
+  .sitem.failed .sdot{ background:var(--failed); }
+  .sitem.done .stxt, .sitem.failed .stxt, .sitem.unfinished .stxt{
+    color:var(--muted); text-decoration:line-through; text-decoration-thickness:1.5px; }
+  .sitem.done .stxt{ text-decoration-color:rgba(34,197,94,.55); }
+  .sitem.failed .stxt{ text-decoration-color:rgba(239,68,68,.55); }
+  .sitem .stxt{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ginfo .rail{ height:2px; gap:2px; margin-top:6px; }
+
   .graph-wrap{ flex:1 1 340px; min-width:300px; overflow:auto; border-radius:16px;
     border:1px solid #1f293c; padding:2px;
     background:
@@ -314,6 +345,46 @@ function renderIntent(){
   }).join('');
 }
 
+const EXP = new Set();
+function stepClass(st){
+  return (st==='doing'||st==='done'||st==='failed'||st==='unfinished') ? st : '';
+}
+function railHtml(items){
+  return '<div class="rail">'+items.map(it=>
+    `<span class="seg ${stepClass(it.status)}"></span>`).join('')+'</div>';
+}
+function stepsHtml(s){
+  const items = Array.isArray(s.intent) ? s.intent : [];
+  if(!items.length) return '';
+  const n = items.length;
+  const done = items.filter(it=>it.status==='done').length;
+  const cur = items.find(it=>it.status==='doing')
+           || items.find(it=>!it.status || it.status==='pending');
+  let now = '';
+  if(cur){
+    const spin = (cur.status==='doing' && (s.status||'')==='running')
+      ? '<div class="spinner"></div>' : '';
+    now = `${spin}<span class="ntxt">${escapeHtml(cur.goal||'')}</span>`;
+  }else{
+    now = `<span class="nok">✓</span><span class="ntxt">${escapeHtml(items[n-1].goal||'')}</span>`;
+  }
+  let list = '';
+  if(EXP.has(String(s.id))){
+    list = '<div class="slist">'+items.map(it=>
+      `<div class="sitem ${stepClass(it.status)}"><span class="sdot"></span>`+
+      `<span class="stxt">${escapeHtml(it.goal||'')}</span></div>`).join('')+'</div>';
+  }
+  return `<div class="steps">${railHtml(items)}
+    <div class="now">${now}<span class="ncount">${done}/${n}</span></div>${list}</div>`;
+}
+function togSteps(el){
+  const id = String(el.dataset.id||'');
+  if(!id) return;
+  if(EXP.has(id)) EXP.delete(id); else EXP.add(id);
+  renderCards();
+}
+window.togSteps = togSteps;
+
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function statusClass(s){ return s||'pending'; }
 
@@ -365,13 +436,16 @@ function renderCards(){
     const peer=s.peer?escapeHtml(String(s.peer)):'';
     const obadge=o==='local'?'⌂':(o==='out'?'→ '+(peer||'remote'):'← '+(peer||'remote'));
     const right=cls==='running'?'<div class="spinner"></div>':(cls==='done'?'✓':(cls==='failed'?'✗':'⋯'));
-    return `<div class="card ${cls} o-${o}">
+    const steps=stepsHtml(s);
+    const tog=steps?` has-steps" data-id="${escapeHtml(String(s.id))}" onclick="togSteps(this)`:'';
+    return `<div class="card ${cls} o-${o}${tog}">
       <div class="led ${cls}"></div>
       <div class="info">
         <div class="goal">${escapeHtml(s.goal||'')}</div>
         <div class="meta"><span class="origin-badge o-${o}">${obadge}</span><span class="role-badge">${escapeHtml(s.role||'general')}</span><span class="model-badge">🧠 ${escapeHtml(s.model||'base')}</span>
           ${s.attempts>1 ? escapeHtml(lb('attempt','attempt'))+' '+s.attempts : ''}
           ${s.error ? '· '+escapeHtml(String(s.error).slice(0,40)) : ''}</div>
+        ${steps}
       </div>
       <div style="color:#94a3b8;font-size:14px">${right}</div>
     </div>`;
@@ -436,6 +510,7 @@ function renderGraph(){
       <div class="ginfo">
         <div class="gid">[${escapeHtml(String(s.id))}] <span class="gmodel">🧠${escapeHtml(s.model||'base')}</span></div>
         <div class="ggoal">${escapeHtml(String(s.goal||'').slice(0,46))}</div>
+        ${(Array.isArray(s.intent)&&s.intent.length) ? railHtml(s.intent) : ''}
       </div>
     </div>`;
   });

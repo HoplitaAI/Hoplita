@@ -9,7 +9,7 @@ The file lives in the install's home (see `HOPLITA_HOME` below). Start from `con
   - **The base** is the pool model elected with `[MODELS] base = <alias>`; its empty fields fill from the literal `[API]`. With nothing elected, `[API]` alone is the base.
   - **A role** (`[BROWSER] model`, `[MEMORY] model`, `[CHAT] planner_model`…) that names a pool **alias** runs on that whole pool model (its own `base_url`/`api_key` are then ignored). A raw model id still works: that id, on the base's server.
   - **Any other section's** empty `base_url`/`api_key`/`model` fill from the base.
-- **Visual editor**: the model button in the header. See «The dialog» right below.
+- **Visual editor**: the «Configuration» button in the header. See «The dialog» right below.
 
 ## The dialog: the basic path and the fine one
 
@@ -274,9 +274,10 @@ returns both: one to read, the other to check it against.
 | `context_length` | That model's real window (0 = autodetect). Useful when the endpoint lies |
 | `vision` | Does THIS model see images? `true` / `false`, or empty = not declared. **One rule** (`hoplita_llmcfg.model_sees`) answers for the hands, the browser and the GUI's pasted-image check: the pool lines carrying that model id are asked — those on its own server first; any `true` among them means it sees, an explicit `false` with no `true` means it does not, empty lines do not count; with nobody declaring, `[CHAT] vision` decides. **And it is enforced at the wire:** every request to a model that does not see goes out with each image replaced by a note saying it was not sent — the history's old captures, a pasted picture, anything — so a server started without a vision encoder never answers 400. |
 | `profile` | **In plain language**: what it is good at. The router and the planner READ this to decide |
+| `council` | `false` keeps this model off every council: it stays in the pool for everything else, but no council seats it — not the whole-pool default, not the council page's bench, and a `call_council` that names it is refused. Empty or `true` = it sits. In the dialog: «Sits on councils?» on the model's line |
 | `extra_body` | That model's own passthrough knobs (JSON object) — see `[API] extra_body`. Per model on purpose: thinking is spelled differently by every backend |
 
-**`base = <alias>`** in `[MODELS]` elects one pool model as **the base** — the model that runs when nothing is pinned, what `/model base` (and a cron on «base», and `/qa base`) returns, what the hands and the model button name, and what every section's empty fields fill from. In the dialog it is the «Base model» picker at the top of «Who uses which model», over the active models only.
+**`base = <alias>`** in `[MODELS]` elects one pool model as **the base** — the model that runs when nothing is pinned, what `/model base` (and a cron on «base», and `/qa base`) returns, what the hands and the «Configuration» button tooltip name, and what every section's empty fields fill from. In the dialog it is the «Base model» picker at the top of «Who uses which model», over the active models only.
 
 It is used three ways: automatic router (`[CHAT] auto_route_models`), manual (`/model <alias>`), or per planner sub-task. `/model X` makes X **the chat's base**: planner, synthesizer, "base" sub-agents and compaction all switch to it.
 

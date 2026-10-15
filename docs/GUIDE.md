@@ -90,6 +90,16 @@ The default install folder is `~/hoplita` on Linux/macOS and `%APPDATA%\hoplita`
 
 `--update` does not touch the venv, the dependencies, `config.ini` or the shortcuts; it rebuilds the CLI when the install already has one, and also runs `--lsp` (or `--all`), `--desktop` or `--diffr` when you add them.
 
+When a new version adds a library to `requirements.txt` (the Word, Excel and PowerPoint tools need `python-docx`, `openpyxl` and `python-pptx`), install it into the existing venv after the update:
+
+```bash
+python install.py --update
+<install folder>/venv/bin/python -m pip install -r requirements.txt          # Linux, macOS
+<install folder>\venv\Scripts\python.exe -m pip install -r requirements.txt   # Windows
+```
+
+Already-installed packages are left as they are. If you skip it, everything else works and a tool whose library is missing says which one and gives that same command.
+
 ### By hand (from the source tree)
 
 ```bash
@@ -159,7 +169,7 @@ The MCP listens on port 9077 by default; the faces find it through `[MCP] url`.
 
 ## Configuration — the basic path and the fine one
 
-**Basic: fill in one model and live on it.** Open the config (the model button in the header). It opens on **Models**. Press **＋ Add model**, give it a name, the model id, the server URL and the key. That model is your **base**, with no other click: the chat, the browser, the memory work, the planner, the reviewer and the desktop hands all run on it. Every other setting has a working default. That is the whole setup for most people, for good.
+**Basic: fill in one model and live on it.** Open the config (the «Configuration» button in the header). It opens on **Models**. Press **＋ Add model**, give it a name, the model id, the server URL and the key. That model is your **base**, with no other click: the chat, the browser, the memory work, the planner, the reviewer and the desktop hands all run on it. Every other setting has a working default. That is the whole setup for most people, for good.
 
 **Fine: when you want more, or something does not do X.** Still on **Models**:
 - add more models;
@@ -429,6 +439,8 @@ Adding and deleting credentials is manual, from the GUI's credentials dialog (th
 | `generate_pdf` | Generate a PDF from text/markdown (fpdf2) |
 | `pdf_info` | X-ray of a PDF: pages, outline, form fields, detection of two-pages-per-sheet scans and of unnumbered front matter, text by band, render to PNG |
 | `pdf` | A pipeline of PDF steps: split two-page spreads, extract by printed page number (auto-mapped), merge, rotate, crop, stamp, number, fill forms, encrypt |
+| `office_info` | Read Word, Excel and PowerPoint: blocks with their style, cells with values and formulas, slides with shapes and notes; `find`; a view of the whole file on the canvas |
+| `office` | A pipeline of office edits: replace keeping the format, paragraphs, tables, cells, formulas, rows, sheets, slides, notes; refuses to overwrite a file it would damage |
 | `read_folder` | Read every file in a folder (batch, multimedia + text) |
 
 To edit files the model uses `code_apply_patch`, which is atomic (all-or-nothing with rollback) and creates a new file when the path does not exist and a single change with `old=""` is passed.
@@ -970,6 +982,21 @@ Ask for a picture ("make me a picture of…", or attach one and ask to change it
 - **Save as…** on the canvas bar copies the pictures to a file (one) or a folder (several), or saves the page as HTML when there are none. **💾 Save** keeps the canvas as a snapshot inside HOPLITA.
 - The model gets the path, never the bytes; `see_image(path)` lets it look at a picture when it must judge it, and `render_html` composes around it.
 - Video generation is out of scope.
+
+## Word, Excel and PowerPoint — read, edit, shown on the canvas
+
+`office_info` reads `.docx`, `.xlsx` and `.pptx` (and their macro twins `.docm`, `.xlsm`, `.pptm`): a document's paragraphs with their style and its tables, a workbook's sheets with values **and** formulas, a deck's slides with every shape and the speaker notes. `find` says where a text lives. With `view=true` the whole file is painted on the canvas as one page: the content is faithful, the layout approximate.
+
+`office` edits with a **pipeline of steps** applied in order (replace keeping the format, paragraphs, tables, cells, formulas, rows and columns, sheets, slides, notes) and writes the result to `output`, or over the source to edit in place.
+
+- **Nothing half-written.** The result is built in a temporary file next to the output; a step that fails writes nothing.
+- **Nothing silently lost.** Every write measures what the library cannot carry (the source opened and saved with no step, its parts counted by kind). If something would be dropped it is named, and the source is not overwritten without `accept_loss`.
+- **A backup.** Overwriting a file keeps the previous one in `<HOPLITA_HOME>/office-backups`.
+- **Formulas.** Moving rows or columns, or renaming a sheet, does not rewrite the formulas that point at them, and the result says so. A formula written here gets its value when the file is opened in Excel or LibreOffice.
+- **Formats refused by name.** Legacy `.doc`, `.xls`, `.ppt` and OpenDocument files are refused with a hint to convert them; a password-protected or damaged file is reported as such.
+- **Attachments and folders.** An office file attached in the chat, or found by `read_folder`, is read as its text.
+
+The three libraries are plain `pip` packages with prebuilt wheels for Linux, Windows and macOS (Apple Silicon and Intel): no compiler and no LibreOffice. On Windows, a file open in Word or Excel is locked: `office` reports that it could not write and the original stays untouched.
 
 ## What your contacts DID to what you share
 

@@ -7,6 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import wait as _futwait_raw
 
 
+_CURRENT = threading.local()
+
+
+def current_subtask_id():
+    return getattr(_CURRENT, "sid", "")
+
+
 def _futwait(futures, timeout):
     done, pending = _futwait_raw(list(futures), timeout=timeout)
     return set(done), set(pending)
@@ -100,7 +107,8 @@ class Orchestrator:
     def __init__(self, llm_fn, agent_fn, progress_fn=None,
                  max_parallel=4, max_retries=2, should_stop=None,
                  subtask_timeout=1800,
-                 max_expansions=2, max_subtasks=12, base_model_label=""):
+                 max_expansions=2, max_subtasks=12, base_model_label="",
+                 solo_single=False, model_alias=None):
         self.llm_fn = llm_fn
         self.agent_fn = agent_fn
         self.progress_fn = progress_fn or (lambda e: None)
@@ -111,7 +119,19 @@ class Orchestrator:
         self.base_model_label = (base_model_label or "").strip()
         self.max_expansions = max_expansions
         self.max_subtasks = max_subtasks
+        self.solo_single = bool(solo_single)
+        self.model_alias = model_alias
         self._lock = threading.Lock()
+
+    @staticmethod
+    def is_solo(subtasks):
+        if not subtasks or len(subtasks) != 1:
+            return False
+        st = subtasks[0]
+        d = st.to_dict() if isinstance(st, Subtask) else dict(st)
+        return ((str(d.get("target") or "local").strip() or "local") == "local"
+                and str(d.get("model") or "").strip().lower()
+                in ("", "base", "default"))
 
     def _ui_dicts(self, subs):
         out = []
@@ -155,13 +175,26 @@ class Orchestrator:
             ))
         if not subtasks:
             return None
+        if self.model_alias is not None:
+            for s in subtasks:
+                if not s.model:
+                    continue
+                alias = self.model_alias(s.model)
+                if alias is None:
+                    self.progress_fn({"type": "note", "key": "plan.model_unknown",
+                                      "args": {"id": s.id, "model": s.model}})
+                    alias = ""
+                s.model = alias
         valid_ids = {s.id for s in subtasks}
         for s in subtasks:
             s.deps = [d for d in s.deps if d in valid_ids and d != s.id]
         if self._has_cycle(subtasks):
             for i, s in enumerate(subtasks):
                 s.deps = [subtasks[i - 1].id] if i > 0 else []
-        self.progress_fn({"type": "plan", "subtasks": self._ui_dicts(subtasks)})
+        if not (self.solo_single and feedback is None
+                and self.is_solo(subtasks)):
+            self.progress_fn({"type": "plan",
+                              "subtasks": self._ui_dicts(subtasks)})
         return subtasks
 
     def _pop_split_request(self, result):
@@ -271,6 +304,7 @@ class Orchestrator:
             return "\n\n".join(parts)
 
         def run_one(st):
+            _CURRENT.sid = st.id
             st.status = "running"
             self.progress_fn({"type": "subtask_start", "id": st.id, "goal": st.goal,
                               "role": st.role,
@@ -414,6 +448,8 @@ class Orchestrator:
         subtasks = self.plan(task)
         if not subtasks:
             return None, None
+        if self.solo_single and self.is_solo(subtasks):
+            return "__SOLO__", subtasks
 
         if approve_fn is not None:
             while True:
