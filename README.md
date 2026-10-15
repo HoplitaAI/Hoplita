@@ -17,7 +17,8 @@ router, the memory and the tools. Two faces talk to it over HTTP — a desktop
 same API.
 
 **Start here:** [Install it on Linux, macOS or Windows](docs/INSTALL.md) ·
-[First steps: the model and the search key it needs](docs/FIRST-STEPS.md)
+[First steps: the model and the search key it needs](docs/FIRST-STEPS.md) ·
+[Every command](docs/COMMANDS.md)
 
 ---
 
@@ -57,7 +58,12 @@ rewrites the job.
 ### Several models, one assistant
 - **A pool of models** with one elected as the base. Every job — browsing,
   background memory work, planning, reviewing, vision, taking over when stuck —
-  can run on its own model, and a router can pick per question.
+  can run on its own model.
+- **A model router**: before each turn a short call reads the request and the
+  plain-language profile of each pool model (heavy coding, vision, quick
+  chat…) and sends the turn to the one that fits, or keeps it on the base. The
+  chat says where it went. `/model <name>` pins one by hand, `/model auto`
+  hands the choice back.
 - **The 🏛 Council**: several models deliberate on any matter by turns —
   answer, examine, reformulate — and vote. A stuck turn can convene one itself.
 - **Multi-agent orchestration**: a planner splits a task into sub-agents, each
@@ -174,6 +180,8 @@ default. What the model must support and which search providers there are:
 - [Installing](docs/INSTALL.md) — Linux, macOS and Windows, step by step.
 - [First steps](docs/FIRST-STEPS.md) — the model and the search key HOPLITA
   needs, and where they go.
+- [Commands](docs/COMMANDS.md) — every `/command` of the chat and the CLI, and
+  the CLI's flags.
 - [User guide](docs/GUIDE.md) — install, configuration, every tab and page,
   models and roles, external MCP servers, memory, federation, the CLI and
   troubleshooting.

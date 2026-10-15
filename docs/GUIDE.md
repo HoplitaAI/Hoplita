@@ -5,7 +5,7 @@
 
 Personal AI agent system with an MCP server, desktop GUI, CLI, autonomous web browsing, encrypted vault, RAG, CRON, coding tools, a tool firewall, an external-MCP router, **multi-model with automatic routing** and a **bilingual interface (ES/EN)**.
 
-**New here?** [Install it on Linux, macOS or Windows](INSTALL.md) · [First steps: the model and the search key it needs](FIRST-STEPS.md)
+**New here?** [Install it on Linux, macOS or Windows](INSTALL.md) · [First steps: the model and the search key it needs](FIRST-STEPS.md) · [Every command](COMMANDS.md)
 
 ## Architecture
 
@@ -66,7 +66,7 @@ The source tree. `install.py` copies the contents of `python/` flat into the ins
 | `requirements-browser.txt` | Web browsing stack (Playwright, browser-use, crawl4ai) |
 | `requirements-desktop.txt` | Desktop hands' pixel layer (pyautogui, mss; pywinauto on Windows) |
 | `config.ini.example` | Annotated example config; `install.py` copies it to `config.ini` when there is none |
-| `docs/` | `INSTALL.md` (per system), `FIRST-STEPS.md` (what it needs to start), `CONFIG.md` (every key), `TOOLS.md` (every tool), `API.md` (REST API), `DEFINITION-OF-DONE.md` |
+| `docs/` | `INSTALL.md` (per system), `FIRST-STEPS.md` (what it needs to start), `COMMANDS.md` (every command), `CONFIG.md` (every key), `TOOLS.md` (every tool), `API.md` (REST API), `DEFINITION-OF-DONE.md` |
 
 ## Installation
 
@@ -534,6 +534,8 @@ What happens on screen while the hands work:
 `python install.py --desktop` (also inside `--all`, and on an existing install with `--update --desktop`) installs the pixel-layer libraries in the venv and ends by printing what the hands actually have; add `--system-libs` (the installer's one flag that asks for sudo) and it also installs the distribution's accessibility binding for Python and, where packaged, the Wayland input helper with its daemon, otherwise it prints the exact command for your distribution. `hands_status` reports the same at any time. Platforms: Linux is the primary one (AT-SPI for elements; on an X display a pointer library and a screen grabber; on Wayland the compositor's screenshot tool and, when installed, an input-injection helper for raw input — the element layer needs neither). Windows gets its element layer through UI Automation (the `pywinauto` binding, installed by `--desktop`); it is written against the binding's documented surface and tested only through a stand-in, so treat it as experimental — `hands_status` says what is missing. macOS reports what it has and which permission is missing rather than pretend; it grants Accessibility and Screen Recording per binary, to the process that launched the app.
 
 ## Chat commands
+
+All of them, plus the CLI's own commands and flags, on one page: **[docs/COMMANDS.md](COMMANDS.md)**.
 
 | Command | Description |
 |---------|-------------|
