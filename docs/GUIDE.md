@@ -5,6 +5,8 @@
 
 Personal AI agent system with an MCP server, desktop GUI, CLI, autonomous web browsing, encrypted vault, RAG, CRON, coding tools, a tool firewall, an external-MCP router, **multi-model with automatic routing** and a **bilingual interface (ES/EN)**.
 
+**New here?** [Install it on Linux, macOS or Windows](INSTALL.md) · [First steps: the model and the search key it needs](FIRST-STEPS.md)
+
 ## Architecture
 
 ```
@@ -64,9 +66,11 @@ The source tree. `install.py` copies the contents of `python/` flat into the ins
 | `requirements-browser.txt` | Web browsing stack (Playwright, browser-use, crawl4ai) |
 | `requirements-desktop.txt` | Desktop hands' pixel layer (pyautogui, mss; pywinauto on Windows) |
 | `config.ini.example` | Annotated example config; `install.py` copies it to `config.ini` when there is none |
-| `docs/` | `CONFIG.md` (every key), `TOOLS.md` (every tool), `API.md` (REST API), `DEFINITION-OF-DONE.md` |
+| `docs/` | `INSTALL.md` (per system), `FIRST-STEPS.md` (what it needs to start), `CONFIG.md` (every key), `TOOLS.md` (every tool), `API.md` (REST API), `DEFINITION-OF-DONE.md` |
 
 ## Installation
+
+What each system needs before this (Python, git), step by step: **[docs/INSTALL.md](INSTALL.md)**. What to set up after it (a model, a search key): **[docs/FIRST-STEPS.md](FIRST-STEPS.md)**.
 
 ### With the installer (Linux, macOS, Windows)
 

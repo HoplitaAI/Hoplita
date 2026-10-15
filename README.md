@@ -16,6 +16,9 @@ router, the memory and the tools. Two faces talk to it over HTTP — a desktop
 **GUI** (PyQt6) and a Unix-style **CLI** (Go) — and any third face can use the
 same API.
 
+**Start here:** [Install it on Linux, macOS or Windows](docs/INSTALL.md) ·
+[First steps: the model and the search key it needs](docs/FIRST-STEPS.md)
+
 ---
 
 ## Highlights
@@ -125,7 +128,8 @@ network.
 
 ## Install
 
-Python 3.11 or newer.
+Python 3.11 or newer and git. What to install first on each system:
+**[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ```bash
 python install.py
@@ -159,12 +163,17 @@ venv/bin/python hoplita-gui.py               # the desktop GUI
 
 ## Configure
 
-The configuration dialog opens on **Models**: add one model (name, model id,
-server URL, key) and it becomes the base everything runs on. Everything else has
-a working default; `config.ini.example` lists every key.
+Press **Configuration** in the window. The dialog opens on **Models**: add one
+model (name, model id, server URL, key) and it becomes the base everything runs
+on. Add a web search key under **Search**. Everything else has a working
+default. What the model must support and which search providers there are:
+**[docs/FIRST-STEPS.md](docs/FIRST-STEPS.md)**.
 
 ## Documentation
 
+- [Installing](docs/INSTALL.md) — Linux, macOS and Windows, step by step.
+- [First steps](docs/FIRST-STEPS.md) — the model and the search key HOPLITA
+  needs, and where they go.
 - [User guide](docs/GUIDE.md) — install, configuration, every tab and page,
   models and roles, external MCP servers, memory, federation, the CLI and
   troubleshooting.
