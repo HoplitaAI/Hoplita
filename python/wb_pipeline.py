@@ -195,7 +195,7 @@ matters in one part, at most {mf} files each); in reading order.
 {dossier}"""
 
 
-def _plan(ctx, kind, dossier, change_text=""):
+def _plan(ctx, kind, dossier, change_text="", changed=None):
     if kind == "overview":
         prompt = _PLAN_OVERVIEW.format(lang=ctx.lang, mf=MAX_FILES_PER_PART, mp=MAX_PARTS,
                                        dossier=dossier["text"])
@@ -217,6 +217,22 @@ def _plan(ctx, kind, dossier, change_text=""):
                       "question": str(p.get("question") or ""), "files": files})
         if len(parts) >= MAX_PARTS:
             break
+    if kind != "overview" and changed:
+        ch = set(changed)
+        kept = []
+        for p in parts:
+            mine = [f for f in p["files"] if f in ch]
+            if mine:
+                p["files"] = (mine + [f for f in p["files"] if f not in ch])[:MAX_FILES_PER_PART]
+                kept.append(p)
+        parts = kept
+        if not parts:
+            files = [f for f in changed if f in known][:MAX_FILES_PER_PART]
+            if files:
+                parts = [{"id": "p1", "title": str(plan.get("title") or "The change"),
+                          "question": "What this change does and why", "files": files}]
+        for p in parts:
+            p["changed_files"] = [f for f in p["files"] if f in ch]
     if not parts:
         seed = (dossier.get("entries") or [])[:2] + (dossier.get("central") or [])[:4]
         seed = [f for f in dict.fromkeys(seed) if f in known][:MAX_FILES_PER_PART]
@@ -323,6 +339,8 @@ def explore_all(ctx, root, pins, parts, kind, wid, board=None, fresh=False):
         if ctx.cancelled():
             return
         b = _explore(ctx, root, pins, p, kind, wid)
+        if not _answered(b) and not ctx.cancelled():
+            b = _explore(ctx, root, pins, p, kind, wid)
         if _answered(b):
             st.brief_put(key, fp, b)
         with lock:
@@ -403,11 +421,18 @@ def _fallback_prose(brief):
     return "\n".join(p for p in parts if p).strip()
 
 
+def _in_change(part, step):
+    ch = part.get("changed_files")
+    if ch is None:
+        return True
+    return ((step.get("source") or {}).get("file") or "") in ch
+
+
 def _flow_block(part, brief):
-    steps = [s for s in (brief.get("flow") or []) if s.get("label")]
+    steps = [s for s in (brief.get("flow") or []) if s.get("label") and _in_change(part, s)]
     if len(steps) < 2:
-        steps = [{"label": c["text"][:56], "source": c.get("source")} for c in (brief.get("claims") or [])[:7]
-                 if c.get("text")]
+        steps = [{"label": c["text"][:56], "source": c.get("source")} for c in (brief.get("claims") or [])
+                 if c.get("text") and _in_change(part, c)][:7]
     if len(steps) < 2:
         return None
     nodes, edges = [], []
@@ -515,7 +540,8 @@ def draw(job, ctx, project_of=None):
             change_text, changed = _change_text(root, pins)
             dossier["files"] = list(dict.fromkeys(dossier["files"] + [c for c in changed if c]))
         ctx.progress("planning")
-        plan = _plan(ctx, "overview" if kind == "overview" else "change", dossier, change_text)
+        plan = _plan(ctx, "overview" if kind == "overview" else "change", dossier, change_text,
+                     changed if kind != "overview" else None)
         if ctx.cancelled():
             _drop(board, job)
             return
@@ -556,7 +582,8 @@ def _prepare(job, ctx, pins, kind, fresh=False):
         change_text, changed = _change_text(root, pins)
         dossier["files"] = list(dict.fromkeys(dossier["files"] + [c for c in changed if c]))
     ctx.progress("planning")
-    plan = _plan(ctx, "overview" if kind == "overview" else "change", dossier, change_text)
+    plan = _plan(ctx, "overview" if kind == "overview" else "change", dossier, change_text,
+                 changed if kind != "overview" else None)
     briefs, explored = explore_all(ctx, root, pins, plan["parts"],
                                    "overview" if kind == "overview" else "change", job.get("whiteboardId"),
                                    fresh=fresh)

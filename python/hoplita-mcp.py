@@ -670,6 +670,14 @@ class TODOManager(EncryptedStorageManager):
                                     "rag_urls": tk.get("rag_urls", [])}})
         return out
 
+    def fed_stamp_editor(self, project, uuid_, editor):
+        for tk in self.data.get("tasks", []):
+            if tk.get("uuid") == uuid_ and not tk.get("editor"):
+                tk["editor"] = editor
+                self.save_data()
+                return True
+        return False
+
     def fed_upsert(self, project, item):
         p = item.get("payload", {})
         now = datetime.now().isoformat()
@@ -1167,6 +1175,14 @@ class NotesManager(EncryptedStorageManager):
                         "payload": {"title": n.get("title", ""), "content": content,
                                     "attachment": n.get("attachment")}})
         return out
+
+    def fed_stamp_editor(self, category, uuid_, editor):
+        for n in self.data.get("categories", {}).get(category, []):
+            if n.get("uuid") == uuid_ and not n.get("editor"):
+                n["editor"] = editor
+                self.save_data()
+                return True
+        return False
 
     def fed_upsert(self, category, item):
         self.data.setdefault("categories", {}).setdefault(category, [])
@@ -10305,12 +10321,13 @@ def agent_session_close_inbound(req: SessionStopReq):
 class ApprovalDecisionReq(BaseModel):
     peer: str
     approved: bool
+    id: str = ""
 
 
 @app.post("/agent/resolve-approval")
 def agent_resolve_approval(req: ApprovalDecisionReq):
     import fed_tools
-    return fed_tools.resolve_approval(req.peer, req.approved)
+    return fed_tools.resolve_approval(req.peer, req.approved, approval_id=req.id)
 
 
 @app.post("/reload-config")
@@ -10759,8 +10776,11 @@ def call_tool(req: ToolCallReq):
         _req_proj = (getattr(req, "code_project", "") or "").strip()
         if _req_proj:
             _TURN_SESSION.project = _req_proj
+        with _AGENT_TURNS_LOCK:
+            _turn_cancel = _AGENT_TURNS.get((getattr(req, "turn_id", "") or "").strip())
         try:
-            with _orchestration_ctx(OrchestrationCtx()):
+            with _orchestration_ctx(OrchestrationCtx(
+                    cancel=_turn_cancel.is_set if _turn_cancel is not None else None)):
                 result = TOOLS[req.tool]["fn"](req.arguments)
         finally:
             for k, v in _prev.items():
@@ -11912,6 +11932,14 @@ class OrchestrationCtx:
 
 
 _ORCH = threading.local()
+
+
+def _current_turn_cancel():
+    ctx = getattr(_ORCH, "ctx", None)
+    return getattr(ctx, "cancel", None)
+
+
+fed_tools.TURN_STOP_PROBE = _current_turn_cancel
 
 
 @_contextlib.contextmanager

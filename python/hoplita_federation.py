@@ -140,8 +140,28 @@ def _raise_from(r):
 
 class FedWS:
 
+    HEARTBEAT_S = 60
+    CORPSE_S = 210
+
+    def _heartbeat(self, ws):
+        while not self._stop.wait(self.HEARTBEAT_S):
+            with self._lock:
+                if self._ws is not ws:
+                    return
+            if time.monotonic() - self._last_rx > self.CORPSE_S:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+                return
+            try:
+                ws.send(json.dumps({"op": "ping", "req_id": uuid.uuid4().hex}))
+            except Exception:
+                return
+
     def __init__(self):
         self._ws = None
+        self._last_rx = 0.0
         self._lock = threading.Lock()
         self._pending = {}
         self._on_event = None
@@ -240,20 +260,17 @@ class FedWS:
                         self._on_event("ws.connected", {})
                     except Exception:
                         pass
-                last_rx = time.monotonic()
+                self._last_rx = time.monotonic()
+                threading.Thread(target=self._heartbeat, args=(ws,),
+                                 daemon=True, name="fed-ws-heartbeat").start()
                 while not self._stop.is_set():
                     try:
                         raw = ws.recv()
-                        last_rx = time.monotonic()
+                        self._last_rx = time.monotonic()
                     except websocket.WebSocketTimeoutException:
-                        if time.monotonic() - last_rx > 210:
+                        if time.monotonic() - self._last_rx > self.CORPSE_S:
                             break
-                        try:
-                            ws.send(json.dumps({"op": "ping",
-                                                "req_id": uuid.uuid4().hex}))
-                            continue
-                        except Exception:
-                            break
+                        continue
                     if not raw:
                         break
                     msg = json.loads(raw)

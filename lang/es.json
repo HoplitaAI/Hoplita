@@ -1550,6 +1550,7 @@
   "session.card_tool": "{tool}…",
   "session.incoming_ask": "«{peer}» quiere que tu agente ejecute una tarea. ¿Aprobar?",
   "session.incoming_title": "Petición de sesión entrante",
+  "session.incoming_withdrawn": "↩ \"{peer}\" retiró la petición antes de que contestaras.",
   "session.reject": "Rechazar",
   "share.accept": "Aceptar",
   "share.accept_fail": "❌ No se pudo aceptar lo compartido: {err}",

@@ -1,8 +1,18 @@
 import fed_sync as fs
 
 
-def push_shared(store, resource):
-    return [it for it in store.fed_items(resource) if not it.get("local_only")]
+def push_shared(store, resource, my_handle=""):
+    out = []
+    for it in store.fed_items(resource):
+        if it.get("local_only"):
+            continue
+        if my_handle and not it.get("editor"):
+            it = dict(it, editor=my_handle)
+            stamp = getattr(store, "fed_stamp_editor", None)
+            if stamp is not None:
+                stamp(resource, it["uuid"], my_handle)
+        out.append(it)
+    return out
 
 
 def pull_shared(store, resource, incoming, my_handle, uuid_gen, title_key="title"):

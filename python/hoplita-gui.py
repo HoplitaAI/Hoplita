@@ -644,7 +644,7 @@ class WorkerSignals(QObject):
     token_first = pyqtSignal(str, int, int)
     session_event = pyqtSignal(str, str, dict)
     session_closed = pyqtSignal(str, str)
-    session_incoming = pyqtSignal(str, str)
+    session_incoming = pyqtSignal(str, str, str)
     session_incoming_auto = pyqtSignal(str)
     share_incoming = pyqtSignal(str, str, str)
     plan_ack = pyqtSignal(object)
@@ -2531,13 +2531,31 @@ class ChatAssistantWindow(QMainWindow):
                     continue
                 self._approvals_shown.add(aid)
                 self.signals.session_incoming.emit(p.get("peer", ""),
-                                                   p.get("message", ""))
+                                                   p.get("message", ""), aid or "")
+
         except Exception:
             pass
 
-    def _on_session_incoming(self, peer, message):
+    def _approval_still_pending(self, aid, box):
+        try:
+            r = requests.get(f"{self._mcp_url}/agent/pending-approvals", timeout=3)
+            if r.status_code != 200:
+                return
+            live = {p.get("id") for p in r.json().get("pending", [])}
+        except Exception:
+            return
+        if aid not in live:
+            box.setProperty("withdrawn", True)
+            box.done(0)
+
+    def _on_session_incoming(self, peer, message, aid=""):
         from PyQt6.QtWidgets import QMessageBox
         box = QMessageBox(self)
+        if aid:
+            self._approval_boxes[aid] = box
+            watch = QTimer(box)
+            watch.timeout.connect(lambda a=aid, b=box: self._approval_still_pending(a, b))
+            watch.start(2000)
         box.setWindowTitle(t("session.incoming_title"))
         box.setText(t("session.incoming_ask", peer=peer))
         box.setInformativeText(message[:500])
@@ -2545,10 +2563,15 @@ class ChatAssistantWindow(QMainWindow):
         yes = box.addButton(t("session.approve"), QMessageBox.ButtonRole.AcceptRole)
         box.addButton(t("session.reject"), QMessageBox.ButtonRole.RejectRole)
         box.exec()
+        self._approval_boxes.pop(aid, None)
+        if box.property("withdrawn"):
+            self.thread_msg(t("session.incoming_withdrawn", peer=peer), "system")
+            return
         approved = box.clickedButton() == yes
         try:
             requests.post(f"{self._mcp_url}/agent/resolve-approval",
-                          json={"peer": peer, "approved": approved}, timeout=5)
+                          json={"peer": peer, "approved": approved, "id": aid},
+                          timeout=5)
         except Exception as e:
             self.thread_msg(f"❌ resolve approval: {e}", "error")
         if approved:
@@ -2940,6 +2963,7 @@ class ChatAssistantWindow(QMainWindow):
         on = bool(wid) and wid != "scratchpad"
         self.code_wb_redraw.setEnabled(on)
         self.code_wb_delete.setEnabled(on)
+        self._code_wb_poll()
 
     def _wb_kind(self, wid):
         try:
@@ -3397,6 +3421,16 @@ class ChatAssistantWindow(QMainWindow):
                 pass
         self._code_wb_poll()
 
+    def _wb_job_to_report(self, jobs):
+        shown = getattr(self, "_wb_shown_id", "") or ""
+        if shown:
+            for j in jobs:
+                if j.get("whiteboardId") == shown:
+                    return j
+        if jobs and jobs[0].get("state") != "done":
+            return jobs[0]
+        return None
+
     def _code_wb_poll(self):
         root = (self._code_project or "").rstrip("/\\")
         try:
@@ -3421,8 +3455,8 @@ class ChatAssistantWindow(QMainWindow):
                                         + (f"  ·  {stage}" if stage else ""))
         elif self._wb_pending:
             self.code_wb_status.setText(t("code.wb_pick_model"))
-        elif jobs:
-            j = jobs[0]
+        elif self._wb_job_to_report(jobs):
+            j = self._wb_job_to_report(jobs)
             err = j.get("error") or ""
             if err == "remote_model" and j["id"] not in self._wb_asked:
                 self._wb_asked.add(j["id"])
@@ -3455,7 +3489,7 @@ class ChatAssistantWindow(QMainWindow):
                 self._wb_to_follow.discard(j["id"])
                 if wid != wb.current:
                     wb.show_whiteboard(wid, root)
-        _last = running[0] if running else (jobs[0] if jobs else None)
+        _last = running[0] if running else self._wb_job_to_report(jobs)
         _tr = (_last or {}).get("trace") or []
         self._wb_last_trace = (_last or {}).get("root", ""), _tr
         if _tr:
@@ -5160,6 +5194,7 @@ enabled = true
         self._approval_timer.timeout.connect(self._poll_pending_approvals)
         self._approval_timer.start(3000)
         self._approvals_shown = set()
+        self._approval_boxes = {}
         self._session_events_timer = QTimer(self)
         self._session_events_timer.timeout.connect(self._poll_session_events)
         self._session_events_timer.start(400)

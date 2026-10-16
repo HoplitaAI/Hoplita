@@ -100,6 +100,27 @@ def _send(server_url, token, my_priv, recipient, recipient_pub, rtype,
 
 
 
+_LIVE = {}
+_LIVE_LOCK = threading.Lock()
+
+
+def _hand_over(session_id, env):
+    with _LIVE_LOCK:
+        owner = _LIVE.get(session_id)
+    if owner is None:
+        return False
+    owner._parked.put(env)
+    owner.wake()
+    return True
+
+
+def wake_all():
+    with _LIVE_LOCK:
+        live = list(_LIVE.values())
+    for o in live:
+        o.wake()
+
+
 class SessionOriginator:
 
     _THROTTLE_SAY_AFTER = 4
@@ -134,6 +155,7 @@ class SessionOriginator:
         self._stop = threading.Event()
         self._done = threading.Event()
         self._opened = False
+        self._parked = queue.Queue()
 
     def is_alive(self):
         return not self._done.is_set() and not self._stop.is_set()
@@ -156,6 +178,7 @@ class SessionOriginator:
 
     def stop(self):
         self._stop.set()
+        self._wake.set()
         try:
             store, server_url, token, my_priv, my_pub = _session_ctx()
             peer_pub = _peer_pubkey(server_url, token, self.peer)
@@ -164,10 +187,47 @@ class SessionOriginator:
         except Exception:
             pass
 
-    def start(self, message, max_iterations=None, persistent=False):
+    def start(self, message, max_iterations=None, persistent=False,
+              should_stop=None):
         store, server_url, token, my_priv, my_pub = _session_ctx()
         peer_pub = _peer_pubkey(server_url, token, self.peer)
+        with _LIVE_LOCK:
+            _LIVE[self.session_id] = self
+        try:
+            if should_stop is not None:
+                threading.Thread(target=self._watch_stop, args=(should_stop,),
+                                 daemon=True,
+                                 name=f"session-stop-{self.session_id}").start()
+            return self._listen(message, max_iterations, persistent,
+                                server_url, token, my_priv, peer_pub)
+        finally:
+            with _LIVE_LOCK:
+                if _LIVE.get(self.session_id) is self:
+                    del _LIVE[self.session_id]
 
+    def _watch_stop(self, should_stop):
+        while not self._done.is_set() and not self._stop.is_set():
+            try:
+                if should_stop():
+                    print(f"[SESSION-OUT] the waiting turn was stopped → "
+                          f"stopping session={self.session_id} with "
+                          f"{self.peer!r}", file=sys.stderr)
+                    self.stop()
+                    return
+            except Exception:
+                return
+            self._done.wait(0.5)
+
+    def _take_parked(self):
+        out = []
+        while True:
+            try:
+                out.append(self._parked.get_nowait())
+            except queue.Empty:
+                return out
+
+    def _listen(self, message, max_iterations, persistent,
+                server_url, token, my_priv, peer_pub):
         self.send_turn(message, max_iterations)
 
         deadline = time.time() + self.overall_timeout
@@ -196,8 +256,13 @@ class SessionOriginator:
                 self._stop.wait(self.poll_interval)
                 continue
             envelopes = resp.get("envelopes", [])
-            mine = [e for e in envelopes
-                    if (e.get("meta") or {}).get("session_id") == self.session_id]
+            mine = self._take_parked()
+            for e in envelopes:
+                sid = (e.get("meta") or {}).get("session_id")
+                if sid == self.session_id:
+                    mine.append(e)
+                else:
+                    _hand_over(sid, e)
             got_terminal = False
             for env in sorted(mine, key=lambda e: e.get("created_at", "")):
                 try:
@@ -341,9 +406,15 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
         approved = False
         if approver is not None:
             try:
-                approved = bool(approver(sender, message, trust == "analyze"))
+                answer = approver(sender, message, trust == "analyze",
+                                  session_id=session_id)
             except Exception:
-                approved = False
+                answer = False
+            if answer is None:
+                print(f"[SESSION-IN] {sender!r} withdrew session={session_id} "
+                      f"before it was approved", file=sys.stderr)
+                return {"ok": False, "reason": "withdrawn by the originator"}
+            approved = bool(answer)
         if not approved:
             _send(server_url, token, my_priv, sender, sender_pub, T_EVENT,
                   {"event": "error", "code": "declined", "retryable": False,

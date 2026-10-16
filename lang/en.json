@@ -1550,6 +1550,7 @@
   "session.card_tool": "{tool}…",
   "session.incoming_ask": "\"{peer}\" wants your agent to run a task. Approve?",
   "session.incoming_title": "Incoming session request",
+  "session.incoming_withdrawn": "↩ \"{peer}\" withdrew the request before you answered.",
   "session.reject": "Reject",
   "share.accept": "Accept",
   "share.accept_fail": "❌ Couldn't accept the share: {err}",

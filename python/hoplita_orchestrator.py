@@ -373,20 +373,33 @@ class Orchestrator:
                     self._wait_running(subtasks, done, failed)
                     continue
                 futures = {pool.submit(run_one, s): s for s in ready}
-                _left = set(futures)
-                if self.subtask_timeout:
-                    _fin, _late = _futwait(_left, timeout=self.subtask_timeout)
-                    for fut in _late:
-                        s = futures[fut]
-                        s.status = "failed"
-                        s.error = (f"no answer in {self.subtask_timeout}s — "
-                                   f"cut so the plan could go on. It may still "
-                                   f"be running in the background; nobody is "
-                                   f"waiting for it any more.")
-                        failed.add(s.id)
-                        self.progress_fn({"type": "subtask_failed",
-                                          "id": s.id, "error": s.error})
-                    _left = _fin
+                _left, _fin = set(futures), set()
+                _deadline = (time.time() + self.subtask_timeout
+                             if self.subtask_timeout else None)
+                _stopped = False
+                while _left:
+                    _step = 0.5
+                    if _deadline is not None:
+                        _step = max(0.0, min(_step, _deadline - time.time()))
+                    _f, _left = _futwait(_left, timeout=_step)
+                    _fin |= _f
+                    if self.should_stop():
+                        _stopped = True
+                        break
+                    if _deadline is not None and time.time() >= _deadline:
+                        break
+                for fut in _left:
+                    s = futures[fut]
+                    s.status = "failed"
+                    s.error = ("stopped by the user" if _stopped else
+                               f"no answer in {self.subtask_timeout}s — "
+                               f"cut so the plan could go on. It may still "
+                               f"be running in the background; nobody is "
+                               f"waiting for it any more.")
+                    failed.add(s.id)
+                    self.progress_fn({"type": "subtask_failed",
+                                      "id": s.id, "error": s.error})
+                _left = _fin
                 for fut in _left:
                     try:
                         fut.result()

@@ -2196,7 +2196,8 @@ def tool_fed_ask_agent(handle, message, max_iterations=None, device="", tab="",
     try:
         orig = fed_session.SessionOriginator(handle, on_event, device=device,
                                              tab=tab)
-        terminal = orig.start(message, max_iterations)
+        terminal = orig.start(message, max_iterations,
+                              should_stop=_turn_stop_probe())
     except Exception as e:
         return {"error": f"Could not open the session with '{handle}': {e}"}
 
@@ -2994,7 +2995,7 @@ def _fed_push(kind, name, store):
     if not peers:
         return {"error": "No member with a usable key AND a valid signed "
                          "grant — nothing sent.", "errors": errors}
-    items = fa.push_shared(store, name)
+    items = fa.push_shared(store, name, st.data.get("handle", ""))
     sigs = {it.get("uuid"): _item_sig(it) for it in items}
     envs = {}
     sent = 0
@@ -3756,7 +3757,7 @@ def clear_deny_cooldown(peer):
     _DENIED_UNTIL.pop(peer, None)
 
 
-def _bridge_approver(peer, message, analyze):
+def _bridge_approver(peer, message, analyze, session_id=""):
     global _approval_seq
     left = deny_cooldown_left(peer)
     if left > 0:
@@ -3769,14 +3770,30 @@ def _bridge_approver(peer, message, analyze):
         aid = f"appr_{_approval_seq}"
         q = _queue.Queue(maxsize=1)
         _PENDING_APPROVALS[aid] = {"peer": peer, "message": message,
-                                   "analyze": analyze, "queue": q}
+                                   "analyze": analyze, "queue": q,
+                                   "session_id": session_id or ""}
     try:
-        return bool(q.get(timeout=300))
+        answer = q.get(timeout=300)
+        return None if answer is None else bool(answer)
     except _queue.Empty:
         return False
     finally:
         with _PENDING_LOCK:
             _PENDING_APPROVALS.pop(aid, None)
+
+
+def withdraw_approval(session_id):
+    if not session_id:
+        return False
+    with _PENDING_LOCK:
+        for aid, v in list(_PENDING_APPROVALS.items()):
+            if v.get("session_id") == session_id:
+                try:
+                    v["queue"].put_nowait(None)
+                except Exception:
+                    pass
+                return True
+    return False
 
 
 def list_pending_approvals():
@@ -3786,14 +3803,19 @@ def list_pending_approvals():
                 for aid, v in _PENDING_APPROVALS.items()]
 
 
-def resolve_approval(peer, approved):
+def resolve_approval(peer, approved, approval_id=""):
+    if approval_id:
+        with _PENDING_LOCK:
+            v = _PENDING_APPROVALS.get(approval_id)
+        if v is None or v["peer"] != peer:
+            return {"ok": False, "reason": "that request is no longer pending"}
     if approved:
         clear_deny_cooldown(peer)
     else:
         _DENIED_UNTIL[peer] = _time.time() + DENY_COOLDOWN_S
     with _PENDING_LOCK:
         for aid, v in list(_PENDING_APPROVALS.items()):
-            if v["peer"] == peer:
+            if (aid == approval_id) if approval_id else (v["peer"] == peer):
                 try:
                     v["queue"].put_nowait(bool(approved))
                 except Exception:
@@ -3806,6 +3828,16 @@ _SESSION_EVENTS = []
 _SESSION_EVENTS_LOCK = _threading.Lock()
 _OUTBOUND_ORIGINATORS = {}
 _OUTBOUND_LOCK = _threading.Lock()
+
+
+TURN_STOP_PROBE = None
+
+
+def _turn_stop_probe():
+    try:
+        return TURN_STOP_PROBE() if TURN_STOP_PROBE else None
+    except Exception:
+        return None
 
 
 def _push_session_event(peer, direction, ev):
@@ -3973,6 +4005,7 @@ def _dispatch_session_envelope(env):
     rtype = env.get("resource_type")
     if rtype == fed_session.T_STOP:
         fed_session.handle_incoming_stop(env)
+        withdraw_approval((env.get("meta") or {}).get("session_id"))
         _sender = env.get("sender", "")
         if _sender:
             _push_inbound_session_event(
@@ -4033,12 +4066,7 @@ def _ws_event(event, data):
         fed.invalidate_keys()
         fed.invalidate_inbox()
         sync_ring()
-        with _OUTBOUND_LOCK:
-            for o in list(_OUTBOUND_ORIGINATORS.values()):
-                try:
-                    o.wake()
-                except Exception:
-                    pass
+        fed_session.wake_all()
         return
     if event == "contact.update":
         fed.invalidate_keys()
@@ -4079,13 +4107,7 @@ def _ws_event(event, data):
                           name="fed-auto-pull").start()
         return
     if rtype in (fed_session.T_EVENT, fed_session.T_CLIENT_TOOL_CALL):
-        with _OUTBOUND_LOCK:
-            origs = list(_OUTBOUND_ORIGINATORS.values())
-        for o in origs:
-            try:
-                o.wake()
-            except Exception:
-                pass
+        fed_session.wake_all()
         return
     if rtype not in (fed_session.T_TURN, fed_session.T_STOP):
         return
