@@ -146,7 +146,13 @@ class SessionOriginator:
         self.peer = peer_handle
         self.device = (device or "").strip()
         self.tab = (tab or "").strip()
-        self.on_event = on_event or (lambda ev: None)
+        _emit = on_event or (lambda ev: None)
+        _emit_lock = threading.RLock()
+
+        def _locked(ev):
+            with _emit_lock:
+                return _emit(ev)
+        self.on_event = _locked
         self.poll_interval = poll_interval or self.RESCUE_POLL_S
         self.overall_timeout = overall_timeout
         self.session_id = uuid.uuid4().hex[:12]
@@ -156,6 +162,11 @@ class SessionOriginator:
         self._done = threading.Event()
         self._opened = False
         self._parked = queue.Queue()
+        self._live_q = queue.Queue()
+        self._rx_lock = threading.Lock()
+        self._seen = set()
+        self._order = {}
+        self._peer_pub = None
 
     def is_alive(self):
         return not self._done.is_set() and not self._stop.is_set()
@@ -164,7 +175,8 @@ class SessionOriginator:
         store, server_url, token, my_priv, my_pub = _session_ctx()
         peer_pub = _peer_pubkey(server_url, token, self.peer)
         turn_payload = {"message": message, "max_iterations": max_iterations,
-                        "origin_pub": my_pub}
+                        "origin_pub": my_pub,
+                        "live": fed.ws_live_ok()}
         if self.tab:
             turn_payload["tab"] = self.tab
         _send(server_url, token, my_priv, self.peer, peer_pub, T_TURN,
@@ -182,6 +194,7 @@ class SessionOriginator:
         try:
             store, server_url, token, my_priv, my_pub = _session_ctx()
             peer_pub = _peer_pubkey(server_url, token, self.peer)
+            send_live_stop(self.peer, peer_pub, my_priv, self.session_id)
             _send(server_url, token, my_priv, self.peer, peer_pub, T_STOP,
                   {"reason": "user_stop"}, self.session_id)
         except Exception:
@@ -191,8 +204,11 @@ class SessionOriginator:
               should_stop=None):
         store, server_url, token, my_priv, my_pub = _session_ctx()
         peer_pub = _peer_pubkey(server_url, token, self.peer)
+        self._peer_pub = peer_pub
         with _LIVE_LOCK:
             _LIVE[self.session_id] = self
+        threading.Thread(target=self._pump, args=(my_priv,), daemon=True,
+                         name=f"session-live-{self.session_id}").start()
         try:
             if should_stop is not None:
                 threading.Thread(target=self._watch_stop, args=(should_stop,),
@@ -280,8 +296,11 @@ class SessionOriginator:
                     self._handle_client_tool_call(
                         ev, server_url, token, my_priv, peer_pub)
                     continue
-                self.on_event(ev)
+                if isinstance(ev, dict):
+                    ev.setdefault("via", "mailbox")
+                self._deliver(ev)
                 if ev.get("event") == "session_closed":
+                    self._flush_all()
                     self._done.set()
                     return ev
                 if ev.get("event") in TERMINAL_EVENTS:
@@ -289,16 +308,78 @@ class SessionOriginator:
                     got_terminal = True
                     if not persistent:
                         break
+            if got_terminal:
+                self._flush_all()
             if got_terminal and not persistent:
                 self._done.set()
                 return terminal
             self._wait_next()
 
+        self._flush_all()
         if self._stop.is_set():
             terminal = {"event": "cancelled", "iterations": 0}
             self.on_event(terminal)
         self._done.set()
         return terminal
+
+    def _pump(self, my_priv):
+        while not self._done.is_set() and not self._stop.is_set():
+            try:
+                d = self._live_q.get(timeout=0.25)
+            except queue.Empty:
+                d = None
+            if d is not None:
+                try:
+                    env = crypto.unbox(my_priv, self._peer_pub, d.get("box", ""))
+                except Exception:
+                    env = None
+                if (env and env.get("type") == T_EVENT
+                        and (env.get("meta") or {}).get("session_id") == self.session_id
+                        and isinstance(env.get("payload"), dict)):
+                    ev = env["payload"]
+                    ev.setdefault("t_recv", time.time())
+                    ev["via"] = "live"
+                    self._deliver(ev)
+            self._expire_gaps()
+
+    def _deliver(self, ev):
+        lt, seq = (ev.get("lt"), ev.get("seq")) if isinstance(ev, dict) else (None, None)
+        with self._rx_lock:
+            if not lt or not isinstance(seq, int):
+                self.on_event(ev)
+                return True
+            if (lt, seq) in self._seen:
+                return False
+            self._seen.add((lt, seq))
+            st = self._order.setdefault(lt, {"next": 1, "held": {}, "since": None})
+            if seq < st["next"]:
+                self.on_event(ev)
+                return True
+            st["held"][seq] = ev
+            self._release(st)
+            return True
+
+    def _release(self, st):
+        while st["next"] in st["held"]:
+            self.on_event(st["held"].pop(st["next"]))
+            st["next"] += 1
+        st["since"] = (st["since"] or time.monotonic()) if st["held"] else None
+
+    def _expire_gaps(self):
+        now = time.monotonic()
+        with self._rx_lock:
+            for st in self._order.values():
+                if st["held"] and st["since"] and now - st["since"] > LIVE_GAP_S:
+                    st["next"] = min(st["held"])
+                    st["since"] = None
+                    self._release(st)
+
+    def _flush_all(self):
+        with self._rx_lock:
+            for st in self._order.values():
+                while st["held"]:
+                    st["next"] = min(st["held"])
+                    self._release(st)
 
     def _handle_client_tool_call(self, ev, server_url, token, my_priv, peer_pub):
         call_id = ev.get("call_id")
@@ -367,6 +448,116 @@ class EventOutbox:
             self.slowest_s = max(self.slowest_s, time.time() - t0)
 
 
+
+EPHEMERAL_EVENTS = frozenset(("iteration", "llm_call", "llm_done", "tokens",
+                              "tool_progress", "tick", "prep"))
+
+LIVE_GAP_S = 1.5
+
+_LIVE_REFUSED = {}
+_LIVE_REFUSED_S = 300
+
+
+def live_refused(data):
+    to = str((data or {}).get("to") or "").lower()
+    if to and (data or {}).get("error") != "live_throttled":
+        _LIVE_REFUSED[to] = time.monotonic() + _LIVE_REFUSED_S
+
+
+class LiveTx:
+
+    def __init__(self, my_priv, peer, peer_pub, session_id, peer_has_live):
+        self.my_priv = my_priv
+        self.peer = peer
+        self.peer_pub = peer_pub
+        self.session_id = session_id
+        self.enabled = bool(peer_has_live)
+        self.lt = uuid.uuid4().hex[:10]
+        self.seq = 0
+        self.live = 0
+        self.skipped = 0
+        self._lock = threading.Lock()
+
+    def stamp(self, ev):
+        with self._lock:
+            self.seq += 1
+            return dict(ev, lt=self.lt, seq=self.seq)
+
+    def send(self, ev):
+        if not self.enabled:
+            return False
+        if _LIVE_REFUSED.get(self.peer.lower(), 0) > time.monotonic():
+            return False
+        limit = fed.ws_live_max()
+        if not limit:
+            return False
+        try:
+            env = crypto.make_envelope(T_EVENT, ev,
+                                       meta={"session_id": self.session_id})
+            blob = crypto.box_for(self.my_priv, self.peer_pub, env)
+        except Exception:
+            return False
+        data = {"k": T_EVENT, "sid": self.session_id, "box": blob}
+        if len(blob) + 120 > limit:
+            return False
+        if fed.ws_live(self.peer, data):
+            self.live += 1
+            return True
+        return False
+
+    def route(self, ev, outbox):
+        went = self.send(ev)
+        if went and ev.get("event") in EPHEMERAL_EVENTS:
+            self.skipped += 1
+            return
+        outbox.put(ev)
+
+
+def send_live_stop(peer, peer_pub, my_priv, session_id):
+    if not fed.ws_live_ok():
+        return False
+    try:
+        env = crypto.make_envelope(T_STOP, {"reason": "user_stop"},
+                                   meta={"session_id": session_id})
+        blob = crypto.box_for(my_priv, peer_pub, env)
+    except Exception:
+        return False
+    return fed.ws_live(peer, {"k": T_STOP, "sid": session_id, "box": blob})
+
+
+def on_live(data):
+    data = data or {}
+    sender = str(data.get("from") or "")
+    d = data.get("data") or {}
+    if not isinstance(d, dict):
+        return
+    kind, sid = d.get("k"), d.get("sid")
+    if kind == T_EVENT:
+        with _LIVE_LOCK:
+            owner = _LIVE.get(sid)
+        if owner is not None and owner.peer.lower() == sender.lower():
+            owner._live_q.put(d)
+            owner.wake()
+    elif kind == T_STOP:
+        with _INBOUND_LOCK:
+            sess = _INBOUND_SESSIONS.get(sender)
+        if not sess or sess.get("session_id") != sid:
+            return
+        try:
+            store, _url, _tok, my_priv, _pub = _session_ctx()
+            env = crypto.unbox(my_priv, sess["sender_pub"], d.get("box", ""))
+        except Exception:
+            return
+        if env.get("type") != T_STOP or (env.get("meta") or {}).get("session_id") != sid:
+            return
+        with _CANCELS_LOCK:
+            ev = _CANCELS.get(sid)
+        if ev is not None:
+            print(f"[SESSION-IN] stop by the live lane · session={sid}",
+                  file=sys.stderr)
+            ev.set()
+
+
 def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
     store, server_url, token, my_priv, my_pub = _session_ctx()
     session_id = (env.get("meta") or {}).get("session_id") or uuid.uuid4().hex[:12]
@@ -426,12 +617,14 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
     cancel_flag = threading.Event()
     _register_cancel(session_id, cancel_flag)
     _new_session = not has_inbound_session(sender)
-    _register_inbound_session(sender, session_id, sender_pub)
+    _peer_live = bool((payload or {}).get("live"))
+    _register_inbound_session(sender, session_id, sender_pub, live=_peer_live)
 
     _tab = str((payload or {}).get("tab") or "").strip()
 
     outbox = EventOutbox(lambda ev: _send(server_url, token, my_priv, sender,
                                           sender_pub, T_EVENT, ev, session_id))
+    live = LiveTx(my_priv, sender, sender_pub, session_id, _peer_live)
 
     def on_event(ev):
         if local_sink:
@@ -439,7 +632,7 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
                 local_sink(dict(ev, tab=_tab) if _tab else ev)
             except Exception:
                 pass
-        outbox.put(dict(ev, t_exec=time.time()))
+        live.route(live.stamp(dict(ev, t_exec=time.time())), outbox)
 
     if local_sink:
         try:
@@ -512,17 +705,25 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
             print(f"[SESSION-OUT] outbox did not drain in 60s "
                   f"(session {session_id})", file=sys.stderr)
         outbox.report(session_id)
+        _report_live(live)
     return {"ok": True, "session_id": session_id, "result": result}
+
+
+def _report_live(live):
+    if live.live:
+        print(f"[SESSION-OUT] live lane: {live.live} of {live.seq} event(s), "
+              f"{live.skipped} of them only live (session {live.session_id})",
+              file=sys.stderr)
 
 
 _INBOUND_SESSIONS = {}
 _INBOUND_LOCK = threading.Lock()
 
 
-def _register_inbound_session(peer, session_id, sender_pub):
+def _register_inbound_session(peer, session_id, sender_pub, live=False):
     with _INBOUND_LOCK:
         _INBOUND_SESSIONS[peer] = {"session_id": session_id,
-                                   "sender_pub": sender_pub}
+                                   "sender_pub": sender_pub, "live": live}
 
 
 def _unregister_inbound_session(peer):
@@ -571,6 +772,7 @@ def inject_local_turn(peer, message, local_sink=None):
 
     outbox = EventOutbox(lambda ev: _send(server_url, token, my_priv, peer,
                                           sender_pub, T_EVENT, ev, session_id))
+    live = LiveTx(my_priv, peer, sender_pub, session_id, sess.get("live"))
 
     def on_event(ev):
         if local_sink:
@@ -578,7 +780,7 @@ def inject_local_turn(peer, message, local_sink=None):
                 local_sink(ev)
             except Exception:
                 pass
-        outbox.put(dict(ev, t_exec=time.time()))
+        live.route(live.stamp(dict(ev, t_exec=time.time())), outbox)
 
     try:
         _send(server_url, token, my_priv, peer, sender_pub, T_EVENT,
@@ -648,6 +850,7 @@ def inject_local_turn(peer, message, local_sink=None):
             print(f"[SESSION-OUT] outbox did not drain in 60s "
                   f"(session {session_id})", file=sys.stderr)
         outbox.report(session_id)
+        _report_live(live)
     return {"ok": True, "session_id": session_id, "result": result}
 
 

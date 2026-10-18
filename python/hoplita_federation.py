@@ -76,10 +76,19 @@ def _api(server_url):
     return server_url.rstrip("/") + "/api/fed"
 
 
-def _post(server_url, path, payload, token=None, timeout=15):
-    headers = {"Content-Type": "application/json"}
+PROTO = 2
+CAPS = ("live",)
+
+
+def _proto_headers(token=None):
+    headers = {"X-Hoplita-Proto": str(PROTO)}
     if token:
         headers["Authorization"] = f"Token {token}"
+    return headers
+
+
+def _post(server_url, path, payload, token=None, timeout=15):
+    headers = dict(_proto_headers(token), **{"Content-Type": "application/json"})
     try:
         r = requests.post(f"{_api(server_url)}/{path}", json=payload,
                           headers=headers, timeout=timeout)
@@ -92,9 +101,7 @@ def _post(server_url, path, payload, token=None, timeout=15):
 
 
 def _get(server_url, path, token=None, timeout=15):
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Token {token}"
+    headers = _proto_headers(token)
     try:
         r = requests.get(f"{_api(server_url)}/{path}", headers=headers,
                          timeout=timeout)
@@ -172,13 +179,14 @@ class FedWS:
         self.authenticated = False
         self.state = {"phase": "idle", "error": "", "since": 0.0}
         self._said = ""
+        self.server = {}
 
     def _set_state(self, phase, error=""):
         import sys as _s
         self.state = {"phase": phase, "error": str(error or ""),
                       "since": time.time()}
         key = f"{phase}|{error}"
-        if phase in ("no_lib", "auth_failed", "down") and key != self._said:
+        if phase in ("no_lib", "auth_failed", "down", "too_old") and key != self._said:
             self._said = key
             print(f"[FED-WS] socket {phase}"
                   + (f": {error}" if error else "")
@@ -220,6 +228,33 @@ class FedWS:
     def is_up(self):
         return self.authenticated and self._ws is not None
 
+    def live_ok(self):
+        return self.is_up() and "live" in (self.server.get("caps") or [])
+
+    def live_max(self):
+        try:
+            return int(self.server.get("live_max_bytes") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def live(self, to, data):
+        if not self.live_ok():
+            return False
+        msg = json.dumps({"op": "live", "params": {"to": to, "data": data}},
+                         separators=(",", ":"))
+        limit = self.live_max()
+        if limit and len(msg) > limit + 200:
+            return False
+        with self._lock:
+            ws = self._ws
+        if ws is None:
+            return False
+        try:
+            ws.send(msg)
+            return True
+        except Exception:
+            return False
+
     def _run(self):
         if websocket is None:
             self._set_state("no_lib",
@@ -238,11 +273,16 @@ class FedWS:
                     self._ws = ws
                 rid = uuid.uuid4().hex
                 ws.send(json.dumps({"op": "auth", "token": self._token,
-                                    "req_id": rid}))
+                                    "req_id": rid, "proto": PROTO,
+                                    "caps": list(CAPS)}))
                 first = json.loads(ws.recv())
                 if not first.get("ok"):
-                    self._set_state("auth_failed",
-                                    str(first.get("error") or first)[:200])
+                    if first.get("error") == "client_too_old":
+                        self._set_state("too_old", str(first.get("message")
+                                                       or first)[:300])
+                    else:
+                        self._set_state("auth_failed",
+                                        str(first.get("error") or first)[:200])
                     self.authenticated = False
                     try:
                         ws.close()
@@ -252,6 +292,10 @@ class FedWS:
                         self._ws = None
                     time.sleep(_jittered(backoff)); backoff = min(backoff * 2, 30)
                     continue
+                _hello = first.get("data") or {}
+                self.server = {k: _hello[k] for k in
+                               ("proto", "min_proto", "caps", "live_max_bytes")
+                               if k in _hello}
                 self.authenticated = True
                 self._set_state("up")
                 up_at = time.monotonic()
@@ -360,11 +404,29 @@ def ws_stop():
 def ws_state():
     s = dict(_WS.state)
     s["up"] = _WS.is_up()
+    s["protocol"] = PROTO
+    s["server"] = dict(_WS.server)
     return s
 
 
 def ws_is_up():
     return _WS.is_up()
+
+
+def ws_live_ok():
+    return _WS.live_ok()
+
+
+def ws_live_max():
+    return _WS.live_max() if _WS.live_ok() else 0
+
+
+def ws_live(to, data):
+    return _WS.live(to, data)
+
+
+def ws_server_info():
+    return dict(_WS.server)
 
 
 def _op(server_url, token, op, params, rest_fn, timeout=15):

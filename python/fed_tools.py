@@ -1424,7 +1424,11 @@ def _ws_state_block():
         s = fed.ws_state()
     except Exception:
         return {"up": False, "phase": "unknown"}
-    if not s.get("up") and s.get("phase") not in ("idle",):
+    if s.get("phase") == "too_old":
+        s["consequence"] = ("the server no longer serves this version of "
+                            "HOPLITA: nothing federated works until it is "
+                            "updated (install.py --update)")
+    elif not s.get("up") and s.get("phase") not in ("idle",):
         s["consequence"] = ("your contacts see YOU offline and pushes do not "
                             "arrive; everything else works over REST")
     return s
@@ -4057,6 +4061,12 @@ def _serialized_incoming_turn(env, get_trust, approver, sink):
 
 def _ws_event(event, data):
     import fed_session
+    if event == "live":
+        fed_session.on_live(data or {})
+        return
+    if event == "live.refused":
+        fed_session.live_refused(data or {})
+        return
     if event == "notice":
         _push_wake("notice", data or {})
         return

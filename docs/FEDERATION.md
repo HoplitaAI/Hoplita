@@ -399,6 +399,13 @@ up» (`fed_ask_agent`).
 3. Attachments do not travel.
 4. Press ✕ on the banner to end the session.
 
+**How fast it shows.** What their agent is doing appears on your tab as it
+happens: each step goes from their machine to yours through the server without
+being stored. The reply, a tool their agent asks your machine to run, and a
+stop also go through the server's mailbox, so they arrive even if the
+connection blinks. With a contact or a server on an older HOPLITA, everything
+goes through the mailbox, as before, and the steps show a little later.
+
 **On the receiving side**, their **Remote sessions** permission for you
 decides:
 
@@ -642,6 +649,7 @@ it → **🗑 Revoke child**. Or from the chat: «revoke my child kitchen-pc»
 | *Verification failed: Wrong PIN* / *PIN expired* | Typo, or more than 15 minutes have passed | Ask the operator for a new PIN. Do not register again |
 | *Could not add contact: Handle not found* | Wrong handle, or the contact is on another server | Type the bare handle, on the same server |
 | *⚠ The public key for 'bob' does NOT match…* — BLOCKED | The key the server returns is not the one you signed | Compare fingerprints with bob over another channel (section 4). If bob really reset their identity, remove bob and add the contact again |
+| *This server speaks protocol … and your HOPLITA speaks … Update HOPLITA (install.py --update)…* | The server no longer serves your version of HOPLITA | Update: `python3 install.py --update` ([INSTALL.md](INSTALL.md)) |
 | *Your live socket is … — contacts see YOU offline…* | The live connection is down; everything else uses REST | Check that a proxy or firewall allows WebSocket to the server, and that `websocket-client` is installed in HOPLITA's venv |
 | *📴 Sync: can't reach the server (offline)…* | No network, or the server is down | Nothing is lost. Sync runs again later |
 | *🔑 Sync: couldn't decrypt the server snapshot…* | This machine has a different identity from the one that pushed | Use the same identity file on both machines (step 2) |
