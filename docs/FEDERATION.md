@@ -643,6 +643,7 @@ it → **🗑 Revoke child**. Or from the chat: «revoke my child kitchen-pc»
 |---|---|---|
 | *No federated identity. Register from the chat…* (Contacts header) or *ℹ️ You're not part of a federation (local-only)…* (Pull/Push) | This machine has no identity | Register (step 2), or copy your identity file (step 2, second machine) |
 | *Registration failed: You need an invitation code…* / *…not accepting new accounts.* | The server is invite-only, or closed | Get a code from the server's operator, or use another server |
+| *Registration failed: That invitation code is used up / expired / withdrawn…* | The code exists but no longer admits anyone: its uses are spent, its date passed, or the operator withdrew it | Ask whoever gave it to you for a new one |
 | *Registration failed: That handle already exists* | The handle is taken | Pick another handle |
 | *Login failed: … verif…* with a `fed_verify` next step | The email was never verified | Verify with the PIN (step 2.4) |
 | *This server has no account for this handle…* | The account was deleted on the server, or you are on the wrong server | Leave with the local-only option (step 2, *Leave the federation*), then register again |
