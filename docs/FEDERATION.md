@@ -409,6 +409,12 @@ decides:
 - no: the request is declined. The agent treats a decline as final and does
   not retry.
 
+**Stopping it.** **Stop** on your side ends the turn within seconds, also while
+it waits on their agent, and also when the work is a sub-agent of a plan that
+you sent to a contact. The stop crosses to their machine. A request still
+waiting for their approval is withdrawn: their *Incoming session request*
+dialog closes by itself, and nothing runs.
+
 ### Tie a tab to one of your machines (`/pin`)
 
 This works between machines that share your identity (step 2).
@@ -503,18 +509,16 @@ only the MCP. No one uses the GUI there.
 **On the child machine: start the MCP and enroll.**
 
 1. Start the MCP with a vault password for the child. This is the child's own
-   vault, not yours. For an unattended start, pass the password in the
-   environment:
+   vault, not yours. Started by hand, the MCP asks for it in the terminal:
 
    ```bash
    cd ~/hoplita           # the install folder
-   HOPLITA_VAULT_PASSWORD='<child vault password>' venv/bin/python hoplita-mcp.py
+   venv/bin/python hoplita-mcp.py
    ```
 
-   On Windows the interpreter is `venv\Scripts\python.exe`.
-
-   Without that variable, the MCP asks in the terminal. With no terminal, it
-   opens a password dialog, which needs a display.
+   On Windows the interpreter is `venv\Scripts\python.exe`. With no terminal,
+   the MCP opens a password dialog, which needs a display. For a start with
+   no one at the keyboard, see *Run it as a service* below.
 2. With the MCP running, enroll:
 
    ```bash
@@ -528,8 +532,67 @@ only the MCP. No one uses the GUI there.
 3. Keep the MCP running. The child picks up its new identity without a
    restart, and restarting it is harmless.
 
-HOPLITA does not install a service for this. Run the MCP under your own
-service manager or a terminal multiplexer, with `HOPLITA_VAULT_PASSWORD` set.
+**Run it as a service.** HOPLITA does not install one. An unattended MCP takes
+its vault password from the environment variable `HOPLITA_VAULT_PASSWORD`.
+Where that password is kept matters, because the child's agent runs commands
+as the user the MCP runs as:
+
+- At start the MCP takes the variable **out of its environment**, so no
+  command it runs inherits it. On Linux it also clears it from the start-up
+  copy that `/proc/<pid>/environ` shows. On macOS and Windows that start-up
+  copy is not cleared, and a process of the same user may still read it there.
+- A file the MCP's user can read can be read by the agent's commands too. Keep
+  the password in a file **only root can read**, and let the service manager
+  hand it over.
+- Do not type it on a command line (`HOPLITA_VAULT_PASSWORD=… venv/bin/python …`):
+  it stays in the shell's history.
+
+With systemd (Linux), as root:
+
+1. The password, readable only by root:
+
+   ```bash
+   install -d -m 700 /etc/hoplita
+   install -m 600 /dev/null /etc/hoplita/child.env
+   IFS= read -rsp 'Child vault password: ' P && printf "HOPLITA_VAULT_PASSWORD='%s'\n" "$P" > /etc/hoplita/child.env; unset P
+   ```
+
+   `read -s` asks without echoing it, so the password never reaches the
+   shell's history. The single quotes keep backslashes and leading or trailing
+   spaces as typed: without them systemd drops them. A password for this file
+   cannot contain a single quote (`'`).
+
+2. The unit, `/etc/systemd/system/hoplita-child.service`. Replace `<user>` with
+   the user HOPLITA is installed for; paths must be absolute:
+
+   ```ini
+   [Unit]
+   Description=HOPLITA child node
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   User=<user>
+   WorkingDirectory=/home/<user>/hoplita
+   EnvironmentFile=/etc/hoplita/child.env
+   ExecStart=/home/<user>/hoplita/venv/bin/python hoplita-mcp.py
+   Restart=on-failure
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+3. Start it, now and at every boot, and follow its output:
+
+   ```bash
+   systemctl daemon-reload
+   systemctl enable --now hoplita-child
+   journalctl -u hoplita-child -f
+   ```
+
+systemd reads `/etc/hoplita/child.env` as root and passes it to the MCP, which
+runs as `<user>`. Neither the MCP nor the agent's commands can read that file.
+Enroll (step 2 above) while the service is running.
 
 **Back on your machine.** The child appears in **Contacts** as an accepted
 contact with presence. Its trust is `open` both ways, because it is yours. Chat:

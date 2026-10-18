@@ -301,7 +301,7 @@ remote_key = your-key
 | Variable | What it does |
 |---|---|
 | `HOPLITA_HOME` | The install's home: `config.ini`, the encrypted store, `media/`, `whiteboards.db`, `bin/`. |
-| `HOPLITA_VAULT_PASSWORD` | The vault password, for unattended starts. |
+| `HOPLITA_VAULT_PASSWORD` | The vault password, for unattended starts. The MCP takes it out of its environment at start, so the commands it runs do not inherit it. Where to keep it: [FEDERATION.md, *Run it as a service*](FEDERATION.md#7b-a-federated-child-a-headless-node-on-another-machine). |
 | `HOPLITA_DIFFR` | Path to the `diffr` binary for the whiteboard's structural diff. Without it, `<HOPLITA_HOME>/bin/diffr` (what `install.py --diffr` installs), then `diffr` on `PATH`; with none, the whiteboard uses a textual diff. |
 | `HOPLITA_CONFIG` | CLI only: the `config.ini` to read. Without it the CLI looks in the usual places for the platform. |
 | `HOPLITA_LOGFILE` | The MCP also writes its log to this file. The desktop launcher sets it to `hoplita-mcp.log` next to the program. |

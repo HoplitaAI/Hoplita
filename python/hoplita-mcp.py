@@ -13975,9 +13975,30 @@ def lessons_delete(lesson_id: str):
 
 
 
+def _scrub_startup_env(name):
+    if platform.system() != "Linux":
+        return
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None)
+        env = ctypes.POINTER(ctypes.c_void_p).in_dll(libc, "environ")
+        key = (name + "=").encode()
+        i = 0
+        while env[i]:
+            entry = ctypes.string_at(env[i])
+            if entry.startswith(key):
+                ctypes.memset(env[i] + len(key), 0, len(entry) - len(key))
+            i += 1
+    except Exception as e:
+        print(f"[VAULT] could not scrub the start-up environment: {e}", file=sys.stderr)
+
+
 def _get_vault_password():
     from hoplita_i18n import t as _t
     env_pwd = os.environ.get("HOPLITA_VAULT_PASSWORD")
+    if env_pwd:
+        _scrub_startup_env("HOPLITA_VAULT_PASSWORD")
+    os.environ.pop("HOPLITA_VAULT_PASSWORD", None)
     if env_pwd:
         print("🔐 " + _t("mcp.password_from_env"))
         return env_pwd
