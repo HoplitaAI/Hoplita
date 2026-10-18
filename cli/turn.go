@@ -444,6 +444,20 @@ func mcpTurn(cfg Config, messages []Message, verify string) (string, error) {
 			fmt.Println(tr("hands.end", "n", fmt.Sprint(int(num("actions")))))
 		case "hands_consent":
 			answerHandsConsent(cfg, str("ack_id"), str("model"), str("host"))
+		case "config_consent":
+			answerConfigConsent(cfg, ev)
+		case "config_changed":
+			var what []string
+			if raw, ok := ev["changes"].([]interface{}); ok {
+				for _, x := range raw {
+					if c, ok := x.(map[string]interface{}); ok {
+						sct, _ := c["section"].(string)
+						k, _ := c["key"].(string)
+						what = append(what, "["+sct+"] "+k)
+					}
+				}
+			}
+			fmt.Println(tr("selfcfg.changed", "what", strings.Join(what, ", ")))
 		case "plan_ack":
 
 			subs := []map[string]interface{}{}

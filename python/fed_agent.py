@@ -17,7 +17,8 @@ _get_max_tokens = None
 
 TERMINAL_EVENTS = ("reply", "cancelled", "iteration_limit", "error")
 
-NEVER_DELEGATE = ("plan_and_orchestrate", "intent", "call_council")
+NEVER_DELEGATE = ("plan_and_orchestrate", "intent", "call_council",
+                  "edit_my_config")
 HARNESS_TAG = ("<INTERNAL HARNESS MESSAGE — no human wrote this; act on it, "
                "never reply to it>")
 QA_TAG = "<AUTONOMOUS QA REVIEWER, NOT THE USER>"

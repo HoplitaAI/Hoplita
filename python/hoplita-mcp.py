@@ -8812,6 +8812,12 @@ def register_tools():
                                    "fn": lambda a: tool_alert(a.get("title", "🔔"), a.get("message", ""))},
         "get_agentic_config":     {"desc": "View the agent configuration.",
                                    "fn": lambda a: tool_get_agentic_config()},
+        "see_my_config":          {"desc": "Your own configuration: where config.ini is, its sections and keys, and with `section` that section's values — secrets (keys, passwords, tokens) are covered, you see that they are set and how long they are, never what they are. For [MCP_SERVERS] it also says which external servers are connected and how many tools each brought. Look here BEFORE changing anything, and before telling the user where a setting lives.",
+                                   "fn": lambda a: tool_see_my_config(a.get("section"))},
+        "edit_my_config":         {"desc": "Change your own config.ini — one key (section+key+value), or several under `changes` when they belong together (a pool model is [MODELS] <alias> = true plus its [MODEL:<alias>] section: send them in ONE call) — and apply it at once (same hot reload as the Configuration dialog). The person is asked to approve the exact changes first, once per call; on a turn nobody can answer, or one that came from another machine, it refuses. Comments and every other key are kept, a .bak is left beside the file, and a change that would leave the file unreadable is not written. In [MCP_SERVERS] the server you add, change or remove is connected or dropped on the spot, and the answer lists its tools — usable in this same turn. Never write back a covered secret (••••): ask the person for the value. Read the manual's section for a key (read_my_docs) before writing it: do not invent keys.",
+                                   "fn": lambda a: tool_edit_my_config(a.get("section"), a.get("key"), a.get("value"), a.get("delete", False), a.get("changes"))},
+        "read_my_docs":           {"desc": "Your own manual — the one this install shipped with, so it describes the version that is running. No arguments: the outline (files and section titles). `query`: the sections where those words appear, with the matching lines. `section` (+ optional `file`): that one section's full text. Use it to know how a feature works or what a config key does instead of guessing; read one section, not the whole manual.",
+                                   "fn": lambda a: tool_read_my_docs(a.get("query"), a.get("section"), a.get("file"))},
         "screenshot_web":         {"desc": "Capture a webpage as a PDF on disk.",
                                    "fn": lambda a: tool_screenshot_web(a["url"], a.get("headless"), a.get("output_path"))},
         "browse_web":             {"desc": ("EXPENSIVE — drives a real browser, step by step, with a model "
@@ -9299,6 +9305,9 @@ def register_tool_params():
         "disable_current_cron_job":{"properties": {}},
         "alert":                  {"properties": {"title": {"type": "string"}, "message": {"type": "string"}}, "required": ["title", "message"]},
         "get_agentic_config":     {"properties": {}},
+        "see_my_config":          {"properties": {"section": {"type": "string", "description": "One section, e.g. 'MCP_SERVERS'. Omit for the map of every section and its keys."}}, "required": []},
+        "edit_my_config":         {"properties": {"section": {"type": "string", "description": "Section name without brackets, e.g. 'MCP_SERVERS' or 'MODEL:fast'. Created if missing."}, "key": {"type": "string", "description": "The key to set or remove."}, "value": {"type": "string", "description": "The new value (omit with delete=true)."}, "delete": {"type": "boolean", "description": "true removes the key."}, "changes": {"type": "array", "items": {"type": "object", "properties": {"section": {"type": "string"}, "key": {"type": "string"}, "value": {"type": "string"}, "delete": {"type": "boolean"}}, "required": ["section", "key"]}, "description": "Several changes applied together under one approval, in order. Use instead of section/key/value."}}, "required": []},
+        "read_my_docs":           {"properties": {"query": {"type": "string", "description": "Words to look for, e.g. 'MCP_SERVERS stdio'."}, "section": {"type": "string", "description": "A section title to read whole, as the outline or a search gave it."}, "file": {"type": "string", "description": "Narrow to one file, e.g. 'CONFIG.md'."}}, "required": []},
         "screenshot_web":         {"properties": {"url": {"type": "string"}, "headless": {"type": "boolean"}, "output_path": {"type": "string"}}, "required": ["url"]},
         "browse_web":             {"properties": {"task": {"type": "string"}, "url": {"type": "string"}, "headless": {"type": "boolean"}, "max_steps": {"type": "integer"}, "endpoint": {"type": "object", "description": "Which LLM drives the browser when [BROWSER] has no model: {base_url, api_key, model}. Faces attach their tab's pin; sub-agents inherit their own."}}, "required": ["task"]},
         "scrape_url":             {"properties": {"url": {"type": "string"}, "max_chars": {"type": "integer"}, "escalate": {"type": "boolean", "description": "Let it drive a real browser if scraping fails (default true)"}, "depth": {"type": "integer", "description": "0=this page only (default). 1-3=follow links on the SAME domain up to N levels, capped by max_pages"}}, "required": ["url"]},
@@ -9848,24 +9857,30 @@ def _load_external_mcps():
     if not CONFIG.has_section("MCP_SERVERS"):
         return
     for key in CONFIG.options("MCP_SERVERS"):
-        value = CONFIG.get("MCP_SERVERS", key)
-        if not (value.startswith("stdio:") or value.startswith("sse:")):
-            continue
-        api_key = CONFIG.get("MCP_SERVERS", f"{key}_key", fallback="")
-        print(f"[MCP-EXT] Connecting '{key}': {value[:60]}...")
-        tools = None
-        if value.startswith("stdio:"):
-            tools = _connect_stdio_mcp(key, value[6:])
-        elif value.startswith("sse:"):
-            url = value[4:]
-            _ext_mcp_urls[key] = url
-            _ext_mcp_keys[key] = api_key
-            tools = _connect_sse_mcp(key, url, api_key)
+        tools = _connect_external_mcp(key)
         if tools:
             _register_external_tools(key, tools)
-            print(f"[MCP-EXT] ✅ '{key}': {len(tools)} tools")
-        else:
-            print(f"[MCP-EXT] ❌ '{key}': no tools or connection failed")
+
+
+def _connect_external_mcp(key):
+    value = CONFIG.get("MCP_SERVERS", key, fallback="") or ""
+    if not (value.startswith("stdio:") or value.startswith("sse:")):
+        return None
+    api_key = CONFIG.get("MCP_SERVERS", f"{key}_key", fallback="")
+    print(f"[MCP-EXT] Connecting '{key}': {value[:60]}...")
+    tools = None
+    if value.startswith("stdio:"):
+        tools = _connect_stdio_mcp(key, value[6:])
+    elif value.startswith("sse:"):
+        url = value[4:]
+        _ext_mcp_urls[key] = url
+        _ext_mcp_keys[key] = api_key
+        tools = _connect_sse_mcp(key, url, api_key)
+    if tools:
+        print(f"[MCP-EXT] ✅ '{key}': {len(tools)} tools")
+    else:
+        print(f"[MCP-EXT] ❌ '{key}': no tools or connection failed")
+    return tools
 
 
 def _connect_stdio_mcp(name, cmd):
@@ -9949,7 +9964,9 @@ def _connect_sse_mcp(name, url, api_key):
     return None
 
 
-def _register_external_tools(name, tools):
+def _register_external_tools(name, tools, into=None, params_into=None):
+    into = TOOLS if into is None else into
+    params_into = TOOL_PARAMS if params_into is None else params_into
     for tool in tools:
         tool_name = f"{name}.{tool['name']}"
         desc = tool.get("description", tool["name"])
@@ -9960,9 +9977,9 @@ def _register_external_tools(name, tools):
                 return _call_external_tool(sn, tn, args)
             return caller
 
-        TOOLS[tool_name] = {"desc": f"[{name}] {desc}", "fn": make_caller(name, tool["name"])}
-        TOOL_PARAMS[tool_name] = {"properties": schema.get("properties", {}),
-                                   "required": schema.get("required", [])}
+        into[tool_name] = {"desc": f"[{name}] {desc}", "fn": make_caller(name, tool["name"])}
+        params_into[tool_name] = {"properties": schema.get("properties", {}),
+                                  "required": schema.get("required", [])}
 
 
 def _call_external_tool(server_name, tool_name, arguments):
@@ -10154,6 +10171,347 @@ def _shutdown_external_mcps():
 
 import atexit
 atexit.register(_shutdown_external_mcps)
+
+
+import hoplita_selfcfg
+
+_SELFCFG_LOCK = threading.Lock()
+_SELFCFG_REMOTE = {"error": "this turn came from another machine: only the "
+                            "person at this machine may read or change its "
+                            "configuration"}
+
+
+def _selfcfg_ctx():
+    return getattr(_ORCH, "ctx", None)
+
+
+def _selfcfg_docs_hint(section):
+    base = hoplita_base()
+    hit, _o = hoplita_selfcfg.read_section(base, f"[{section}]", "CONFIG.md")
+    if hit:
+        return {"file": hit["file"], "section": hit["section"]}
+    return None
+
+
+def _ext_mcp_status():
+    out = {}
+    if CONFIG is None or not CONFIG.has_section("MCP_SERVERS"):
+        return out
+    for k in CONFIG.options("MCP_SERVERS"):
+        v = CONFIG.get("MCP_SERVERS", k, fallback="") or ""
+        if not v.startswith(("stdio:", "sse:")):
+            continue
+        n = sum(1 for t_ in TOOLS if t_.startswith(k + "."))
+        proc = _ext_mcp_procs.get(k)
+        alive = (proc is not None and proc.poll() is None) or k in _ext_mcp_urls
+        out[k] = {"connected": bool(alive and n), "tools": n}
+    return out
+
+
+def tool_see_my_config(section=None):
+    if getattr(_selfcfg_ctx(), "remote", False):
+        return dict(_SELFCFG_REMOTE)
+    import hoplita_llmcfg
+    path = config_path()
+    cfg, problem = hoplita_llmcfg.read_config(path)
+    if section:
+        real, vals = hoplita_selfcfg.section_values(cfg, section)
+        if real is None:
+            return {"error": f"there is no section [{section}] in {path}",
+                    "sections": cfg.sections(),
+                    "hint": "edit_my_config creates a section when you write "
+                            "its first key"}
+        out = {"path": path, "section": real, "values": vals}
+        if real.upper() == "MCP_SERVERS":
+            out["servers"] = _ext_mcp_status()
+        hint = _selfcfg_docs_hint(real)
+        if hint:
+            out["manual"] = hint
+        if problem:
+            out["problem"] = problem
+        return out
+    base = hoplita_base()
+    out = {"path": path, "install": base,
+           "manual": os.path.join(base, "docs"),
+           "sections": hoplita_selfcfg.overview(cfg),
+           "how": "see_my_config(section=...) for one section's values "
+                  "(secrets covered); read_my_docs to find what a key does; "
+                  "edit_my_config to change one key, with the person's yes."}
+    if problem:
+        out["problem"] = problem
+    return out
+
+
+def tool_read_my_docs(query=None, section=None, file=None):
+    base = hoplita_base()
+    if not hoplita_selfcfg.doc_files(base):
+        return {"error": f"no manual found under {base} (docs/*.md)"}
+    if section:
+        hit, others = hoplita_selfcfg.read_section(base, section, file)
+        if hit is None:
+            near = hoplita_selfcfg.search(base, section, limit=5)
+            return {"error": f"no section titled '{section}'"
+                             + (f" in {file}" if file else ""),
+                    "near": near}
+        if others:
+            hit["also_titled_like_this"] = others
+        return hit
+    if query:
+        hits = hoplita_selfcfg.search(base, query)
+        if not hits:
+            return {"results": [], "note": "nothing in the manual matches; "
+                                           "try other words, or the outline "
+                                           "(no arguments)"}
+        return {"results": hits,
+                "how": "read one with read_my_docs(section=<its title>, "
+                       "file=<its file>)"}
+    return {"outline": hoplita_selfcfg.outline(base, file),
+            "how": "read_my_docs(query=...) to search, or "
+                   "read_my_docs(section=<title>, file=<file>) to read one"}
+
+
+def _selfcfg_gate(ctx, change):
+    refusal = {"error": "changing the configuration needs the person's yes",
+               "change": change,
+               "hint": "tell the user the exact change so they can make it, "
+                       "or ask again from an interactive chat"}
+    if ctx is None or getattr(ctx, "unattended", False) \
+            or getattr(ctx, "ack_mode", "") != "stream":
+        refusal["why"] = "nobody can answer on this turn"
+        return refusal
+    ack_id = uuid.uuid4().hex[:12]
+    waiter = _queue.Queue(maxsize=1)
+    with _PLAN_ACKS_LOCK:
+        _PLAN_ACKS[ack_id] = {"q": waiter, "subtasks": [], "mode": ctx.ack_mode,
+                              "kind": "config"}
+    try:
+        ctx.emit(dict({"event": "config_consent", "ack_id": ack_id,
+                       "turn_id": ctx.turn_id}, **change))
+        wait_s = (CONFIG.getint("CHAT", "plan_ack_timeout",
+                                fallback=_PLAN_ACK_TIMEOUT_S)
+                  if CONFIG else _PLAN_ACK_TIMEOUT_S)
+        deadline = time.time() + wait_s
+        answer = None
+        while time.time() < deadline:
+            if ctx.cancel():
+                refusal["why"] = "the turn was cancelled while asking"
+                return refusal
+            try:
+                answer = waiter.get(timeout=1.0)
+                break
+            except _queue.Empty:
+                continue
+    finally:
+        with _PLAN_ACKS_LOCK:
+            _PLAN_ACKS.pop(ack_id, None)
+    if answer is None:
+        refusal["why"] = "the question timed out"
+        return refusal
+    if (answer.get("decision") or "") == "run":
+        return None
+    refusal["why"] = "the person said no"
+    return refusal
+
+
+def _detach_external_mcp(name):
+    global TOOLS, TOOL_PARAMS
+    proc = _ext_mcp_procs.pop(name, None)
+    if proc is not None:
+        try:
+            proc.stdin.close()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    _ext_mcp_urls.pop(name, None)
+    _ext_mcp_keys.pop(name, None)
+    pre = name + "."
+    gone = [k for k in TOOLS if k.startswith(pre)]
+    if gone:
+        TOOLS = {k: v for k, v in TOOLS.items() if not k.startswith(pre)}
+        TOOL_PARAMS = {k: v for k, v in TOOL_PARAMS.items() if not k.startswith(pre)}
+    return gone
+
+
+def _reattach_external_mcp(name):
+    global TOOLS, TOOL_PARAMS
+    gone = _detach_external_mcp(name)
+    line = (CONFIG.get("MCP_SERVERS", name, fallback="")
+            if CONFIG and CONFIG.has_section("MCP_SERVERS") else "") or ""
+    if not line.startswith(("stdio:", "sse:")):
+        return {"server": name, "connected": False, "removed_tools": len(gone)}
+    tools = _connect_external_mcp(name)
+    if not tools:
+        return {"server": name, "connected": False,
+                "error": "the server did not answer with its tools — the "
+                         "line is saved; check the command or URL (the MCP "
+                         "log says why)"}
+    new_t, new_p = dict(TOOLS), dict(TOOL_PARAMS)
+    _register_external_tools(name, tools, into=new_t, params_into=new_p)
+    TOOL_PARAMS = new_p
+    TOOLS = new_t
+    names = [f"{name}.{t_['name']}" for t_ in tools]
+    return {"server": name, "connected": True,
+            "tools": [{"name": n, "description": (new_t[n]["desc"] or "")[:160]}
+                      for n in names],
+            "how": "they are in the catalogue NOW, in this same turn: "
+                   "load_tools(names=[...]) for their parameters, then "
+                   "use_tool(name=..., arguments={...})"}
+
+
+def tool_edit_my_config(section=None, key=None, value=None, delete=False,
+                        changes=None):
+    import hoplita_llmcfg
+    ctx = _selfcfg_ctx()
+    if getattr(ctx, "remote", False):
+        return dict(_SELFCFG_REMOTE)
+    if isinstance(changes, str):
+        try:
+            changes = json.loads(changes)
+        except Exception:
+            return {"error": "`changes` must be a list of {section, key, value} "
+                             "or {section, key, delete: true}"}
+    if changes is None:
+        changes = [{"section": section, "key": key, "value": value,
+                    "delete": delete}]
+    if not isinstance(changes, list) or not changes:
+        return {"error": "nothing to change: pass section+key+value, or `changes`"}
+    wanted = []
+    for c in changes:
+        if not isinstance(c, dict):
+            return {"error": "each change is an object {section, key, value}"}
+        sect = str(c.get("section") or "").strip().strip("[]").strip()
+        k = str(c.get("key") or "").strip()
+        why = hoplita_selfcfg.bad_name(sect, k)
+        if why:
+            return {"error": f"[{sect}] {k}: {why}"}
+        d = c.get("delete", False)
+        d = bool(d) and str(d).lower() not in ("false", "0", "no")
+        v = c.get("value")
+        if not d:
+            if v is None:
+                return {"error": f"[{sect}] {k}: pass `value`, or delete=true "
+                                 "to remove the key"}
+            v = str(v)
+            if hoplita_selfcfg.looks_masked(v):
+                return {"error": f"[{sect}] {k}: that is the mask you were "
+                                 "shown, not a value: writing it would replace "
+                                 "the real secret. Ask the person for the "
+                                 "value, or leave the key alone."}
+        wanted.append((sect, k, v, d))
+    path = config_path()
+
+    def _plan(text):
+        done = []
+        for sect, k, v, d in wanted:
+            cfg = configparser.ConfigParser(inline_comment_prefixes=(";", "#"),
+                                            strict=False)
+            try:
+                cfg.read_string(text)
+            except configparser.Error as e:
+                return {"error": f"config.ini cannot be read "
+                                 f"({str(e).splitlines()[0]}); fix it in the "
+                                 "Configuration dialog first"}
+            real = next((s for s in cfg.sections() if s.lower() == sect.lower()),
+                        sect)
+            old = (cfg.get(real, k, raw=True)
+                   if cfg.has_section(real) and cfg.has_option(real, k) else None)
+            if d:
+                if old is None:
+                    return {"error": f"[{real}] has no key '{k}' to remove"}
+                text = hoplita_llmcfg.del_key(text, real, k)
+            else:
+                if old == v:
+                    continue
+                text = hoplita_llmcfg.set_value(text, real, k, v)
+            done.append((real, k, old, v, d))
+        bad = hoplita_llmcfg.ini_problem(text)
+        if bad:
+            return {"error": f"the change would leave config.ini unreadable "
+                             f"({bad}); nothing was written"}
+        return done, text
+
+    def _read():
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return fh.read()
+        except FileNotFoundError:
+            return ""
+
+    planned = _plan(_read())
+    if isinstance(planned, dict):
+        return planned
+    done, _new = planned
+    if not done:
+        return {"ok": True, "changed": False,
+                "note": "config.ini already has every one of those values"}
+
+    def _shown(items):
+        return [{"section": s, "key": k,
+                 "old": None if o is None else hoplita_selfcfg.mask_value(k, o),
+                 "new": None if d else hoplita_selfcfg.mask_value(k, v),
+                 "delete": d}
+                for s, k, o, v, d in items]
+
+    shown = _shown(done)
+    runs_program = any(s.upper() == "MCP_SERVERS" and not d
+                       and str(v).startswith("stdio:")
+                       for s, k, o, v, d in done)
+    gate = _selfcfg_gate(ctx, {"changes": shown, "runs_program": runs_program})
+    if gate:
+        return gate
+
+    with _SELFCFG_LOCK:
+        planned = _plan(_read())
+        if isinstance(planned, dict):
+            return planned
+        done, new_text = planned
+        old_cfg = CONFIG
+        try:
+            if os.path.exists(path):
+                shutil.copy(path, path + ".bak")
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(new_text)
+            if os.path.exists(path):
+                shutil.copymode(path, tmp)
+            os.replace(tmp, path)
+        except Exception as e:
+            return {"error": f"could not write {path}: {e}"}
+        reloaded = reload_config_endpoint()
+
+    out = {"ok": True, "changed": True, "path": path,
+           "changes": _shown(done), "backup": path + ".bak"}
+    warnings = [w for w in (reloaded.get("warnings") or [])
+                if "MCP_SERVERS" not in w]
+    if reloaded.get("error"):
+        warnings.append(f"the reload failed: {reloaded['error']}")
+    servers = []
+    for s, k, o, v, d in done:
+        if s.upper() == "MCP_SERVERS":
+            srv = (hoplita_selfcfg.mcp_server_of(CONFIG, k)
+                   or (old_cfg is not None
+                       and hoplita_selfcfg.mcp_server_of(old_cfg, k)) or None)
+            if srv and srv not in servers:
+                servers.append(srv)
+        elif s.upper() == "APP" and k.lower() == "language":
+            warnings.append("the window keeps the language it painted with "
+                            "until the app is restarted")
+    if servers:
+        out["mcp"] = [_reattach_external_mcp(srv) for srv in servers]
+    if warnings:
+        out["warnings"] = warnings
+    try:
+        if ctx is not None:
+            ctx.emit({"event": "config_changed",
+                      "changes": [{"section": s, "key": k} for s, k, *_ in done]})
+    except Exception:
+        pass
+    print(f"[SELFCFG] {len(done)} change(s) written with the person's yes: "
+          + ", ".join(f"[{s}] {k}" for s, k, *_ in done))
+    return out
 
 
 
@@ -10519,7 +10877,7 @@ def _hot_tools_compute(n=None):
 
 
 _FAMILY_BLURB = {
-    "system": "shell, files on disk, PDFs and alerts",
+    "system": "shell, files on disk, PDFs and alerts — and yourself: your own config.ini (read, and change with the person's yes) and your own manual",
     "code": "read/edit/search code in the open project, and git",
     "web": "search and browse the internet",
     "desktop": "the person's screen: windows, elements, clicks, keys, captures",
@@ -11911,8 +12269,9 @@ class OrchestrationCtx:
 
     def __init__(self, emit=None, cancel=None, delegate=None, delegate_names=(),
                  endpoint=None, ack_mode="", unattended=False, turn_id="",
-                 code_project="", blocked=(), local_only=False):
+                 code_project="", blocked=(), local_only=False, remote=False):
         self.emit = emit or (lambda ev: None)
+        self.remote = bool(remote)
         self.local_only = _turn_local_only(local_only, code_project)
         self.blocked = frozenset(str(n) for n in (blocked or ()) if n)
         self.cancel = cancel or (lambda: False)
@@ -12264,7 +12623,7 @@ def _child_run_local(pack, message, terminal=True, event_sink=None):
             endpoint=ctx.endpoint, ack_mode=ctx.ack_mode,
             unattended=ctx.unattended, turn_id=ctx.turn_id,
             code_project=ctx.code_project, blocked=ctx.blocked,
-            local_only=ctx.local_only)
+            local_only=ctx.local_only, remote=getattr(ctx, "remote", False))
     msgs = [{"role": "system", "content": hoplita_children.system_block(pack)},
             {"role": "user", "content": message}]
     given = ""
@@ -14266,7 +14625,7 @@ if __name__ == "__main__":
                 session_system_getter=_build_session_system,
                 session_tools_getter=_session_pack_tools,
                 orchestration_ctx=lambda **kw: _orchestration_ctx(
-                    OrchestrationCtx(**kw)))
+                    OrchestrationCtx(remote=True, **kw)))
             fed_tools.start_session_engine()
             print("[MCP] ✓ Federated sessions active (ask remote agent)")
         except Exception as _e:

@@ -355,7 +355,7 @@ The first engine `scrape_url` tries (also behind `/includeurl`, `/includeurls` a
 ### [MCP_SERVERS] — external MCPs
 
 This is how you add an external MCP server: one entry `name = transport:command_or_url`
-(also editable in the config dialog's **MCPs** tab). Changes here need an MCP restart.
+(also editable in the config dialog's **MCPs** tab). Changes made by hand or in the dialog need an MCP restart; one the assistant makes for you (`edit_my_config`, after you approve it) connects the server on the spot.
 Extra parameters: `name_key` and `name_whatever`, passed to a stdio server as environment variables.
 
 ```ini
@@ -1416,6 +1416,11 @@ generic answer is not good enough. HOPLITA ships none; you write your own.
 
 Add one line per server to `[MCP_SERVERS]` in `config.ini` and restart the MCP;
 its tools are registered next to HOPLITA's own and show up in the firewall.
+
+Or ask: «I installed this MCP server, it starts with `<command>`; set it up». The
+assistant reads its own manual (`read_my_docs`), shows you the exact line it wants to
+add and, once you allow it, writes it (`edit_my_config`) and connects the server right
+away — its tools are usable in that same turn, no restart.
 
 ```ini
 [MCP_SERVERS]

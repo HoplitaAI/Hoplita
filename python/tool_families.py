@@ -11,6 +11,8 @@ _EXACT = {
     "see_image": "system",
     "list_dir": "system", "edit_file": "system", "generate_pdf": "system",
     "load_tools": "system", "get_agentic_config": "system", "alert": "system",
+    "see_my_config": "system", "edit_my_config": "system",
+    "read_my_docs": "system",
     "add_note": "notes", "read_note": "notes", "update_note": "notes",
     "delete_note": "notes", "search_notes": "notes",
     "list_categories": "notes", "use_skill": "notes", "skill_folder": "notes",

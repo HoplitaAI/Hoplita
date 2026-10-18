@@ -4,7 +4,8 @@
 
 The file lives in the install's home (see `HOPLITA_HOME` below). Start from `config.ini.example`.
 
-- **Hot reload**: saving in the editor (or `POST /reload-config`) re-reads the **whole** file. Exceptions that need an MCP restart: **`[MCP_SERVERS]`** and the vault password. And **`[APP] language`** needs a GUI restart: text already painted is not re-translated live.
+- **Hot reload**: saving in the editor (or `POST /reload-config`) re-reads the **whole** file. Exceptions that need an MCP restart: **`[MCP_SERVERS]`** (unless the assistant changed it, see below) and the vault password.
+- **The assistant can read and change it too**: `see_my_config` shows the file with every secret covered, `read_my_docs` reads this manual by section, and `edit_my_config` writes one or several keys after you approve the exact change in a dialog (in the CLI, a y/N question). «I installed the X MCP server, set it up» or «add this model, keep it off councils» is enough. And **`[APP] language`** needs a GUI restart: text already painted is not re-translated live.
 - **One rule for every endpoint** (`hoplita_llmcfg.resolve_endpoint`, read alike by the MCP, the GUI, the config editor and — for the base — the Go CLI):
   - **The base** is the pool model elected with `[MODELS] base = <alias>`; its empty fields fill from the literal `[API]`. With nothing elected, `[API]` alone is the base.
   - **A role** (`[BROWSER] model`, `[MEMORY] model`, `[CHAT] planner_model`…) that names a pool **alias** runs on that whole pool model (its own `base_url`/`api_key` are then ignored). A raw model id still works: that id, on the base's server.
@@ -294,7 +295,7 @@ remote = sse:https://mcp.example.com/sse
 remote_key = your-key
 ```
 
-**Requires an MCP restart** (the subprocesses are already up). The dialog's «MCPs» tab edits this section.
+**Requires an MCP restart** (the subprocesses are already up) when it is edited by hand or in the dialog — the dialog's «MCPs» tab edits this section. A change the assistant makes with `edit_my_config` (after you approve it) connects or drops that server on the spot, with no restart.
 
 ## Environment variables
 

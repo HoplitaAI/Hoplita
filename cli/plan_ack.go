@@ -145,6 +145,52 @@ func answerHandsConsent(cfg Config, ackID, model, host string) {
 	}
 }
 
+func answerConfigConsent(cfg Config, ev map[string]interface{}) {
+	var lines []string
+	if raw, ok := ev["changes"].([]interface{}); ok {
+		for _, x := range raw {
+			c, ok := x.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			s := func(k string) string {
+				if v, ok := c[k].(string); ok {
+					return v
+				}
+				return ""
+			}
+			where := "[" + s("section") + "] " + s("key")
+			if del, _ := c["delete"].(bool); del {
+				lines = append(lines, "− "+where+"  ("+s("old")+")")
+			} else if c["old"] == nil {
+				lines = append(lines, "+ "+where+" = "+s("new"))
+			} else {
+				lines = append(lines, "~ "+where+": "+s("old")+" → "+s("new"))
+			}
+		}
+	}
+
+	body := tr("selfcfg.consent_head") + "\n\n" + strings.Join(lines, "\n")
+	if prog, _ := ev["runs_program"].(bool); prog {
+		body += "\n\n" + tr("selfcfg.consent_program")
+	}
+	body += "\n\n" + tr("selfcfg.consent_ask")
+	fmt.Fprintf(os.Stderr, "\n⚙ %s\n%s\n", tr("selfcfg.consent_title"), body)
+	fmt.Fprintf(os.Stderr, "▶ %s / ✕ %s  [y/N] ", tr("selfcfg.consent_yes"),
+		tr("selfcfg.consent_no"))
+	decision := "cancel"
+	if isYes(readLineUnbuffered()) {
+		decision = "run"
+	}
+	ackID, _ := ev["ack_id"].(string)
+	b, status, err := postJSON(httpClient(15), cfg.MCPURL+"/agent/plan_ack",
+		map[string]interface{}{"ack_id": ackID, "decision": decision}, nil)
+	if err != nil || status != 200 {
+		fmt.Fprintf(os.Stderr, "⚠ could not answer the consent question: %v %s\n",
+			err, truncate(string(b), 120))
+	}
+}
+
 func readLineUnbuffered() string {
 	var out []byte
 	buf := make([]byte, 1)

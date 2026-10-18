@@ -654,6 +654,7 @@ class WorkerSignals(QObject):
     council_event = pyqtSignal(str, dict)
     council_ack = pyqtSignal(object)
     hands_event = pyqtSignal(str, dict)
+    config_event = pyqtSignal(str, dict)
 
 
 
@@ -1387,6 +1388,19 @@ def _pictures_to_links(html):
     return _IMG_TAG_RE.sub(_one, html)
 
 
+def config_change_lines(changes):
+    out = []
+    for c in changes:
+        where = f"[{c.get('section', '')}] {c.get('key', '')}"
+        if c.get("delete"):
+            out.append(f"− {where}  ({c.get('old') or ''})")
+        elif c.get("old") is None:
+            out.append(f"+ {where} = {c.get('new') or ''}")
+        else:
+            out.append(f"~ {where}: {c.get('old')} → {c.get('new') or ''}")
+    return "\n".join(out)
+
+
 class ChatAssistantWindow(QMainWindow):
     _bg_done = pyqtSignal(object, object)
 
@@ -1445,6 +1459,7 @@ class ChatAssistantWindow(QMainWindow):
         self.signals.council_event.connect(self._on_council_event)
         self.signals.council_ack.connect(self._on_council_ack)
         self.signals.hands_event.connect(self._on_hands_event)
+        self.signals.config_event.connect(self._on_config_event)
 
         self.rag_manager = RAGDocumentStore(self.config)
 
@@ -3753,6 +3768,29 @@ class ChatAssistantWindow(QMainWindow):
         box.exec()
         decision = "run" if box.clickedButton() is yes else "cancel"
         self._hands_answer_consent(ack_id, decision)
+
+    def _on_config_event(self, tab, ev):
+        et = ev.get("event")
+        if et == "config_changed":
+            self.reload_config(push_to_mcp=False)
+            return
+        if et != "config_consent":
+            return
+        body = (t("selfcfg.consent_head") + "\n\n"
+                + config_change_lines(ev.get("changes") or []))
+        if ev.get("runs_program"):
+            body += "\n\n" + t("selfcfg.consent_program")
+        body += "\n\n" + t("selfcfg.consent_ask")
+        box = QMessageBox(self)
+        box.setWindowTitle(t("selfcfg.consent_title"))
+        box.setText(body)
+        box.setIcon(QMessageBox.Icon.Question)
+        yes = box.addButton(t("selfcfg.consent_yes"), QMessageBox.ButtonRole.AcceptRole)
+        no = box.addButton(t("selfcfg.consent_no"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(no)
+        box.exec()
+        self._hands_answer_consent(ev.get("ack_id", ""),
+                                   "run" if box.clickedButton() is yes else "cancel")
 
     def _hands_answer_consent(self, ack_id, decision):
         def _go():
@@ -16308,6 +16346,12 @@ enabled = true
                             self._office_view_to_canvas(ev.get("args") or {})
                         if ev.get("key") == "image.generated":
                             self._canvas_show_image(ev.get("args") or {})
+                    elif et in ("config_consent", "config_changed"):
+                        self.signals.config_event.emit(tab, ev)
+                        if et == "config_changed":
+                            self.thread_msg(t("selfcfg.changed", what=", ".join(
+                                f"[{c.get('section', '')}] {c.get('key', '')}"
+                                for c in (ev.get("changes") or []))), "system")
                     elif et in ("hands_begin", "hands_action", "hands_end",
                                 "hands_consent"):
                         self.signals.hands_event.emit(tab, ev)
