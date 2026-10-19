@@ -2006,6 +2006,8 @@
   "cfg.role_vision_none": "(none: a model without vision gets only a note)",
   "cfg.h.CHAT.vision_model": "When a picture goes to a model that cannot see, this model describes it and the description takes its place in the conversation. Each picture is described once.",
   "chat.image_described": "👁 {by} described {n} picture(s) for {to}, which cannot see images",
+  "chat.image_not_seen": "🙈 {model} cannot see pictures and no model is set to describe them, so it was not shown the picture. It is saved at {path} and the model was told so. To have pictures seen: Configuration → Models → «Vision (describes pictures)».",
+  "chat.image_not_seen_server": "🙈 {model}'s server says it takes no images (vision is off where it runs), so the picture would be dropped without a word. It was not sent; it is saved at {path} and the model was told so. Turn vision on in that server, or pick a model that sees in Configuration → Models → «Vision (describes pictures)».",
   "digest.cut": "✂ Large result from {tool} ({total} chars): the start goes in (lines 1-{shown} of {lines}); the full text kept in working memory, the model reads the rest if it needs it",
   "qa.steps_only": "🔍 Everything the tools returned does not fit what the reviewer can read ([CHAT] qa_budget_chars): it reviewed the steps, not their results.",
   "qa.view": "see the review ›",

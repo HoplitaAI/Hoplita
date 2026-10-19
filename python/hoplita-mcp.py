@@ -2577,6 +2577,73 @@ def _describe_images_for(messages, blind_model):
     return out, n
 
 
+_SERVER_VISION = {}
+
+
+def _server_says_blind(base_url, api_key, model):
+    key = f"{base_url}|{model}"
+    now = time.time()
+    hit = _SERVER_VISION.get(key)
+    if hit and now - hit[0] < 120:
+        return hit[1] is False
+    sees = None
+    try:
+        root = base_url[:-3] if base_url.rstrip("/").endswith("/v1") else base_url
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        r = _http().get(root.rstrip("/") + "/props", headers=headers, timeout=4)
+        if r.status_code == 200:
+            mod = (r.json() or {}).get("modalities")
+            if isinstance(mod, dict) and "vision" in mod:
+                sees = bool(mod.get("vision"))
+    except Exception:
+        sees = None
+    _SERVER_VISION[key] = (now, sees)
+    return sees is False
+
+
+def _park_images(messages, model, why):
+    out, paths = [], []
+    for m in messages or []:
+        c = m.get("content") if isinstance(m, dict) else None
+        if not (isinstance(c, list) and any(isinstance(p, dict) and "image" in str(p.get("type", ""))
+                                            for p in c)):
+            out.append(m)
+            continue
+        parts = []
+        for p in c:
+            if not (isinstance(p, dict) and "image" in str(p.get("type", ""))):
+                parts.append(p)
+                continue
+            path = ""
+            try:
+                url = str(((p.get("image_url") or {}).get("url")) or "")
+                head, _, b64 = url.partition(",")
+                if head.startswith("data:") and b64:
+                    ext = {"image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}.get(
+                        head[5:].split(";")[0], ".png")
+                    raw = base64.b64decode(b64)
+                    d = os.path.join(hoplita_base(), "attachments")
+                    os.makedirs(d, exist_ok=True)
+                    path = os.path.join(d, hashlib.sha256(raw).hexdigest()[:24] + ext)
+                    if not os.path.exists(path):
+                        with open(path, "wb") as fh:
+                            fh.write(raw)
+            except Exception as e:
+                print(f"[VISION] could not keep a picture as a file: {e}", file=sys.stderr)
+                path = ""
+            if path:
+                paths.append(path)
+                parts.append({"type": "text", "text":
+                              f"[picture not shown to you: {model} {why}. It is saved at "
+                              f"{path} — do not look for it anywhere else. Tell the person "
+                              f"you cannot see pictures; when a tool can do what they asked "
+                              f"from the file (OCR, for example), use it on that path.]"})
+            else:
+                parts.append(p)
+        out.append(dict(m, content=parts))
+    return out, paths
+
+
 def _llm_chat_with_tools(messages, tools, timeout=None,
                          base_url=None, api_key=None, model=None,
                          temperature=None, max_tokens=None, extra=None):
@@ -2593,12 +2660,30 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
     messages = _fa.single_system(messages)
     try:
         import hoplita_llmcfg as _lc
-        if CONFIG is not None and not _lc.model_sees(CONFIG, base_url, model):
+        _has_img = any(isinstance(m, dict) and isinstance(m.get("content"), list)
+                       and any(isinstance(p, dict) and "image" in str(p.get("type", ""))
+                               for p in m["content"]) for m in messages)
+        _why = ""
+        if _has_img and CONFIG is not None:
+            if not _lc.model_sees(CONFIG, base_url, model):
+                _why = "is declared without vision"
+            elif _server_says_blind(base_url, api_key, model):
+                _why = "is served without vision (its server says so)"
+        if _why:
             messages, _n_desc = _describe_images_for(messages, model)
+            messages, _paths = _park_images(messages, model, _why)
             messages, _n_img = _fa.strip_images(messages, model)
-            if _n_desc or _n_img:
-                print(f"[VISION] {model} is declared without vision: "
-                      f"{_n_desc} image(s) described, {_n_img} replaced by a note")
+            print(f"[VISION] {model} {_why}: {_n_desc} image(s) described, "
+                  f"{len(_paths)} kept as a file, {_n_img} replaced by a note")
+            _ctx = getattr(_ORCH, "ctx", None)
+            if _paths and _ctx is not None and not getattr(_ctx, "_told_not_seen", False):
+                _ctx._told_not_seen = True
+                try:
+                    _ctx.emit({"event": "image_not_seen", "model": model,
+                               "server": _why.startswith("is served"),
+                               "path": _paths[-1], "n": len(_paths)})
+                except Exception:
+                    pass
     except Exception as _e:
         print(f"[VISION] could not check images for {model}: {_e}", file=sys.stderr)
     global _LAST_WIRE
@@ -3642,10 +3727,15 @@ def tool_list_dir(path=".", recursive=False):
                     lines.append(os.path.relpath(os.path.join(root, f), p))
                 if len(lines) > 300: break
             return {"result": "\n".join(lines)}
-        return {"entries": [
-            {"name": e.name, "is_dir": e.is_dir(),
-             "size": e.stat().st_size if not e.is_dir() else 0}
-            for e in sorted(os.scandir(p), key=lambda x: x.name)]}
+        entries = []
+        for e in sorted(os.scandir(p), key=lambda x: x.name):
+            try:
+                entries.append({"name": e.name, "is_dir": e.is_dir(),
+                                "size": e.stat().st_size if not e.is_dir() else 0})
+            except OSError:
+                entries.append({"name": e.name, "is_dir": False, "size": 0,
+                                "broken_link": True})
+        return {"entries": entries}
     except Exception as e:
         return {"error": str(e)}
 
@@ -8229,10 +8319,9 @@ def tool_read_folder(path, extensions=None):
             continue
         entry = {"name": fn, "size": size}
         if ext in _FOLDER_IMG_MIMES:
-            with open(fp, 'rb') as f:
-                entry["b64"] = base64.b64encode(f.read()).decode()
             entry["type"] = "image"
             entry["mime"] = _FOLDER_IMG_MIMES[ext]
+            entry["path"] = fp
         elif ext == '.pdf':
             try:
                 r = subprocess.run(["pdftotext", fp, "-"], capture_output=True, text=True, timeout=30,
@@ -8254,7 +8343,11 @@ def tool_read_folder(path, extensions=None):
         files.append(entry)
         if len(files) >= 50:
             break
-    return {"folder": p, "total": len(files), "files": files}
+    out = {"folder": p, "total": len(files), "files": files}
+    if any(f.get("type") == "image" for f in files):
+        out["images"] = ("Pictures are listed, not attached: look at the ones "
+                         "you need with see_image(path).")
+    return out
 
 
 
@@ -8932,7 +9025,7 @@ def register_tools():
                                        a.get("auth_type"), a.get("auth_token"), a.get("auth_key_name"), a.get("auth_key_value"),
                                        a.get("query_params"), a.get("timeout", 30), a.get("save_response"),
                                        a.get("auth_from"))},
-        "read_folder":            {"desc": "Read all files in a folder (images, PDFs, text). For batch processing.",
+        "read_folder":            {"desc": "Read all files in a folder: text, PDFs and office files come with their text; pictures are LISTED with their path (look at one with see_image). For batch processing.",
                                    "fn": lambda a: tool_read_folder(a["path"], a.get("extensions"))},
     }
     for _n, _tool in TOOLS.items():

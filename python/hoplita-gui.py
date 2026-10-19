@@ -16396,6 +16396,11 @@ enabled = true
                     elif et == "image_described":
                         self.thread_msg(t("chat.image_described", by=ev.get("by", "?"),
                                           to=ev.get("for", "?"), n=ev.get("n", 1)), "system")
+                    elif et == "image_not_seen":
+                        self.thread_msg(t("chat.image_not_seen_server" if ev.get("server")
+                                          else "chat.image_not_seen",
+                                          model=ev.get("model", "?"), path=ev.get("path", "")),
+                                        "system")
                     elif et == "tokens":
                         pt = ev.get("prompt_tokens")
                         if pt:

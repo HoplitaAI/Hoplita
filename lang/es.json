@@ -2006,6 +2006,8 @@
   "cfg.role_vision_none": "(ninguno: un modelo sin visión recibe solo un aviso)",
   "cfg.h.CHAT.vision_model": "Cuando una imagen va a un modelo que no ve, este modelo la describe y la descripción ocupa su lugar en la conversación. Cada imagen se describe una sola vez.",
   "chat.image_described": "👁 {by} ha descrito {n} imagen(es) para {to}, que no ve imágenes",
+  "chat.image_not_seen": "🙈 {model} no ve imágenes y no hay ningún modelo que se las describa, así que no se le ha enseñado la imagen. Está guardada en {path} y el modelo lo sabe. Para que se vean: Configuración → Modelos → «Visión (describe imágenes)».",
+  "chat.image_not_seen_server": "🙈 El servidor de {model} dice que no acepta imágenes (tiene la visión apagada), así que la imagen se perdería sin avisar. No se ha enviado; está guardada en {path} y el modelo lo sabe. Activa la visión en ese servidor, o elige un modelo que vea en Configuración → Modelos → «Visión (describe imágenes)».",
   "digest.cut": "✂ Resultado grande de {tool} ({total} chars): entra el principio (líneas 1-{shown} de {lines}); el texto completo queda en la memoria de trabajo y el modelo lee el resto si lo necesita",
   "qa.steps_only": "🔍 Todo lo que devolvieron las herramientas no cabe en lo que puede leer el revisor ([CHAT] qa_budget_chars): ha revisado los pasos, no sus resultados.",
   "qa.view": "ver revisión ›",
