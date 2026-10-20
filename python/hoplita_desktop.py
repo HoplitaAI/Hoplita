@@ -1,6 +1,7 @@
 import base64
 import glob
 import io
+import json
 import os
 import platform
 import shutil
@@ -817,6 +818,7 @@ class MissingElementBackend:
 
 
 def _element_backend():
+    mac_ask_permissions()
     if IS_LINUX:
         return AtspiBackend()
     if IS_WINDOWS:
@@ -826,6 +828,56 @@ def _element_backend():
             "ax", "the macOS accessibility layer is not driven by this version; "
                   + mac_permissions_note())
     return MissingElementBackend("none", "no element layer on this platform")
+
+
+_MAC_ASKED = False
+
+
+def mac_ask_permissions():
+    global _MAC_ASKED
+    if not IS_MAC or _MAC_ASKED:
+        return []
+    _MAC_ASKED = True
+    import ctypes
+    asked = []
+    try:
+        appsvc = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+        appsvc.AXIsProcessTrusted.restype = ctypes.c_bool
+        if not appsvc.AXIsProcessTrusted():
+            cf = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+            key = ctypes.c_void_p.in_dll(appsvc, "kAXTrustedCheckOptionPrompt")
+            true = ctypes.c_void_p.in_dll(cf, "kCFBooleanTrue")
+            cf.CFDictionaryCreate.restype = ctypes.c_void_p
+            cf.CFDictionaryCreate.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+                                              ctypes.POINTER(ctypes.c_void_p), ctypes.c_long,
+                                              ctypes.c_void_p, ctypes.c_void_p]
+            keys = (ctypes.c_void_p * 1)(key.value)
+            vals = (ctypes.c_void_p * 1)(true.value)
+            opts = cf.CFDictionaryCreate(None, keys, vals, 1, None, None)
+            appsvc.AXIsProcessTrustedWithOptions.restype = ctypes.c_bool
+            appsvc.AXIsProcessTrustedWithOptions.argtypes = [ctypes.c_void_p]
+            appsvc.AXIsProcessTrustedWithOptions(opts)
+            asked.append("accessibility")
+    except Exception as e:
+        print(f"[HANDS] could not ask for accessibility: {e}", file=sys.stderr)
+    try:
+        cg = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
+        if not cg.CGPreflightScreenCaptureAccess():
+            import subprocess
+            subprocess.run(
+                [sys.executable, "-c",
+                 "import ctypes; cg = ctypes.cdll.LoadLibrary('/System/Library/"
+                 "Frameworks/CoreGraphics.framework/CoreGraphics'); "
+                 "cg.CGRequestScreenCaptureAccess()"],
+                timeout=30, capture_output=True)
+            asked.append("screen recording")
+    except Exception as e:
+        print(f"[HANDS] could not ask for screen recording: {e}", file=sys.stderr)
+    return asked
 
 
 def mac_permissions_note():
@@ -839,7 +891,10 @@ def mac_permissions_note():
         appsvc.AXIsProcessTrusted.restype = ctypes.c_bool
         trusted = bool(appsvc.AXIsProcessTrusted())
         notes.append("accessibility permission: " + ("granted" if trusted else
-                     "NOT granted to the process that launched this server"))
+                     "NOT granted to the app that launched this server — "
+                     "System Settings → Privacy & Security → Accessibility, "
+                     "turn that app on (HOPLITA when started from HOPLITA.app; "
+                     "Terminal when started from a terminal)"))
     except Exception as e:
         notes.append(f"accessibility permission: unknown ({e})")
     try:
@@ -848,7 +903,13 @@ def mac_permissions_note():
         cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
         ok = bool(cg.CGPreflightScreenCaptureAccess())
         notes.append("screen recording permission: " + ("granted" if ok else
-                     "NOT granted to the process that launched this server"))
+                     "NOT granted to the app that launched this server — "
+                     "System Settings → Privacy & Security → Screen Recording; "
+                     "if it is not in the list, add it with + (the install's "
+                     "venv/bin/HOPLITA when started from HOPLITA.app; "
+                     "Applications → Utilities → Terminal when started from a "
+                     "terminal), turn it on, then quit HOPLITA and start it "
+                     "again"))
     except Exception as e:
         notes.append(f"screen recording permission: unknown ({e})")
     return "; ".join(notes)
@@ -920,17 +981,35 @@ class PyautoguiBackend(PixelBackend):
         from PIL import Image
         with (self.mss.MSS() if hasattr(self.mss, "MSS") else self.mss.mss()) as s:
             im = s.grab(s.monitors[0])
-            return Image.frombytes("RGB", im.size, im.rgb)
+            img = Image.frombytes("RGB", im.size, im.rgb)
+        self._learn_scale(img.size[0])
+        return img
+
+    _scale = None
+
+    def _learn_scale(self, captured_width):
+        sz = self.size()
+        if sz and sz[0] and captured_width:
+            self._scale = captured_width / float(sz[0])
+
+    def _pt(self, v):
+        if self._scale is None:
+            try:
+                self.capture()
+            except Exception:
+                self._scale = 1.0
+        return int(round(float(v) / (self._scale or 1.0)))
 
     def move(self, x, y):
-        self.pg.moveTo(int(x), int(y))
+        self.pg.moveTo(self._pt(x), self._pt(y))
         return True
 
     def click(self, x, y, button="left", double=False):
+        x, y = self._pt(x), self._pt(y)
         if double:
-            self.pg.doubleClick(int(x), int(y), button=button)
+            self.pg.doubleClick(x, y, button=button)
         else:
-            self.pg.click(int(x), int(y), button=button)
+            self.pg.click(x, y, button=button)
         return True
 
     def type_text(self, text):
@@ -940,6 +1019,286 @@ class PyautoguiBackend(PixelBackend):
     def key(self, combo):
         keys = [k.strip().lower() for k in combo.split("+") if k.strip()]
         self.pg.hotkey(*keys)
+        return True
+
+
+_MAC_KEYS = {
+    "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8,
+    "v": 9, "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
+    "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "equal": 24,
+    "9": 25, "7": 26, "-": 27, "minus": 27, "8": 28, "0": 29, "]": 30, "o": 31,
+    "u": 32, "[": 33, "i": 34, "p": 35, "l": 37, "j": 38, "'": 39, "k": 40,
+    ";": 41, "\\": 42, ",": 43, "/": 44, "n": 45, "m": 46, ".": 47, "`": 50,
+    "return": 36, "enter": 36, "tab": 48, "space": 49, " ": 49,
+    "backspace": 51, "delete": 117, "del": 117, "escape": 53, "esc": 53,
+    "left": 123, "right": 124, "down": 125, "up": 126,
+    "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
+    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97, "f7": 98,
+    "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+}
+_MAC_FLAGS = {"cmd": 1 << 20, "command": 1 << 20, "meta": 1 << 20, "super": 1 << 20,
+              "win": 1 << 20, "shift": 1 << 17, "ctrl": 1 << 18, "control": 1 << 18,
+              "alt": 1 << 19, "option": 1 << 19, "opt": 1 << 19}
+
+
+class MacBackend(PyautoguiBackend):
+
+    name = "coregraphics+mss"
+
+    def __init__(self):
+        PixelBackend.__init__(self)
+        self.pg = None
+        self.mss = None
+        self.capture_why = ""
+        self.input_why = ""
+        try:
+            import mss
+            self.mss = mss
+        except Exception as e:
+            self.capture_why = f"capture unavailable: {e}"
+        try:
+            import ctypes
+            cg = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+
+            class _P(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+            class _R(ctypes.Structure):
+                _fields_ = [("origin", _P), ("size", _P)]
+            cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+            cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, _P, ctypes.c_uint32]
+            cg.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
+            cg.CGEventCreateKeyboardEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+            cg.CGEventKeyboardSetUnicodeString.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_wchar_p]
+            cg.CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+            cg.CGEventSetIntegerValueField.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64]
+            cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+            cg.CGMainDisplayID.restype = ctypes.c_uint32
+            cg.CGDisplayBounds.restype = _R
+            cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+            cf = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+            cf.CFRelease.argtypes = [ctypes.c_void_p]
+            self._cg, self._cf, self._P = cg, cf, _P
+        except Exception as e:
+            self.input_why = f"raw input unavailable: {e}"
+
+    def size(self):
+        try:
+            b = self._cg.CGDisplayBounds(self._cg.CGMainDisplayID())
+            return [int(b.size.x), int(b.size.y)]
+        except Exception:
+            return None
+
+    def _post(self, ev):
+        if ev:
+            self._cg.CGEventPost(0, ev)
+            self._cf.CFRelease(ev)
+        time.sleep(0.02)
+
+    def _mouse(self, kind, x, y, button=0, clicks=1):
+        ev = self._cg.CGEventCreateMouseEvent(None, kind, self._P(float(x), float(y)), button)
+        if ev and clicks > 1:
+            self._cg.CGEventSetIntegerValueField(ev, 1, clicks)
+        self._post(ev)
+
+    def move(self, x, y):
+        self._mouse(5, self._pt(x), self._pt(y))
+        return True
+
+    def _window_owner_at(self, x, y):
+        import ctypes
+        cg, cf = self._cg, self._cf
+        cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
+        cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        cf.CFArrayGetCount.restype = ctypes.c_long
+        cf.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+        cf.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+        cf.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+        cf.CFDictionaryGetValue.restype = ctypes.c_void_p
+        cf.CFDictionaryGetValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+
+        class _R(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double),
+                        ("w", ctypes.c_double), ("h", ctypes.c_double)]
+        cg.CGRectMakeWithDictionaryRepresentation.restype = ctypes.c_bool
+        cg.CGRectMakeWithDictionaryRepresentation.argtypes = [ctypes.c_void_p, ctypes.POINTER(_R)]
+
+        def key(name):
+            return cf.CFStringCreateWithCString(None, name, 0x08000100)
+
+        def number(d, k):
+            v = cf.CFDictionaryGetValue(d, k)
+            n = ctypes.c_int64(0)
+            if v:
+                cf.CFNumberGetValue(v, 4, ctypes.byref(n))
+            return n.value
+        k_pid, k_layer, k_bounds = key(b"kCGWindowOwnerPID"), key(b"kCGWindowLayer"), key(b"kCGWindowBounds")
+        arr = cg.CGWindowListCopyWindowInfo(1 | 16, 0)
+        try:
+            for i in range(cf.CFArrayGetCount(arr) if arr else 0):
+                d = cf.CFArrayGetValueAtIndex(arr, i)
+                if number(d, k_layer) != 0:
+                    continue
+                r = _R()
+                b = cf.CFDictionaryGetValue(d, k_bounds)
+                if b and cg.CGRectMakeWithDictionaryRepresentation(b, ctypes.byref(r)) \
+                        and r.x <= x < r.x + r.w and r.y <= y < r.y + r.h:
+                    return number(d, k_pid) or None
+        finally:
+            for o in (arr, k_pid, k_layer, k_bounds):
+                if o:
+                    cf.CFRelease(o)
+        return None
+
+    def _activate_at(self, x, y):
+        try:
+            pid = self._window_owner_at(x, y)
+            if not pid or pid in own_pids():
+                return
+            if self._ax_frontmost(pid):
+                time.sleep(0.15)
+                return
+            import ctypes
+            import ctypes.util
+            objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+            ctypes.cdll.LoadLibrary("/System/Library/Frameworks/AppKit.framework/AppKit")
+            objc.objc_getClass.restype = ctypes.c_void_p
+            objc.sel_registerName.restype = ctypes.c_void_p
+            by_pid = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                      ctypes.c_int)(("objc_msgSend", objc))
+            activate = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p,
+                                        ctypes.c_ulong)(("objc_msgSend", objc))
+            app = by_pid(objc.objc_getClass(b"NSRunningApplication"),
+                         objc.sel_registerName(b"runningApplicationWithProcessIdentifier:"), int(pid))
+            if app and not activate(app, objc.sel_registerName(b"activateWithOptions:"), 2):
+                print(f"[HANDS] macOS did not make pid {pid} active", file=sys.stderr)
+            time.sleep(0.15)
+        except Exception as e:
+            print(f"[HANDS] could not activate the app under the pointer: {e}", file=sys.stderr)
+
+    def _ax_frontmost(self, pid):
+        try:
+            import ctypes
+            ax = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+            cf = self._cf
+            ax.AXUIElementCreateApplication.restype = ctypes.c_void_p
+            ax.AXUIElementCreateApplication.argtypes = [ctypes.c_int]
+            ax.AXUIElementSetAttributeValue.restype = ctypes.c_int32
+            ax.AXUIElementSetAttributeValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+            cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+            true = ctypes.c_void_p.in_dll(cf, "kCFBooleanTrue")
+            el = ax.AXUIElementCreateApplication(int(pid))
+            attr = cf.CFStringCreateWithCString(None, b"AXFrontmost", 0x08000100)
+            try:
+                err = ax.AXUIElementSetAttributeValue(el, attr, true)
+            finally:
+                for o in (el, attr):
+                    if o:
+                        cf.CFRelease(o)
+            if err:
+                print(f"[HANDS] Accessibility did not bring pid {pid} to the front (error {err})",
+                      file=sys.stderr)
+            return err == 0
+        except Exception as e:
+            print(f"[HANDS] Accessibility could not bring pid {pid} to the front: {e}", file=sys.stderr)
+            return False
+
+    def click(self, x, y, button="left", double=False):
+        x, y = self._pt(x), self._pt(y)
+        down, up, btn = {"right": (3, 4, 1), "middle": (25, 26, 2)}.get(button, (1, 2, 0))
+        self._activate_at(x, y)
+        self._mouse(5, x, y)
+        time.sleep(0.05)
+        for n in ((1, 2) if double else (1,)):
+            self._mouse(down, x, y, btn, n)
+            self._mouse(up, x, y, btn, n)
+        return True
+
+    def type_text(self, text):
+        for ch in str(text):
+            for down in (True, False):
+                ev = self._cg.CGEventCreateKeyboardEvent(None, 0, down)
+                self._cg.CGEventKeyboardSetUnicodeString(ev, 1, ch)
+                self._cg.CGEventSetFlags(ev, 0)
+                self._post(ev)
+        return True
+
+    _LAYOUT_PROBE = r"""
+import ctypes, json
+carbon = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/Carbon.framework/Carbon")
+cf = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+carbon.TISCopyCurrentKeyboardLayoutInputSource.restype = ctypes.c_void_p
+carbon.TISGetInputSourceProperty.restype = ctypes.c_void_p
+carbon.TISGetInputSourceProperty.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+carbon.LMGetKbdType.restype = ctypes.c_uint8
+carbon.UCKeyTranslate.restype = ctypes.c_int32
+carbon.UCKeyTranslate.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint32,
+    ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_ulong,
+    ctypes.POINTER(ctypes.c_ulong), ctypes.c_void_p]
+cf.CFDataGetBytePtr.restype = ctypes.c_void_p
+cf.CFDataGetBytePtr.argtypes = [ctypes.c_void_p]
+src = carbon.TISCopyCurrentKeyboardLayoutInputSource()
+data = carbon.TISGetInputSourceProperty(src, ctypes.c_void_p.in_dll(carbon, "kTISPropertyUnicodeKeyLayoutData"))
+layout = cf.CFDataGetBytePtr(data) if data else None
+out = {}
+if layout:
+    kbd, buf = carbon.LMGetKbdType(), (ctypes.c_uint16 * 4)()
+    for code in range(0, 64):
+        dead, n = ctypes.c_uint32(0), ctypes.c_ulong(0)
+        if carbon.UCKeyTranslate(layout, code, 3, 0, kbd, 1, ctypes.byref(dead), 4,
+                                 ctypes.byref(n), buf) == 0 and n.value == 1:
+            ch = chr(buf[0]).lower()
+            if "a" <= ch <= "z" and ch not in out:
+                out[ch] = code
+print(json.dumps(out))
+"""
+    _layout_cache = (0.0, {})
+
+    def _layout_letters(self):
+        at, letters = MacBackend._layout_cache
+        if time.time() - at < 10:
+            return letters
+        letters = {}
+        try:
+            r = subprocess.run([sys.executable, "-c", self._LAYOUT_PROBE],
+                               capture_output=True, text=True, timeout=10)
+            got = json.loads(r.stdout or "{}") if r.returncode == 0 else {}
+            letters = {k: int(v) for k, v in got.items()
+                       if len(k) == 1 and "a" <= k <= "z" and 0 <= int(v) < 64}
+            if r.returncode != 0:
+                print(f"[HANDS] keyboard layout unreadable, US key positions used: "
+                      f"{(r.stderr or '').strip()[-200:]}", file=sys.stderr)
+        except Exception as e:
+            print(f"[HANDS] keyboard layout unreadable, US key positions used: {e}", file=sys.stderr)
+        MacBackend._layout_cache = (time.time(), letters)
+        return letters
+
+    def key(self, combo):
+        keys = [k.strip().lower() for k in combo.split("+") if k.strip()]
+        flags = 0
+        main = []
+        letters = self._layout_letters() if any(len(k) == 1 and "a" <= k <= "z" for k in keys) else {}
+        for k in keys:
+            if k in _MAC_FLAGS:
+                flags |= _MAC_FLAGS[k]
+            elif k in letters:
+                main.append(letters[k])
+            elif k in _MAC_KEYS:
+                main.append(_MAC_KEYS[k])
+            else:
+                raise ValueError(f"unknown key '{k}'")
+        for code in main or []:
+            for down in (True, False):
+                ev = self._cg.CGEventCreateKeyboardEvent(None, code, down)
+                self._cg.CGEventSetFlags(ev, flags)
+                self._post(ev)
         return True
 
 
@@ -1075,6 +1434,8 @@ class WaylandBackend(PixelBackend):
 
 def _pixel_backend(force=""):
     st = session_type()
+    if not force and st == "macos":
+        return MacBackend()
     if force == "x11" or (not force and st in ("x11", "windows", "macos")):
         b = PyautoguiBackend()
         if st == "wayland":
@@ -1116,6 +1477,25 @@ def changed_pct(before, after):
     changed = hist[255] if len(hist) > 255 else 0
     total = a.width * a.height or 1
     return round(100.0 * changed / total, 2)
+
+
+_FINE_MIN_PIXELS = 200
+
+
+def changed_pixels(before, after):
+    from PIL import ImageChops
+    a, b = before.convert("L"), after.convert("L")
+    if a.size != b.size:
+        b = b.resize(a.size)
+    hist = ImageChops.difference(a, b).point(lambda v: 255 if v > 24 else 0).histogram()
+    return hist[255] if len(hist) > 255 else 0
+
+
+def screen_changed(before, after, pct):
+    if pct > 0.05:
+        return True, None
+    n = changed_pixels(before, after)
+    return n >= _FINE_MIN_PIXELS, n
 
 
 
@@ -1221,12 +1601,15 @@ class Hands:
         if before is not None and after is not None:
             pct = changed_pct(before, after)
             out["pixels_changed_pct"] = pct
+            out["screen_changed"], fine = screen_changed(before, after, pct)
+            if fine is not None:
+                out["pixels_changed_full_size"] = fine
             session.last_capture = after
         elif not self.pixels.can_capture():
             out["pixels"] = "no capture on this session: " + self.pixels.capture_why
         evidence = []
-        if "pixels_changed_pct" in out:
-            evidence.append(out["pixels_changed_pct"] > 0.05)
+        if "screen_changed" in out:
+            evidence.append(out.pop("screen_changed"))
         for k in ("text_readback_matches", "state_changed", "window_text_changed",
                   "focused"):
             if k in out and isinstance(out[k], bool):
@@ -1460,11 +1843,15 @@ class Hands:
         if session.last_capture is not None:
             after = self._snap()
             if after is not None:
-                out["pixels_changed_pct_since_last"] = changed_pct(session.last_capture, after)
+                pct = changed_pct(session.last_capture, after)
+                out["pixels_changed_pct_since_last"] = pct
+                changed, fine = screen_changed(session.last_capture, after, pct)
+                if fine is not None:
+                    out["pixels_changed_full_size"] = fine
                 session.last_capture = after
         verified = out.get("text_found")
         if verified is None and "pixels_changed_pct_since_last" in out:
-            verified = out["pixels_changed_pct_since_last"] > 0.05
+            verified = changed
         out["verified"] = verified
         session.actions += 1
         if with_screenshot and self.pixels.can_capture():

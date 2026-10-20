@@ -70,14 +70,54 @@ Without Homebrew, the installer from
 Then:
 
 ```bash
-git clone https://github.com/HoplitaAI/Hoplita.git
-cd Hoplita
+git clone https://github.com/HoplitaAI/Hoplita.git hoplita-src
+cd hoplita-src
 python3.12 install.py
 ```
 
-The installer puts two launchers on the desktop: **HOPLITA-MCP** (start it
-first; it opens a terminal and asks for the vault password there) and
-**HOPLITA-GUI**, the window.
+The clone gets its own name because macOS folder names ignore letter case: a
+clone called `Hoplita` in your home folder would be the same folder as the
+install, `~/hoplita`. The installer refuses that and says so.
+
+The installer puts **HOPLITA.app** in `~/Applications`, with a link on the
+desktop: Spotlight (⌘ Space → HOPLITA) and Launchpad find it. One double-click
+starts everything, with no terminal: the vault password is asked in a window,
+then HOPLITA opens.
+
+### What macOS asks, and what to answer
+
+macOS asks for some permissions the first time HOPLITA needs them: the first
+time the desktop hands are used, HOPLITA asks macOS to show its notices for
+Screen Recording and Accessibility. Neither notice has an Allow button: each
+opens **System Settings → Privacy & Security** at its list, and the switch is
+turned on there (macOS lets no app turn it on by itself). macOS shows each
+notice once; if it was dismissed, go to the same place by hand.
+
+Opened with **HOPLITA.app**, the notices name **HOPLITA**: the installer gives
+HOPLITA its own copy of the Python it runs on, so the permissions are
+HOPLITA's alone and not every Python script's. Started by hand from a
+terminal, they go to that terminal (Terminal, iTerm…) instead. Chat, the
+Terminal tab, the canvas, the whiteboard, the web browser and the CLI need
+none of them.
+
+| macOS asks | Answer | What it is for | Without it |
+|---|---|---|---|
+| «HOPLITA» would like to record this computer's screen (**Screen Recording**) | **Open System Settings**, turn **HOPLITA** on; if it is not in the list, press **+** and pick `venv/bin/HOPLITA` inside the install folder (`~/hoplita`) | The desktop hands look at the screen (`hands_screenshot`, and the check after each action) | The model sees only the desktop background, no windows |
+| «HOPLITA» would like to control this computer using accessibility features (**Accessibility**) | **Open System Settings**: HOPLITA is already in the list, turn it on | The desktop hands click and type for you (`hands_click`, `hands_type`, `hands_key`) | Clicks and keys do nothing (each action reports `verified: false`) |
+| «HOPLITA» is requesting to bypass the system private window picker and directly access your screen and audio (macOS 15 and later) | **Allow** | The same Screen Recording, confirmed again: macOS asks it of apps that capture the whole screen, after the permission is on and from time to time later (about monthly) | Captures go on while the notice is open; what refusing it does has not been tried |
+| «HOPLITA» would like to access Apple Music… (or Photos, Contacts, Calendars, Reminders…) | **Don't Allow**, unless you asked HOPLITA for something kept there | A command the model ran in the terminal went through your home folder, and macOS guards those folders and libraries one by one | That command does not see those folders. While the notice is unanswered the command waits: one waited until the terminal's time limit (5 minutes) |
+| «Google Chrome for Testing» notifications | Either | It is the browser HOPLITA browses with; nothing of HOPLITA uses its notifications | Nothing changes |
+| HOPLITA would like to find devices on your local network (**Local Network**) | **Allow**, if your model runs on another machine of your network | Reaching that machine | HOPLITA cannot reach the model there |
+
+After turning a permission on, quit HOPLITA (⌘Q) and open it again: macOS
+applies it to the next start. To check, ask HOPLITA for `hands_status`: it
+says `accessibility permission: granted` and `screen recording permission:
+granted`, or which one is missing. Both permissions can be turned off again
+at any time in **System Settings → Privacy & Security**.
+
+The desktop hands drive the screen by pixels on macOS: the window-and-element
+layer they use on Linux and Windows is detected but not driven on this
+version.
 
 ## Windows
 

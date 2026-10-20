@@ -3,6 +3,7 @@ from PyQt6.QtGui import (QPainter, QPixmap, QColor, QRadialGradient, QAction,
                          QFont, QFontMetrics, QRegion, QGuiApplication)
 from PyQt6.QtWidgets import QWidget, QMenu, QApplication
 import math
+import sys
 import time
 
 COLOR_WORKING = "#10b981"
@@ -31,6 +32,7 @@ class _Caption(QWidget):
                             | Qt.WindowType.WindowTransparentForInput)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._text = ""
@@ -102,6 +104,7 @@ class HoplitaHud(QWidget):
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -196,6 +199,8 @@ class HoplitaHud(QWidget):
             self._apply_mask()
             self.showFullScreen()
         else:
+            scr = QApplication.primaryScreen()
+            g = scr.availableGeometry() if scr else g
             self.move(g.right() - self.width() - margin,
                       g.bottom() - self.height() - margin)
             self.show()
@@ -222,7 +227,8 @@ class HoplitaHud(QWidget):
         else:
             self._position_caption()
             self._caption.show()
-            self._caption.raise_()
+            if sys.platform != "darwin":
+                self._caption.raise_()
 
     def _position_caption(self):
         c = self._caption

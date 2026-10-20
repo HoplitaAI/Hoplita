@@ -19,12 +19,14 @@ class _Page(QWebEnginePage):
 
     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
         u = urlparse(url.toString())
-        if is_main_frame and not u.path.startswith(("/wb/app", "/wb/host/")):
+        _wb = u.path.find("/wb/")
+        _rel = u.path[_wb:] if _wb >= 0 else u.path
+        if is_main_frame and not _rel.startswith(("/wb/app", "/wb/host/")):
             if u.scheme in ("http", "https", "mailto") and not url.toString().startswith(self._owner.mcp_url):
                 QTimer.singleShot(0, lambda s=url.toString(): self._owner.host_request.emit("external", {"url": s}))
             return False
-        if u.path.startswith("/wb/host/"):
-            action = u.path[len("/wb/host/"):]
+        if _rel.startswith("/wb/host/"):
+            action = _rel[len("/wb/host/"):]
             q = {k: v[0] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
             QTimer.singleShot(0, lambda a=action, p=q: self._owner.host_request.emit(a, p))
             return False
@@ -37,7 +39,7 @@ class WhiteboardWidget(QWidget):
 
     def __init__(self, mcp_url, parent=None):
         super().__init__(parent)
-        self.mcp_url = (mcp_url or "").rstrip("/")
+        self._url = mcp_url
         self.current = None
         self.root = ""
         self.loaded = False
@@ -54,6 +56,15 @@ class WhiteboardWidget(QWidget):
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._menu)
         self.view.urlChanged.connect(self._url_changed)
+
+    @property
+    def mcp_url(self):
+        u = self._url() if callable(self._url) else self._url
+        return (u or "").rstrip("/")
+
+    @mcp_url.setter
+    def mcp_url(self, value):
+        self._url = value
 
     def show_whiteboard(self, wid=None, root=""):
         from urllib.parse import urlencode

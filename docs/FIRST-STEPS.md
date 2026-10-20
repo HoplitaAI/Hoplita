@@ -25,7 +25,15 @@ What the model must have:
   Studio, pick a model marked as supporting tools.
 - **Room to work.** The tools and the instructions take several thousand
   tokens before the first word of the conversation. Give it a context window of
-  32k tokens at least; 64k or more is comfortable.
+  32k tokens at least; 64k or more is comfortable. **Ollama** runs models with
+  a 4096-token window unless told otherwise, and it cuts a longer prompt
+  without an error: set **Context length** in the Ollama app's settings, or
+  start it with `OLLAMA_CONTEXT_LENGTH=32768`. HOPLITA reads the window Ollama
+  runs with and, if its instructions do not fit, stops and says this instead
+  of letting the model work without them.
+- **Thinking.** A small model that thinks before every answer may think and
+  stop without acting. For Ollama, `extra_body = {"reasoning_effort": "none"}`
+  on that model's line turns the thinking off.
 
 The URL goes **up to `/v1`**; HOPLITA adds the rest. A local server usually
 needs no key.

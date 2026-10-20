@@ -2601,6 +2601,100 @@ def _server_says_blind(base_url, api_key, model):
     return sees is False
 
 
+_OLLAMA_WINDOW = {}
+_NOT_OLLAMA = {}
+
+
+def _ollama_window(base_url, api_key, model):
+    key = f"{base_url}|{model}"
+    now = time.time()
+    hit = _OLLAMA_WINDOW.get(key)
+    if hit and now - hit[0] < 60:
+        return hit[1]
+    root = base_url[:-3] if base_url.rstrip("/").endswith("/v1") else base_url
+    root = root.rstrip("/")
+    if _NOT_OLLAMA.get(root):
+        return 0
+    window = 0
+    try:
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        _v = _http().get(root + "/api/version", headers=headers, timeout=4)
+        try:
+            _is_ollama = _v.status_code == 200 and "version" in (_v.json() or {})
+        except Exception:
+            _is_ollama = False
+        if not _is_ollama:
+            _NOT_OLLAMA[root] = True
+        if _is_ollama:
+            for attempt in (0, 1):
+                ps = _http().get(root + "/api/ps", headers=headers, timeout=4).json() or {}
+                own = next((m for m in ps.get("models") or []
+                            if model in (m.get("name"), m.get("model"))), None)
+                if own is not None:
+                    window = int(own.get("context_length") or 0)
+                    break
+                if attempt == 0:
+                    _http().post(root + "/api/generate", json={"model": model},
+                                 headers=headers, timeout=300)
+    except Exception:
+        window = 0
+    _OLLAMA_WINDOW[key] = (now, window)
+    return window
+
+
+_SERVER_TOOLS = {}
+
+
+def _server_says_no_tools(base_url, api_key, model):
+    key = f"{base_url}|{model}"
+    now = time.time()
+    hit = _SERVER_TOOLS.get(key)
+    if hit and now - hit[0] < 120:
+        return hit[1] is False
+    takes = None
+    try:
+        root = base_url[:-3] if base_url.rstrip("/").endswith("/v1") else base_url
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        r = _http().post(root.rstrip("/") + "/api/show", json={"model": model},
+                         headers=headers, timeout=4)
+        if r.status_code == 200:
+            caps = (r.json() or {}).get("capabilities")
+            if isinstance(caps, list):
+                takes = "tools" in caps
+    except Exception:
+        takes = None
+    _SERVER_TOOLS[key] = (now, takes)
+    return takes is False
+
+
+class ModelTakesNoTools(Exception):
+    no_retry = True
+
+
+class PromptCannotFit(Exception):
+    no_retry = True
+
+
+def _check_fits_ollama(base_url, api_key, model, messages, tools, max_tokens):
+    window = _ollama_window(base_url, api_key, model)
+    if window <= 0:
+        return
+    prompt = _estimate_prompt_tokens(messages, tools)
+    reply = min(int(max_tokens or 0), window // 2)
+    if prompt + reply <= window:
+        return
+    fixed = _estimate_prompt_tokens([m for m in messages if m.get("role") == "system"], tools)
+    if fixed + reply > window:
+        raise PromptCannotFit(
+            f"Ollama runs {model} with a {window}-token window, and HOPLITA's "
+            f"instructions and tools alone are about {fixed} tokens: Ollama would "
+            f"cut them and the model would answer without them. Give it a bigger "
+            f"window — 32768 or more — in the Ollama app (Settings → Context "
+            f"length) or with OLLAMA_CONTEXT_LENGTH=32768 where Ollama starts, "
+            f"then restart Ollama.")
+    raise ContextOverflow(prompt, reply, window)
+
+
 def _park_images(messages, model, why):
     out, paths = [], []
     for m in messages or []:
@@ -2722,6 +2816,7 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
             else:
                 payload[_k] = _v
         _extra_used = True
+    _check_fits_ollama(base_url, api_key, model, messages, tools, payload["max_tokens"])
     r = _http().post(f"{base_url}/chat/completions",
                       json=payload, headers=headers, timeout=timeout)
     if _extra_used and r.status_code == 400 and not _context_overflow_of(r.text or ""):
@@ -2741,6 +2836,11 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
             raise ContextOverflow(*_ov)
     if r.status_code != 200:
         body = r.text[:600]
+        if r.status_code == 400 and "does not support tools" in body:
+            raise ModelTakesNoTools(
+                f"{model} takes no tools (its server says so), and this turn needs "
+                f"them. Pick a model that takes tools for it; this one can still "
+                f"describe pictures or answer without tools. Server: {body[:160]}")
         if ("parse tool call arguments" in body or "missing closing quote" in body
                 or "parse_error" in body):
             raise Exception(
@@ -2938,7 +3038,7 @@ def _ensure_lesson_worker():
     _LESSON_WORKER_STARTED = True
     threading.Thread(target=_lesson_worker_loop, daemon=True,
                      name="lesson_worker").start()
-    print("[LESSONS] Worker arrancado (single-threaded, idle-wait %ds)" %
+    print("[LESSONS] Worker started (single-threaded, idle-wait %ds)" %
           _LESSON_WORKER_IDLE_S, file=sys.stderr)
 
 
@@ -3100,7 +3200,7 @@ def _session_pack_tools():
     return _pack_tool_names(pack, terminal=True, may_orchestrate=True)
 
 
-def _build_session_system(message):
+def _build_session_system(message, own=False):
     try:
         parts = [_t("prompts.session_agent"),
                  _t("prompts.today", date=datetime.now().strftime("%Y-%m-%d"))]
@@ -3118,6 +3218,7 @@ def _build_session_system(message):
                                                fallback=True)
         except Exception:
             inject_ctx = True
+        inject_ctx = inject_ctx and own
         if inject_ctx and message:
             try:
                 facts = select_facts_for_injection(message, budget=20) or []
@@ -6349,7 +6450,18 @@ def _git_root(path):
     while not os.path.isdir(d) and d != os.path.dirname(d):
         d = os.path.dirname(d)
     ok, out = _git(["rev-parse", "--show-toplevel"], d)
-    return out if ok and out else None
+    if not (ok and out):
+        return None
+    a = d
+    while True:
+        try:
+            if os.path.samefile(a, out):
+                return a
+        except OSError:
+            pass
+        if a == os.path.dirname(a):
+            return out
+        a = os.path.dirname(a)
 
 
 def _git_checkpoint(root, label=""):
@@ -6386,6 +6498,7 @@ def _git_checkpoint(root, label=""):
 
 
 _CODE_DROPPED = {}
+_CODE_EDITED = {}
 _CODE_PATCH_FAILED = {}
 
 
@@ -6411,9 +6524,11 @@ def tool_code_write_file(path, content):
             f.write(content)
     except Exception as e:
         return {"error": f"Cannot write: {e}"}
-    if cp and root:
+    if root:
         rel = os.path.relpath(p, root)
-        _checkpoint_push(root, cp, [rel], [] if existed else [rel])
+        _CODE_EDITED.setdefault(root, set()).add(rel)
+        if cp:
+            _checkpoint_push(root, cp, [rel], [] if existed else [rel])
     return {"ok": True, "path": p, "bytes": len(content.encode("utf-8")),
             "created": not existed, "undo": bool(cp),
             "checkpoint": (cp or "")[:8]}
@@ -6809,8 +6924,12 @@ def tool_git_commit(path=None, message="", files=None, allow_main=False):
                          f"→ git_merge(branch, into='{branch}') brings it home. "
                          f"allow_main=true only if the user asked for a commit "
                          f"on '{branch}' explicitly."}
+    if files is not None and not (isinstance(files, list)
+                                  and all(isinstance(f, str) for f in files)):
+        return {"error": "'files' is a list of paths, e.g. [\"calc.py\"] — "
+                         f"got {type(files).__name__}: {json.dumps(files, ensure_ascii=False)[:120]}"}
     touched = sorted({f for e in (_CODE_CHECKPOINTS.get(root) or [])
-                      for f in e["files"]})
+                      for f in e["files"]} | _CODE_EDITED.get(root, set()))
     targets = files or touched
     if not targets:
         return {"error": "HOPLITA has not edited anything here this session. "
@@ -7163,6 +7282,8 @@ def _code_apply_patch(path, changes):
             with open(p, "w", encoding="utf-8") as f:
                 f.write(changes[0].get("new", ""))
             rel = os.path.relpath(p, root) if root else p
+            if root:
+                _CODE_EDITED.setdefault(root, set()).add(rel)
             if cp:
                 _checkpoint_push(root, cp, [rel], [rel])
             return {"applied": 1, "path": p, "created": True,
@@ -7201,6 +7322,8 @@ def _code_apply_patch(path, changes):
         with open(p, "w", encoding="utf-8") as f:
             f.write(original)
         return {"error": f"Write failed, rolled back: {e}"}
+    if root:
+        _CODE_EDITED.setdefault(root, set()).add(os.path.relpath(p, root))
     if cp:
         _checkpoint_push(root, cp, [os.path.relpath(p, root)], [])
     return {"applied": len(changes), "path": p,
@@ -8323,12 +8446,9 @@ def tool_read_folder(path, extensions=None):
             entry["mime"] = _FOLDER_IMG_MIMES[ext]
             entry["path"] = fp
         elif ext == '.pdf':
-            try:
-                r = subprocess.run(["pdftotext", fp, "-"], capture_output=True, text=True, timeout=30,
-                                   **__import__("hoplita_paths").no_console())
-                entry["content"] = r.stdout[:10_000] if r.returncode == 0 else "(error extrayendo texto)"
-            except Exception:
-                entry["content"] = "(pdftotext no disponible)"
+            import hoplita_pdf
+            _txt, _err = hoplita_pdf.plain_text(fp, 10_000)
+            entry["content"] = _txt if not _err else f"(could not read the text: {_err})"
             entry["type"] = "pdf"
         elif ext in _hoplita_office().OFFICE_EXTS:
             entry["content"] = _hoplita_office().plain_text(fp, 10_000)
@@ -8375,6 +8495,11 @@ def tool_chat_session_save(args):
     prev = next((r for r in _chat_sessions_rows() if r.get("uuid") == sid), None)
     sess["uuid"] = sid
     sess.pop("deleted", None)
+    try:
+        import hoplita_device as _hd
+        sess["writer_device"] = _hd.device_id()
+    except Exception:
+        pass
     sess["rev"] = int((prev or {}).get("rev", 0)) + 1
     sess.setdefault("created_at", (prev or {}).get("created_at") or _chat_now_iso())
     sess["updated_at"] = _chat_now_iso()
@@ -8402,6 +8527,7 @@ def tool_chat_session_list(args):
                     "created_at": r.get("created_at", ""),
                     "updated_at": r.get("updated_at", ""),
                     "pinned_device": r.get("pinned_device") or None,
+                    "sync_id": r.get("sync_id") or "",
                     "n": len(r.get("history") or [])})
     out.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
     return {"sessions": out}
@@ -9648,7 +9774,7 @@ def _ensure_venv_in_path():
         current_path = os.environ.get("PATH", "")
         if scripts_dir not in current_path.split(os.pathsep):
             os.environ["PATH"] = scripts_dir + os.pathsep + current_path
-            print(f"[MCP] venv detectado → PATH += {scripts_dir}")
+            print(f"[MCP] venv found → PATH += {scripts_dir}")
             uvx_path = os.path.join(scripts_dir,
                                      "uvx.exe" if platform.system() == "Windows" else "uvx")
             if os.path.isfile(uvx_path):
@@ -10725,7 +10851,8 @@ def spawn_enroll(req: SpawnEnrollReq):
 @app.get("/agent/pending-approvals")
 def agent_pending_approvals():
     import fed_tools
-    return {"pending": fed_tools.list_pending_approvals()}
+    return {"pending": fed_tools.list_pending_approvals(),
+            "expired": sorted(fed_tools._EXPIRED_APPROVALS)}
 
 
 @app.get("/agent/session-events")
@@ -10824,12 +10951,12 @@ def reload_config_endpoint():
                 fed_agent.configure_deferred(hot=hot_tools,
                                              catalogue=tool_catalogue,
                                              on_tool_used=_tool_used)
-                print(f"[RELOAD] esquemas a demanda ON "
-                      f"(calientes: {len(hot_tools())})")
+                print(f"[RELOAD] schemas on demand ON "
+                      f"(hot: {len(hot_tools())})")
             else:
                 fed_agent.configure_deferred(hot=None, catalogue=None,
                                              on_tool_used=None)
-                print("[RELOAD] esquemas a demanda OFF")
+                print("[RELOAD] schemas on demand OFF")
         except Exception as _e:
             print(f"[RELOAD] ⚠ defer_tool_schemas: {_e}", file=sys.stderr)
 
@@ -10931,6 +11058,9 @@ _ALWAYS_HOT = ("add_fact", "edit_fact", "delete_fact",
                "plan_and_orchestrate", "call_council")
 
 
+_STARTER_HOT = ("run_command", "read_file", "list_dir", "search_web",
+                "scrape_url", "see_image")
+
 _HOT_FROZEN = {}
 
 
@@ -10966,7 +11096,11 @@ def _hot_tools_compute(n=None):
                      if k in allowed and k not in _ALWAYS_HOT
                      and k not in set(_proj)),
                     reverse=True)
-    return base + _proj + [k for _v, k in ranked[:max(0, n - len(base))]]
+    used = [k for _v, k in ranked[:max(0, n - len(base))]]
+    starter = [k for k in _STARTER_HOT
+               if k in allowed and k not in base and k not in used and k not in set(_proj)]
+    used += starter[:max(0, n - len(base) - len(used))]
+    return base + _proj + used
 
 
 _FAMILY_BLURB = {
@@ -11179,6 +11313,95 @@ class CodeJudgeReq(BaseModel):
     command: str = ""
     expect: str
     output: str = ""
+
+
+_TREE_SKIP = {".git", "node_modules", "__pycache__", "venv", ".venv",
+              "dist", "build", ".mypy_cache", ".pytest_cache", "target"}
+
+
+@app.get("/code/tree")
+def code_tree_ep(root: str, limit: int = 4000):
+    root = os.path.expanduser(root or "")
+    if not root or not os.path.isdir(root):
+        return {"root": root, "exists": False, "dirs": [], "files": [], "truncated": False}
+    dirs, files, cut = [], [], False
+    for base, ds, fs in os.walk(root):
+        ds[:] = sorted(d for d in ds if d not in _TREE_SKIP and not d.startswith("."))
+        rel = os.path.relpath(base, root)
+        for d in ds:
+            dirs.append(os.path.normpath(os.path.join(rel, d)))
+        for f in sorted(fs):
+            if f.startswith(".") or f.endswith((".pyc", ".so", ".o")):
+                continue
+            files.append(os.path.normpath(os.path.join(rel, f)))
+            if len(files) >= limit:
+                cut = True
+                break
+        if cut:
+            break
+    return {"root": root, "exists": True, "dirs": dirs, "files": files, "truncated": cut}
+
+
+@app.get("/code/file")
+def code_file_ep(path: str):
+    import base64 as _b64
+    p = os.path.expanduser(path or "")
+    try:
+        raw = open(p, "rb").read()
+        return {"path": p, "b64": _b64.b64encode(raw).decode(),
+                "mtime": os.path.getmtime(p)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+
+
+class CodeStatReq(BaseModel):
+    paths: list = []
+
+
+@app.post("/code/stat")
+def code_stat_ep(req: CodeStatReq):
+    out = {}
+    for p in req.paths[:500]:
+        q = os.path.expanduser(p or "")
+        try:
+            out[p] = {"exists": True, "isdir": os.path.isdir(q), "mtime": os.path.getmtime(q),
+                      "empty": os.path.isdir(q) and not any(True for _ in os.scandir(q))}
+        except OSError:
+            out[p] = {"exists": False, "isdir": False, "mtime": None, "empty": False}
+    return {"stat": out}
+
+
+class CodePathReq(BaseModel):
+    path: str
+    action: str = ""
+
+
+@app.post("/code/mkdir")
+def code_mkdir_ep(req: CodePathReq):
+    p = os.path.expanduser(req.path or "")
+    try:
+        os.makedirs(p, exist_ok=True)
+        return {"ok": True, "path": p}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.post("/code/git")
+def code_git_ep(req: CodePathReq):
+    import subprocess as _sp
+    p = os.path.expanduser(req.path or "")
+    if not os.path.isdir(p):
+        return JSONResponse({"error": f"no such folder: {p}"}, status_code=404)
+    nc = __import__("hoplita_paths").no_console()
+    try:
+        if req.action == "init":
+            r = _sp.run(["git", "-C", p, "init"], capture_output=True, text=True, timeout=30, **nc)
+            return {"ok": r.returncode == 0, "out": (r.stdout + r.stderr).strip()}
+        r = _sp.run(["git", "-C", p, "rev-parse", "--git-dir"], capture_output=True,
+                    text=True, timeout=10, **nc)
+        return {"is_git": r.returncode == 0}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.post("/code/judge")
@@ -12245,6 +12468,13 @@ def route_turn_model(user_query, emit=None):
     def note(key, **args):
         emit({"event": "prep", "note": {"key": key, "args": args}})
 
+    for _n, _m in list(pool.items()):
+        if _server_says_no_tools(_m.get("base_url") or "", _m.get("api_key") or "",
+                                 _m.get("model") or ""):
+            note("router.no_tools", name=_n)
+            pool.pop(_n)
+    if not pool:
+        return None
     note("router.evaluating", models=", ".join(pool))
     options = "\n".join(
         f'  - "{n}"{" [" + m.get("model") + "]" if m.get("model") else ""}: '
@@ -12392,6 +12622,14 @@ def _current_turn_cancel():
 
 
 fed_tools.TURN_STOP_PROBE = _current_turn_cancel
+
+
+def _current_turn_emitter():
+    ctx = getattr(_ORCH, "ctx", None)
+    return getattr(ctx, "emit", None)
+
+
+fed_tools.TURN_EMITTER = _current_turn_emitter
 
 
 @_contextlib.contextmanager
@@ -13111,6 +13349,11 @@ def agent_qa(req: AgentQAReq):
 
 @app.post("/agent/turn")
 def agent_turn(req: AgentTurnReq):
+    return StreamingResponse(_agent_turn_events(req),
+                             media_type="application/x-ndjson")
+
+
+def _agent_turn_events(req):
     import fed_agent
 
     turn_id = req.turn_id or uuid.uuid4().hex[:12]
@@ -13378,7 +13621,7 @@ def agent_turn(req: AgentTurnReq):
                 _AGENT_TURNS.pop(turn_id, None)
             fed_agent.forget_turn(turn_id)
 
-    return StreamingResponse(_stream(), media_type="application/x-ndjson")
+    return _stream()
 
 
 class AgentToolResultReq(BaseModel):
@@ -13514,6 +13757,10 @@ def agent_context_limit(base_url: str = "", api_key: str = "", model: str = ""):
             source = "/props"
     except Exception:
         pass
+    if limit <= 0:
+        _ow = _ollama_window(base_url, api_key, model)
+        if _ow > 0:
+            return {"limit": _ow, "source": "/api/ps"}
     if limit <= 0:
         try:
             r = _http().get(base_url.rstrip("/") + "/models", headers=headers,
@@ -14071,6 +14318,175 @@ def agent_stop(req: AgentStopReq):
     return {"stopped": True, "turn_id": req.turn_id}
 
 
+
+_TIED_MAX_BYTES = 2_800_000
+_TIED_NEVER = ("/shutdown", "/tied/")
+_SERVE = {"host": "127.0.0.1", "port": 9077}
+
+
+def _run_tied_request(r, emit, cancel_flag):
+    import base64 as _b64
+    method = str(r.get("method") or "GET").upper()
+    path = "/" + str(r.get("path") or "").lstrip("/")
+    if any(path == n or path.startswith(n) for n in _TIED_NEVER):
+        emit({"event": "proxy_response", "status": 403, "ctype": "application/json",
+              "body_b64": _b64.b64encode(json.dumps(
+                  {"error": f"{path} is not asked across machines"}).encode()).decode()})
+        return None
+    url = f"http://{_SERVE['host']}:{_SERVE['port']}{path}"
+    if r.get("query"):
+        url += "?" + str(r["query"])
+    headers = {"content-type": r["ctype"]} if r.get("ctype") else {}
+    body = _b64.b64decode(r.get("body_b64") or "")
+    turn = {"id": None}
+    done = threading.Event()
+
+    def _watch():
+        while not done.is_set():
+            if cancel_flag.wait(0.5):
+                if turn["id"]:
+                    agent_stop(AgentStopReq(turn_id=turn["id"]))
+                return
+    threading.Thread(target=_watch, daemon=True, name="tied-stop").start()
+    try:
+        with requests.request(method, url, data=body or None, headers=headers,
+                              stream=True, timeout=(10, None)) as resp:
+            ctype = resp.headers.get("content-type", "")
+            if "ndjson" in ctype:
+                last = None
+                for line in resp.iter_lines():
+                    if cancel_flag.is_set():
+                        break
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    if ev.get("event") == "turn_start":
+                        turn["id"] = ev.get("turn_id")
+                    emit(ev)
+                    last = ev
+                emit({"event": "proxy_end", "status": resp.status_code})
+                return last
+            content = resp.content
+            if (path == "/call" and resp.status_code == 200
+                    and b'"chat_session_save"' in body):
+                try:
+                    _sess = (json.loads(body).get("arguments") or {}).get("session") or {}
+                    emit({"event": "tab_saved", "uuid": _sess.get("uuid") or "",
+                          "sync_id": _sess.get("sync_id") or ""})
+                except Exception:
+                    pass
+            emit({"event": "proxy_response", "status": resp.status_code, "ctype": ctype,
+                  "body_b64": _b64.b64encode(content).decode()})
+            return None
+    except Exception as e:
+        emit({"event": "proxy_response", "status": 502, "ctype": "application/json",
+              "body_b64": _b64.b64encode(json.dumps(
+                  {"error": f"this machine's server did not answer: {e}"}).encode()).decode()})
+        return None
+    finally:
+        done.set()
+
+
+try:
+    import fed_session as _fed_session_mod
+    _fed_session_mod.TIED_REQUEST = _run_tied_request
+except Exception as _e:
+    print(f"[TIED] not available: {_e}", file=sys.stderr)
+
+
+@app.api_route("/tied/{device}/{path:path}",
+               methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def tied_proxy(device: str, path: str, request: Request):
+    import base64 as _b64
+    import fed_session
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import Response
+    body = await request.body()
+    r = {"method": request.method, "path": "/" + path.lstrip("/"),
+         "query": request.url.query or "", "ctype": request.headers.get("content-type", ""),
+         "body_b64": _b64.b64encode(body).decode()}
+    tab = request.headers.get("x-hoplita-tab", "")
+    said = r["path"]
+    if r["path"] == "/agent/turn":
+        try:
+            said = _last_user_said(json.loads(body).get("messages") or []) or said
+        except Exception:
+            pass
+
+    def _json(status, msg):
+        return Response(json.dumps({"error": msg}, ensure_ascii=False), status_code=status,
+                        media_type="application/json")
+    try:
+        me = fed_tools._store().data.get("handle", "")
+    except Exception:
+        me = ""
+    if not me:
+        return _json(409, "no federated identity here: a tab can only be tied "
+                          "between machines of one identity")
+    if len(body) > _TIED_MAX_BYTES:
+        return _json(413, f"this request is {len(body) // 1_000_000} MB, more than one "
+                          f"envelope carries to the tied machine")
+    q = _queue.Queue()
+    cancel_ev = threading.Event()
+
+    def _run():
+        try:
+            orig = fed_session.SessionOriginator(
+                me, q.put, device=device, tab=tab, extra={"tied_request": r})
+            term = orig.start(str(said)[:4000], None, should_stop=cancel_ev.is_set)
+        except Exception as e:
+            term = {"event": "error", "error": f"the tied machine could not be reached: {e}"}
+        q.put({"__end__": term})
+    threading.Thread(target=_run, daemon=True, name="tied-proxy").start()
+
+    def _next():
+        while True:
+            try:
+                ev = q.get(timeout=30)
+            except _queue.Empty:
+                return {"event": "tick"}
+            if ev.get("event") in ("session_open", "session_ack", "tab_saved", "queued"):
+                continue
+            return ev
+
+    first = await run_in_threadpool(_next)
+    while first.get("event") == "tick":
+        if await request.is_disconnected():
+            cancel_ev.set()
+            return _json(499, "closed")
+        first = await run_in_threadpool(_next)
+    if "__end__" in first:
+        term = first["__end__"] or {}
+        return _json(502, term.get("error") or "the tied machine ended without an answer")
+    if first.get("event") == "proxy_response":
+        return Response(_b64.b64decode(first.get("body_b64") or ""),
+                        status_code=int(first.get("status") or 200),
+                        media_type=first.get("ctype") or None)
+
+    def _stream():
+        ev = first
+        try:
+            while True:
+                if "__end__" in ev:
+                    term = ev["__end__"] or {}
+                    if term.get("event") == "error":
+                        yield json.dumps(term, ensure_ascii=False) + "\n"
+                    return
+                if ev.get("event") == "proxy_end":
+                    return
+                if ev.get("event") == "tick":
+                    yield "\n"
+                else:
+                    yield json.dumps(ev, ensure_ascii=False) + "\n"
+                ev = _next()
+        finally:
+            cancel_ev.set()
+    return StreamingResponse(_stream(), media_type="application/x-ndjson")
+
+
 class HandsControlReq(BaseModel):
     turn_id: str = ""
     action: str = "status"
@@ -14428,12 +14844,18 @@ def lessons_delete(lesson_id: str):
 
 
 def _scrub_startup_env(name):
-    if platform.system() != "Linux":
+    system = platform.system()
+    if system not in ("Linux", "Darwin"):
         return
     try:
         import ctypes
         libc = ctypes.CDLL(None)
-        env = ctypes.POINTER(ctypes.c_void_p).in_dll(libc, "environ")
+        if system == "Darwin":
+            get_env = libc._NSGetEnviron
+            get_env.restype = ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))
+            env = get_env().contents
+        else:
+            env = ctypes.POINTER(ctypes.c_void_p).in_dll(libc, "environ")
         key = (name + "=").encode()
         i = 0
         while env[i]:
@@ -14445,7 +14867,24 @@ def _scrub_startup_env(name):
         print(f"[VAULT] could not scrub the start-up environment: {e}", file=sys.stderr)
 
 
-def _get_vault_password():
+def _gave_up(why):
+    try:
+        from hoplita_paths import hoplita_base
+        with open(os.path.join(hoplita_base(), "hoplita-mcp.gaveup"), "w", encoding="utf-8") as f:
+            json.dump({"at": time.time(), "why": why}, f)
+    except Exception:
+        pass
+    if os.environ.get("HOPLITA_GUI_PROMPT") == "1":
+        try:
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            QApplication.instance() or QApplication(sys.argv)
+            QMessageBox.critical(None, "HOPLITA MCP", why)
+        except Exception:
+            pass
+    sys.exit(1)
+
+
+def _get_vault_password(note=""):
     from hoplita_i18n import t as _t
     env_pwd = os.environ.get("HOPLITA_VAULT_PASSWORD")
     if env_pwd:
@@ -14455,8 +14894,21 @@ def _get_vault_password():
         print("🔐 " + _t("mcp.password_from_env"))
         return env_pwd
     force_gui = os.environ.get("HOPLITA_GUI_PROMPT") == "1"
+    _new = not os.path.exists(os.path.join(hoplita_base(), "hoplita.db"))
+    _joins = _new and os.path.exists(os.path.join(hoplita_base(), "fed_identity.json.encrypted"))
     if not force_gui and sys.stdin and sys.stdin.isatty():
-        return getpass.getpass("🔐 " + _t("mcp.vault_prompt") + " ")
+        if not _new:
+            return getpass.getpass("🔐 " + _t("mcp.vault_prompt_known") + " ")
+        if _joins:
+            print(_t("mcp.vault_join"))
+            return getpass.getpass("🔐 " + _t("mcp.vault_join_prompt") + " ")
+        while True:
+            print("⚠ " + _t("mcp.vault_new_head"))
+            print(_t("mcp.vault_new"))
+            p1 = getpass.getpass("🔐 " + _t("mcp.vault_new_prompt") + " ")
+            if p1 and p1 == getpass.getpass("🔐 " + _t("mcp.vault_again") + " "):
+                return p1
+            print(_t("mcp.vault_mismatch"))
     print("🔐 " + _t("mcp.vault_qt_dialog"), file=sys.stderr)
     try:
         from PyQt6.QtWidgets import QApplication, QInputDialog, QLineEdit
@@ -14469,13 +14921,59 @@ def _get_vault_password():
             "QPushButton { background:#3b82f6; color:white; border:none; "
             "border-radius:6px; padding:6px 16px; font-weight:bold; }"
             "QPushButton:hover { background:#2563eb; }")
-        pwd, ok_pressed = QInputDialog.getText(
-            None, "HOPLITA MCP", "🔐 " + _t("mcp.vault_prompt"),
-            QLineEdit.EchoMode.Password)
-        if not ok_pressed:
-            print("❌ " + _t("mcp.vault_cancelled"), file=sys.stderr)
-            sys.exit(1)
-        return pwd
+        from PyQt6.QtCore import Qt as _Qt, QTimer as _QT
+        dlg = QInputDialog()
+        dlg.setWindowTitle("HOPLITA MCP")
+        dlg.setTextEchoMode(QLineEdit.EchoMode.Password)
+        dlg.setWindowFlag(_Qt.WindowType.WindowStaysOnTopHint, True)
+
+        def _front():
+            dlg.raise_()
+            dlg.activateWindow()
+            if sys.platform == "darwin":
+                import mac_dialogs
+                mac_dialogs.activate_app()
+        _QT.singleShot(0, _front)
+        _keep = _QT(dlg)
+        _keep.timeout.connect(lambda: dlg.isActiveWindow() or _front())
+        _keep.start(1500)
+        _QT.singleShot(15000, _keep.stop)
+
+        def _ask(label):
+            dlg.setTextValue("")
+            dlg.setLabelText(label)
+            from PyQt6.QtWidgets import QLabel as _QL
+            for _lb in dlg.findChildren(_QL):
+                _lb.setWordWrap(True)
+            dlg.setFixedWidth(460)
+            ok_pressed = dlg.exec() == 1
+            if not ok_pressed:
+                print("❌ " + _t("mcp.vault_cancelled"), file=sys.stderr)
+                _gave_up(_t("mcp.vault_cancelled_gui"))
+            return dlg.textValue()
+
+        if not _new:
+            return _ask((note + "\n\n" if note else "") + "🔐 " + _t("mcp.vault_prompt_known"))
+        if _joins:
+            import html as _html_mod
+            dlg.setWindowTitle(_t("mcp.vault_join_title"))
+            return _ask('<p style="color:#93c5fd;font-weight:bold;font-size:15px;">'
+                        + _html_mod.escape(_t("mcp.vault_join_head")) + "</p><p>"
+                        + _html_mod.escape(_t("mcp.vault_join")) + "</p>"
+                        + ('<p style="color:#f87171;">' + _html_mod.escape(note) + "</p>" if note else "")
+                        + "<p>🔐 " + _html_mod.escape(_t("mcp.vault_join_prompt")) + "</p>")
+        import html as _html_mod
+        dlg.setWindowTitle(_t("mcp.vault_new_title"))
+        _warn = ('<p style="color:#fbbf24;font-weight:bold;font-size:15px;">'
+                 + _html_mod.escape(_t("mcp.vault_new_head")) + "</p><p>"
+                 + _html_mod.escape(_t("mcp.vault_new")) + "</p>")
+        _note = note
+        while True:
+            p1 = _ask(_warn + ('<p style="color:#f87171;">' + _html_mod.escape(_note) + "</p>" if _note else "")
+                      + "<p>🔐 " + _html_mod.escape(_t("mcp.vault_new_prompt")) + "</p>")
+            if p1 and p1 == _ask(_warn + "<p>🔐 " + _html_mod.escape(_t("mcp.vault_again")) + "</p>"):
+                return p1
+            _note = _t("mcp.vault_mismatch")
     except ImportError:
         print("❌ " + _t("mcp.vault_no_qt"), file=sys.stderr)
         print("   " + _t("mcp.vault_no_qt_hint1"), file=sys.stderr)
@@ -14605,26 +15103,29 @@ if __name__ == "__main__":
             print(f"     Linux/Mac:  fuser -k {args.port}/tcp")
         sys.exit(1)
 
+    try:
+        from hoplita_paths import hoplita_base as _hb
+        os.remove(os.path.join(_hb(), "hoplita-mcp.gaveup"))
+    except OSError:
+        pass
     password = _get_vault_password()
-    if not password:
-        print("❌ " + _t("mcp.empty_password")); sys.exit(1)
 
     try:
         _attempt = 0
         while True:
             try:
+                if not password:
+                    raise VaultPasswordError("empty")
                 init_managers(password)
                 break
             except VaultPasswordError:
                 _attempt += 1
                 if _attempt >= 3:
                     print(_t("mcp.wrong_password_final"))
-                    sys.exit(1)
+                    _gave_up(_t("mcp.wrong_password_final_gui"))
                 print(_t("mcp.wrong_password"))
-                password = _get_vault_password()
-                if not password:
-                    print("❌ " + _t("mcp.empty_password"))
-                    sys.exit(1)
+                password = _get_vault_password(
+                    note=_t("mcp.wrong_password_try", n=_attempt + 1, of=3))
         register_tools()
         register_tool_params()
         register_hands_tools()
@@ -14688,9 +15189,9 @@ if __name__ == "__main__":
                 fed_agent.configure_deferred(hot=hot_tools,
                                              catalogue=tool_catalogue,
                                              on_tool_used=_tool_used)
-                print(f"[MCP] ✓ esquemas a demanda "
-                      f"(calientes: {len(hot_tools())}, "
-                      f"estante: {len(tool_catalogue(hot_tools()))})")
+                print(f"[MCP] ✓ schemas on demand "
+                      f"(hot: {len(hot_tools())}, "
+                      f"shelf: {len(tool_catalogue(hot_tools()))})")
             print("[MCP] ✓ MCP agentic loop configured")
         except Exception as _e:
             print(f"[MCP] ⚠ MCP agentic loop failed to configure: {_e}")
@@ -14739,4 +15240,6 @@ if __name__ == "__main__":
     print(f"\n  ✓ {len(TOOLS)} tools\n  ✓ http://{args.host}:{args.port}\n")
     print(f"[HOPLITA MCP] {_ver.long_label()} starting on "
           f"{args.host}:{args.port}")
+    _SERVE["host"] = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
+    _SERVE["port"] = args.port
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

@@ -15,7 +15,8 @@ _heavy_tools = ("browse_web",)
 _translate = None
 _get_max_tokens = None
 
-TERMINAL_EVENTS = ("reply", "cancelled", "iteration_limit", "error")
+TERMINAL_EVENTS = ("reply", "cancelled", "iteration_limit", "error",
+                   "proxy_response", "proxy_end")
 
 NEVER_DELEGATE = ("plan_and_orchestrate", "intent", "call_council",
                   "edit_my_config")
@@ -1561,6 +1562,8 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 if getattr(e, "overflow", False):
                     emit({"event": "context_overflow", "prompt": e.prompt,
                           "reply": e.reply, "window": e.window})
+                    break
+                if getattr(e, "no_retry", False):
                     break
                 if _try < 2:
                     emit({"event": "tool_progress", "key": "chat.llm_retry",

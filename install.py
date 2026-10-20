@@ -91,7 +91,7 @@ def make_shortcuts(prefix, venv_dir):
     if IS_LINUX:
         return _make_linux_desktop(desk, prefix, py, pyw, mcp_script, gui_script, icon_png)
     if IS_MAC:
-        return _make_mac_command(desk, prefix, py, mcp_script, gui_script)
+        return _make_mac_app(desk, prefix, py, icon_png)
     if IS_WINDOWS:
         return _make_windows_lnk(desk, prefix, py, pyw, mcp_script, gui_script, icon_png)
     return []
@@ -133,22 +133,117 @@ def _make_linux_desktop(desk, prefix, py, pyw, mcp, gui, icon):
     return created
 
 
-def _make_mac_command(desk, prefix, py, mcp, gui):
+_MAC_APP = "HOPLITA.app"
+_MAC_OLD = ("HOPLITA-MCP.command", "HOPLITA-GUI.command")
+
+
+def _make_mac_app(desk, prefix, py, icon_png):
     created = []
-    entries = [
-        ("HOPLITA-MCP.command", f'cd "{prefix}" && "{py}" hoplita-mcp.py'),
-        ("HOPLITA-GUI.command", f'cd "{prefix}" && "{py}" hoplita-gui.py'),
-    ]
-    for fname, cmd in entries:
-        path = os.path.join(desk, fname)
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(f"#!/bin/bash\n{cmd}\n")
-            os.chmod(path, 0o755)
-            created.append(path)
-        except Exception as e:
-            warn(f"could not create {fname}: {e}")
+    py = _mac_named_interpreter(os.path.dirname(os.path.dirname(py))) or py
+    apps = os.path.expanduser("~/Applications")
+    os.makedirs(apps, exist_ok=True)
+    app = os.path.join(apps, _MAC_APP)
+    macos = os.path.join(app, "Contents", "MacOS")
+    res = os.path.join(app, "Contents", "Resources")
+    try:
+        os.makedirs(macos, exist_ok=True)
+        os.makedirs(res, exist_ok=True)
+        exe = os.path.join(macos, "HOPLITA")
+        with open(exe, "w", encoding="utf-8") as f:
+            f.write("#!/bin/bash\n"
+                    f'cd "{prefix}"\n'
+                    f'"{py}" "{os.path.join(prefix, "hoplita_launch.py")}"\n')
+        os.chmod(exe, 0o755)
+        icon_key = ""
+        if os.path.exists(icon_png) and _mac_icns(icon_png, os.path.join(res, "hoplita.icns")):
+            icon_key = "  <key>CFBundleIconFile</key><string>hoplita</string>\n"
+        with open(os.path.join(app, "Contents", "Info.plist"), "w", encoding="utf-8") as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                    '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                    '<plist version="1.0"><dict>\n'
+                    "  <key>CFBundleName</key><string>HOPLITA</string>\n"
+                    "  <key>CFBundleDisplayName</key><string>HOPLITA</string>\n"
+                    "  <key>CFBundleIdentifier</key><string>net.hoplita.launcher</string>\n"
+                    "  <key>CFBundleExecutable</key><string>HOPLITA</string>\n"
+                    "  <key>CFBundlePackageType</key><string>APPL</string>\n"
+                    "  <key>CFBundleShortVersionString</key><string>1.0</string>\n"
+                    "  <key>LSUIElement</key><true/>\n"
+                    + icon_key +
+                    "</dict></plist>\n")
+        created.append(app)
+    except Exception as e:
+        warn(f"could not create {_MAC_APP}: {e}")
+        return created
+    link = os.path.join(desk, _MAC_APP)
+    try:
+        if os.path.islink(link):
+            os.remove(link)
+        elif os.path.isdir(link) and _shortcut_is_ours(link, prefix):
+            shutil.rmtree(link)
+        if not os.path.exists(link):
+            os.symlink(app, link)
+            created.append(link)
+    except Exception as e:
+        warn(f"could not put {_MAC_APP} on the desktop: {e}")
+    for old in _MAC_OLD:
+        p = os.path.join(desk, old)
+        if os.path.exists(p) and _shortcut_is_ours(p, prefix):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
     return created
+
+
+def _mac_named_interpreter(venv_dir):
+    import filecmp
+    real = os.path.realpath(os.path.join(venv_dir, "bin", "python"))
+    dst = os.path.join(venv_dir, "bin", "HOPLITA")
+    cfg = os.path.join(venv_dir, "pyvenv.cfg")
+    try:
+        lines = open(cfg, encoding="utf-8").read().splitlines()
+        want = os.path.dirname(real)
+        fixed = [f"home = {want}" if l.startswith("home =") else l for l in lines]
+        if fixed != lines:
+            with open(cfg, "w", encoding="utf-8") as f:
+                f.write("\n".join(fixed) + "\n")
+        if not (os.path.exists(dst) and filecmp.cmp(real, dst, shallow=False)):
+            shutil.copy2(real, dst)
+            subprocess.run(["codesign", "-s", "-", "--force", "--identifier",
+                            "net.hoplita.HOPLITA", dst], capture_output=True, timeout=60)
+        r = subprocess.run([dst, "-c", "import sys, encodings"], capture_output=True, timeout=60)
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr or b"").decode(errors="replace")[-200:])
+        return dst
+    except Exception as e:
+        warn(f"HOPLITA runs as python on this Mac (permissions are asked for "
+             f"python3.12): {e}")
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        return None
+
+
+def _mac_icns(png, icns):
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="hoplita-icon-")
+    iconset = os.path.join(tmp, "hoplita.iconset")
+    try:
+        os.makedirs(iconset)
+        for size in (16, 32, 128, 256, 512):
+            for scale, name in ((1, f"icon_{size}x{size}.png"), (2, f"icon_{size}x{size}@2x.png")):
+                subprocess.run(["sips", "-z", str(size * scale), str(size * scale), png,
+                                "--out", os.path.join(iconset, name)],
+                               capture_output=True, timeout=30, check=True)
+        subprocess.run(["iconutil", "-c", "icns", iconset, "-o", icns],
+                       capture_output=True, timeout=30, check=True)
+        return os.path.exists(icns)
+    except Exception:
+        return False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _make_windows_lnk(desk, prefix, py, pyw, mcp, gui, icon):
@@ -194,6 +289,7 @@ def compile_cli(prefix):
     r = run(["go", "build", "-o", out, "."], cwd=cli_dir, env=env)
     if r.returncode == 0:
         ok(f"CLI built: {out}")
+        _link_cli(out)
         return
     warn("CLI build failed.")
     if os.path.exists(out):
@@ -208,6 +304,32 @@ def compile_cli(prefix):
               "orphan from an older version — it gets shipped and compiled "
               "even though nobody imports it. `scp -r` MERGES into an existing "
               "dir and leaves such files behind; `rsync -a --delete` mirrors.")
+
+
+def _cli_link_path():
+    return os.path.join(os.path.expanduser("~"), ".local", "bin", "hoplita-cli")
+
+
+def _link_cli(out):
+    if IS_WINDOWS:
+        print(f"   · run it as: {out}")
+        return
+    link = _cli_link_path()
+    try:
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        if os.path.islink(link) or os.path.exists(link):
+            os.remove(link)
+        os.symlink(out, link)
+        ok(f"`hoplita-cli` → {link}")
+    except Exception as e:
+        warn(f"could not link {link}: {e}")
+        print(f"   · run it as: {out}")
+        return
+    bindir = os.path.dirname(link)
+    if bindir not in os.environ.get("PATH", "").split(os.pathsep):
+        shell_rc = "~/.zshrc" if IS_MAC else "~/.bashrc"
+        warn(f"{bindir} is not in your PATH: add it, then open a new terminal:")
+        print(f"   echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> {shell_rc}")
 
 
 MANIFEST = ".hoplita-installed.json"
@@ -254,12 +376,17 @@ _OURS_FILES = ("config.ini.example", "README.md", MANIFEST)
 def _shortcut_paths():
     desk = desktop_dir()
     names = {"Linux": ("HOPLITA-MCP.desktop", "HOPLITA-GUI.desktop"),
-             "Darwin": ("HOPLITA-MCP.command", "HOPLITA-GUI.command"),
+             "Darwin": (_MAC_APP,) + _MAC_OLD,
              "Windows": ("HOPLITA.lnk",)}.get(platform.system(), ())
-    return [os.path.join(desk, n) for n in names]
+    out = [os.path.join(desk, n) for n in names]
+    if IS_MAC:
+        out.append(os.path.join(os.path.expanduser("~/Applications"), _MAC_APP))
+    return out
 
 
 def _shortcut_is_ours(path, prefix):
+    if path.endswith(".app"):
+        path = os.path.join(path, "Contents", "MacOS", "HOPLITA")
     if path.endswith(".lnk"):
         return os.path.normcase(prefix) == os.path.normcase(default_prefix())
     try:
@@ -268,11 +395,31 @@ def _shortcut_is_ours(path, prefix):
         return False
 
 
+def _cache_paths():
+    home = os.path.expanduser("~")
+    app = "HOPLITA Chat Assistant"
+    out = [os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(home, ".cache"),
+                        "hoplita")]
+    if IS_MAC:
+        out += [os.path.join(home, "Library", "Caches", app),
+                os.path.join(home, "Library", "Application Support", app)]
+    elif IS_WINDOWS:
+        local = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+        out += [os.path.join(local, app)]
+    else:
+        out += [os.path.join(home, ".cache", app),
+                os.path.join(home, ".local", "share", app)]
+    return [p for p in out if os.path.exists(p)]
+
+
 def _settings_paths():
     home = os.path.expanduser("~")
     if IS_WINDOWS:
         return []
     if IS_MAC:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        if xdg:
+            return [os.path.join(xdg, "hoplita")]
         return [os.path.join(home, "Library", "Preferences", "com.hoplita.hoplita.plist")]
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
     return [os.path.join(base, "hoplita")]
@@ -320,6 +467,10 @@ def uninstall(prefix, purge=False, yes=False):
     program = _program_entries(prefix)
     shortcuts = [p for p in _shortcut_paths()
                  if os.path.exists(p) and _shortcut_is_ours(p, prefix)]
+    caches = _cache_paths()
+    _cl = _cli_link_path()
+    if os.path.islink(_cl) and os.path.realpath(_cl).startswith(os.path.realpath(prefix) + os.sep):
+        caches.append(_cl)
     ours = {p for p, _d in program}
     data = sorted(os.path.join(prefix, f) for f in os.listdir(prefix)
                   if os.path.join(prefix, f) not in ours)
@@ -329,7 +480,7 @@ def uninstall(prefix, purge=False, yes=False):
     print("\nProgram (removed):")
     for p, is_dir in program:
         print(f"  - {p}{os.sep if is_dir else ''}")
-    for p in shortcuts:
+    for p in shortcuts + caches:
         print(f"  - {p}")
     print("\nYour data (" + ("REMOVED with --purge" if purge else "KEPT") + "):")
     for p in data + extra_data:
@@ -363,7 +514,7 @@ def uninstall(prefix, purge=False, yes=False):
 
     for p, _d in program:
         _rm(p)
-    for p in shortcuts:
+    for p in shortcuts + caches:
         _rm(p)
     if purge:
         for p in data + extra_data:
@@ -764,6 +915,13 @@ def main():
         args.browser = args.cli = args.system_libs = args.desktop = args.diffr = True
 
     prefix = resolve_prefix(args.prefix)
+    if os.path.exists(prefix) and os.path.samefile(prefix, SRC_DIR):
+        err(f"The install folder {prefix} is this source folder "
+            f"({SRC_DIR}) — on macOS, folder names ignore letter case.")
+        err("  Install somewhere else:  python3 install.py --prefix ~/hoplita-app")
+        err("  or clone into another name:  git clone "
+            "https://github.com/HoplitaAI/Hoplita.git hoplita-src")
+        sys.exit(2)
     if not args.prefix and prefix == LEGACY_PREFIX:
         print(f"Existing install found in {LEGACY_PREFIX}: using it "
               f"(--prefix picks another folder).")
@@ -800,6 +958,8 @@ def main():
         if args.diffr:
             install_diffr(prefix)
         _report_new_settings(prefix)
+        if IS_MAC and not args.no_shortcuts:
+            make_shortcuts(prefix, os.path.join(prefix, "venv"))
         step("Clearing bytecode caches")
         n = 0
         for root, dirs, _ in os.walk(prefix):
@@ -841,7 +1001,8 @@ def main():
 
     venv_dir = os.path.join(prefix, "venv")
     if not os.path.isdir(venv_dir):
-        run([sys.executable, "-m", "venv", venv_dir], check=True)
+        base = os.path.realpath(sys.executable) if IS_MAC else sys.executable
+        run([base, "-m", "venv", venv_dir], check=True)
         ok("venv created")
     else:
         ok("venv already exists (reused)")
@@ -900,7 +1061,7 @@ def main():
         step("Creating desktop shortcuts")
         shortcuts = make_shortcuts(prefix, venv_dir)
         for s in shortcuts:
-            ok(f"Shortcut: {os.path.basename(s)}")
+            ok(f"Shortcut: {s}")
         if not shortcuts:
             warn("No shortcuts created (check desktop permissions).")
 
@@ -934,7 +1095,14 @@ def main():
     print("\n" + _c("32;1", "═" * 44))
     print(_c("32;1", "  Install complete"))
     print(_c("32;1", "═" * 44))
-    if shortcuts:
+    if shortcuts and IS_MAC:
+        print("\nOpen HOPLITA: double-click HOPLITA on the desktop, or ⌘ Space → HOPLITA.")
+        print("It asks for the vault password in a window (the first time you choose it),")
+        print("then opens. No terminal is needed.")
+    elif shortcuts and IS_WINDOWS:
+        print("\nOpen HOPLITA with the HOPLITA shortcut on the desktop: it asks for the")
+        print("vault password in a window (the first time you choose it), then opens.")
+    elif shortcuts:
         print("\nYou have 2 desktop shortcuts:")
         print("  • HOPLITA MCP Server  → start it FIRST (asks for the vault password)")
         print("  • HOPLITA             → the GUI (start it afterwards)")

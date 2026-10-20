@@ -56,6 +56,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QObject, QTimer
 )
+if sys.platform == "darwin" and os.environ.get("XDG_CONFIG_HOME"):
+    from PyQt6.QtCore import QSettings as _QS
+    _QS.setDefaultFormat(_QS.Format.IniFormat)
+    _QS.setPath(_QS.Format.IniFormat, _QS.Scope.UserScope, os.environ["XDG_CONFIG_HOME"])
 from PyQt6.QtGui import (
     QFont, QColor, QTextCharFormat, QTextCursor, QIcon,
     QPixmap, QAction, QPainter,
@@ -1001,6 +1005,76 @@ class PlainTextEditor(QTextEdit):
         super().mouseMoveEvent(e)
 
 
+def _mac_menu_name(name):
+    try:
+        import ctypes, ctypes.util
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        ctypes.cdll.LoadLibrary(ctypes.util.find_library("Foundation"))
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+
+        def send(obj, sel, *args, argtypes=()):
+            fn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                  *argtypes)(("objc_msgSend", objc))
+            return fn(obj, objc.sel_registerName(sel), *args)
+
+        def nsstr(text):
+            return send(objc.objc_getClass(b"NSString"), b"stringWithUTF8String:",
+                        text.encode(), argtypes=(ctypes.c_char_p,))
+
+        info = send(send(objc.objc_getClass(b"NSBundle"), b"mainBundle"), b"infoDictionary")
+        if info:
+            send(info, b"setObject:forKey:", nsstr(name), nsstr("CFBundleName"),
+                 argtypes=(ctypes.c_void_p, ctypes.c_void_p))
+    except Exception as e:
+        print(f"[GUI] menu bar name not set: {e}", file=sys.stderr)
+
+
+class _MacLight(QWidget):
+
+    clicked = pyqtSignal()
+
+    _COLOURS = {"close": ("#ff5f57", "#e0443e"), "min": ("#febc2e", "#dea123"),
+                "zoom": ("#28c840", "#1aab29")}
+    _SIGNS = {"close": "×", "min": "−", "zoom": "+"}
+
+    def __init__(self, kind, parent=None):
+        super().__init__(parent)
+        self._kind = kind
+        self._lit = False
+        self.setFixedSize(12, 12)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.clicked.emit()
+
+    def light(self, on):
+        if on != self._lit:
+            self._lit = on
+            self.update()
+
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QColor, QPen, QFont
+        fill, edge = self._COLOURS[self._kind]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor(edge), 0.8))
+        p.setBrush(QColor(fill))
+        p.drawEllipse(self.rect().adjusted(1, 1, -1, -1))
+        if self._lit:
+            f = QFont()
+            f.setPixelSize(11)
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(QColor(0, 0, 0, 150))
+            p.drawText(self.rect().adjusted(0, -1, 0, -1),
+                       Qt.AlignmentFlag.AlignCenter, self._SIGNS[self._kind])
+        p.end()
+
+
 class CustomTitleBar(QWidget):
 
     def __init__(self, parent, title=""):
@@ -1014,6 +1088,29 @@ class CustomTitleBar(QWidget):
 
         self.title_lbl = QLabel(title)
         self.title_lbl.setObjectName("title_label")
+        if sys.platform == "darwin":
+            lay.setContentsMargins(14, 0, 14, 0)
+            lights = QWidget(self)
+            ll = QHBoxLayout(lights)
+            ll.setContentsMargins(0, 0, 0, 0)
+            ll.setSpacing(8)
+            self._lights = []
+            for kind, slot in (("close", self._close), ("min", self._minimize),
+                               ("zoom", self._toggle_max)):
+                b = _MacLight(kind, lights)
+                b.setObjectName(f"title_mac_{kind}")
+                b.clicked.connect(slot)
+                ll.addWidget(b)
+                self._lights.append(b)
+            lights.installEventFilter(self)
+            lights.setFixedWidth(lights.sizeHint().width())
+            lay.addWidget(lights)
+            lay.addStretch(1)
+            self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lay.addWidget(self.title_lbl)
+            lay.addStretch(1)
+            lay.addSpacing(lights.width())
+            return
         lay.addWidget(self.title_lbl)
         lay.addStretch(1)
 
@@ -1027,6 +1124,13 @@ class CustomTitleBar(QWidget):
             b.setFixedSize(32, 26)
             b.clicked.connect(slot)
             lay.addWidget(b)
+
+    def eventFilter(self, obj, ev):
+        from PyQt6.QtCore import QEvent
+        if ev.type() in (QEvent.Type.Enter, QEvent.Type.Leave):
+            for b in getattr(self, "_lights", []):
+                b.light(ev.type() == QEvent.Type.Enter)
+        return False
 
     def _minimize(self):
         self._win.showMinimized()
@@ -1358,6 +1462,19 @@ def _canon_cmd(msg):
 
 
 
+_TAB_TOOL_PREFIXES = ("code_", "git_", "fed_code_")
+_TAB_TOOLS = {"working_memory_forget", "run_command", "wb_delete",
+              "fed_share_code", "fed_accept_code"}
+
+
+_SCREEN_TOOLS = ("sticky_note", "render_html", "dashboard_render", "canvas_undo",
+                 "canvas_see", "canvas_eval", "alert")
+
+
+def _tool_is_tabs(tool):
+    return tool in _TAB_TOOLS or tool.startswith(_TAB_TOOL_PREFIXES)
+
+
 def _Face_call_project(face):
     try:
         return getattr(face._turn_ctx(), "code_project", "") or ""
@@ -1416,6 +1533,8 @@ class ChatAssistantWindow(QMainWindow):
         self._tls = threading.local()
         self._enchant_t0 = {}
         self._session_waiting = set()
+        self._session_acked = set()
+        self._session_models = {}
         self._session_queue = {}
         self._stream_bufs = {}
         self._stream_live_tab = None
@@ -1566,18 +1685,39 @@ class ChatAssistantWindow(QMainWindow):
         dlg.setWindowModality(_Qt.WindowModality.ApplicationModal)
         dlg.setMinimumDuration(0)
         dlg.setCancelButton(None)
+        dlg.setAttribute(_Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        dlg.setWindowFlag(_Qt.WindowType.WindowDoesNotAcceptFocus, True)
         dlg.show()
+        try:
+            _g = dlg.screen().availableGeometry()
+            dlg.move(_g.center().x() - dlg.width() // 2,
+                     _g.center().y() + _g.height() // 5)
+        except Exception:
+            pass
         from PyQt6.QtWidgets import QApplication as _QApp
         _QApp.processEvents()
 
         deadline = _time.time() + timeout_s
+        import hoplita_paths
+        _since = _time.time() - 5
+        _gave = os.path.join(hoplita_paths.hoplita_base(), "hoplita-mcp.gaveup")
+        _why = ""
         while _time.time() < deadline:
             _time.sleep(2)
             _QApp.processEvents()
             self._check_mcp()
             if self._mcp_available:
                 break
+            try:
+                if os.path.getmtime(_gave) >= _since:
+                    with open(_gave, encoding="utf-8") as _f:
+                        _why = (json.load(_f) or {}).get("why", "")
+                    break
+            except (OSError, ValueError):
+                pass
         dlg.close()
+        if _why:
+            QMessageBox.warning(self, "HOPLITA", t("gui.mcp_gave_up", why=_why))
 
     def _check_mcp(self):
         try:
@@ -1920,15 +2060,17 @@ class ChatAssistantWindow(QMainWindow):
         except Exception as e:
             print(f"[GUI] bg callback failed: {e}")
 
-    def _mcp_try(self, tool, arguments, timeout=10):
+    def _mcp_try(self, tool, arguments, timeout=10, url=None):
         try:
-            r = requests.post(f"{self._mcp_url}/call",
+            if url is None:
+                url = self._tab_url() if _tool_is_tabs(tool) else self._mcp_url
+            r = requests.post(f"{url}/call",
                               json={"tool": tool, "arguments": arguments,
                                     "code_project": _Face_call_project(self),
                                     "turn_id": getattr(getattr(self, "_tls", None), "turn_id", "") or ""},
-                              timeout=timeout)
+                              headers=self._tab_headers(), timeout=timeout)
             if r.status_code != 200:
-                return False, {}, f"HTTP {r.status_code}"
+                return False, {}, self._http_error(r)
             result = (r.json() or {}).get("result", {})
             if not isinstance(result, dict):
                 return True, {}, ""
@@ -1940,19 +2082,20 @@ class ChatAssistantWindow(QMainWindow):
         except Exception as e:
             return False, {}, str(e)
 
-    def _mcp_call_json(self, tool, arguments, timeout=10):
-        ok, data, _ = self._mcp_try(tool, arguments, timeout)
+    def _mcp_call_json(self, tool, arguments, timeout=10, url=None):
+        ok, data, _ = self._mcp_try(tool, arguments, timeout, url=url)
         return data if ok else {}
 
     def _mcp_call(self, tool, arguments):
         try:
             timeout = 900 if tool in ("browse_web", "screenshot_web") else self.config.getint("CHAT", "timeout", fallback=120)
             print(f"[MCP_CALL] {tool} timeout={timeout}")
-            r = requests.post(f"{self._mcp_url}/call",
+            url = self._tab_url() if _tool_is_tabs(tool) else self._mcp_url
+            r = requests.post(f"{url}/call",
                               json={"tool": tool, "arguments": arguments,
                                     "code_project": _Face_call_project(self),
                                     "turn_id": getattr(getattr(self, "_tls", None), "turn_id", "") or ""},
-                              timeout=timeout)
+                              headers=self._tab_headers(), timeout=timeout)
             if r.status_code == 200:
                 data = r.json()
                 result = data.get("result", {})
@@ -1979,8 +2122,35 @@ class ChatAssistantWindow(QMainWindow):
         self._switch_chat_tab(tid)
         self._append_html_to_tab(tid, self._chat_frag(
             t("fed.child_opened_chat" if self._is_local_child(peer)
-              else "fed.session_opened_chat", peer=peer),
+              else "fed.session_tab_ready", peer=peer),
             "#94a3b8", t("label.system")))
+
+    def _session_command(self, active, msg):
+        _cmd = msg.strip().split()[0].lower()
+        if active.get("kind") == "red":
+            self._append_html_to_tab(active["id"], self._chat_frag(
+                t("fed.session_cmd_red", peer=active["peer"], cmd=_cmd),
+                "#94a3b8", t("label.system")))
+        elif _cmd == "/model" and len(msg.split()) > 1:
+            self._append_html_to_tab(active["id"], self._chat_frag(
+                t("fed.session_model_not_here", peer=active["peer"]),
+                "#94a3b8", t("label.system")))
+        elif _cmd == "/model":
+            _m = self._session_models.get(active["id"])
+            self._append_html_to_tab(active["id"], self._chat_frag(
+                t("fed.session_model", peer=active["peer"], model=_m) if _m
+                else t("fed.session_model_unknown", peer=active["peer"]),
+                "#94a3b8", t("label.system")))
+        else:
+            self._append_html_to_tab(active["id"], self._chat_frag(
+                t("fed.session_cmd_local", peer=active["peer"], cmd=_cmd),
+                "#94a3b8", t("label.system")))
+
+    def _session_no_ack(self, tid, peer):
+        if tid in self._session_acked or self._tab_by_id(tid) is None:
+            return
+        self._append_html_to_tab(tid, self._chat_frag(
+            t("fed.session_no_ack", peer=peer), "#f59e0b", t("label.system")))
 
     def _on_session_send(self, peer, message):
         def worker():
@@ -2053,6 +2223,10 @@ class ChatAssistantWindow(QMainWindow):
         if ev.get("event") == "alert":
             self.signals.show_alert.emit(ev.get("title", "🔔"),
                                          ev.get("message", ""))
+        if direction == "out" and ev.get("event") != "session_open":
+            self._session_acked.add(tid)
+        if direction == "out" and ev.get("event") == "llm_call" and ev.get("model"):
+            self._session_models[tid] = str(ev.get("model"))
         if self._tab_by_id(tid) is not None:
             et = ev.get("event")
             if direction == "out":
@@ -2067,10 +2241,21 @@ class ChatAssistantWindow(QMainWindow):
                 if _from == peer:
                     self._append_html_to_tab(tid, self._chat_frag(
                         ev.get("text", ""), "#38bdf8", f"👤 {_from}"))
+            elif et == "session_open" and direction == "out":
+                self._append_html_to_tab(tid, self._chat_frag(
+                    t("fed.session_sent_waiting", peer=peer), "#94a3b8",
+                    t("label.system")))
+                self._session_acked.discard(tid)
+                QTimer.singleShot(20000, lambda i=tid, p=peer: self._session_no_ack(i, p))
             elif et == "session_open":
                 self._append_html_to_tab(tid, self._chat_frag(
                     t("fed.session_inbound_running", peer=peer), "#94a3b8",
                     t("label.system")))
+            elif et == "session_ack":
+                self._append_html_to_tab(tid, self._chat_frag(
+                    t("fed.session_awaiting_approval" if ev.get("state") == "awaiting_approval"
+                      else "fed.session_accepted", peer=peer),
+                    "#94a3b8", t("label.system")))
             elif et == "tool_call":
                 self._append_html_to_tab(tid, self._chat_frag(
                     f"🔧 {ev.get('tool')}" + self._fed_lag_tag(ev),
@@ -2308,9 +2493,11 @@ class ChatAssistantWindow(QMainWindow):
                     self._schedule_wake_refresh("notices")
                 if kinds & {"contacts", "resync"}:
                     self._schedule_wake_refresh("cache")
-            _items = payload.get("events", [])
-            if _items:
-                print(f"[GUI] drained {len(_items)} session event(s)",
+            _fresh = list(payload.get("events", []) or [])
+            _items = list(getattr(self, "_own_events_waiting", None) or []) + _fresh
+            self._own_events_waiting = []
+            if _fresh:
+                print(f"[GUI] drained {len(_fresh)} session event(s)",
                       file=sys.stderr)
             for item in _items:
                 peer = item.get("peer", "")
@@ -2322,10 +2509,23 @@ class ChatAssistantWindow(QMainWindow):
                     self.signals.session_closed.emit(peer, direction)
                     continue
                 _own = self._tab_by_sync_id(ev.get("tab"))
+                _mine = bool(ev.get("tab") and direction == "in"
+                             and peer and peer == self._fed_handle())
+                if (not _own and _mine
+                        and (not getattr(self, "_pinned_listed", False)
+                             or getattr(self, "_pinned_waiting", None))):
+                    self._own_events_waiting.append(item)
+                    continue
+                if not _own and _mine:
+                    _own = self._own_tab_for(ev.get("tab"), ev)
                 if _own:
-                    self._append_html_to_tab(_own, self._chat_frag(
-                        self._session_event_text(ev), "#38bdf8",
-                        t("pin.from_elsewhere")))
+                    if ev.get("event") == "tab_saved":
+                        self._reload_tab_from_row(_own, ev.get("uuid") or "")
+                        continue
+                    _txt = self._session_event_text(ev)
+                    if _txt:
+                        self._append_html_to_tab(_own, self._chat_frag(
+                            _txt, "#38bdf8", t("pin.from_elsewhere")))
                     continue
                 if direction == "out":
                     self._ensure_green_tab(peer)
@@ -2346,12 +2546,11 @@ class ChatAssistantWindow(QMainWindow):
             return
         menu = QMenu(self)
         pin = getattr(ctx, "pinned_device", None) if ctx is not None else None
-        act_pin = act_unpin = act_name = act_why = None
+        act_pin = act_unpin = act_why = None
         if pin:
             act_unpin = menu.addAction(t("pin.menu_unpin", name=pin.get("name", "?")))
         else:
             act_pin = menu.addAction(t("pin.menu_pin"))
-        act_name = menu.addAction(t("pin.menu_rename"))
         act_title = menu.addAction("✏ " + t("chat.tab_rename"))
         act_share = None
         _proj = getattr(ctx, "code_project", "") if ctx is not None else ""
@@ -2390,8 +2589,6 @@ class ChatAssistantWindow(QMainWindow):
                 self._handle_pin_command("off")
             elif chosen is act_why:
                 self._handle_why_command()
-            elif chosen is act_name:
-                self._rename_this_device()
             elif chosen is act_title:
                 self._rename_chat_tab(tab_id)
             elif act_share is not None and chosen is act_share:
@@ -2418,7 +2615,7 @@ class ChatAssistantWindow(QMainWindow):
             return
         allt, gblocked = {}, set()
         try:
-            r = requests.get(f"{self._mcp_url}/firewall", timeout=4)
+            r = requests.get(f"{self._tab_url(ctx)}/firewall", timeout=15)
             fw = r.json() if r.status_code == 200 else {}
             allt = fw.get("all_tools") or {}
             if isinstance(allt, list):
@@ -2469,28 +2666,6 @@ class ChatAssistantWindow(QMainWindow):
             self._persist_tab(tab_id, name, quiet=True)
         self.add_message(t("chat.tab_renamed", name=name), "system")
 
-    def _rename_this_device(self):
-        cur = ""
-        okd, d, _ = self._mcp_try("device_info", {}, timeout=15)
-        if okd and isinstance(d, dict):
-            cur = d.get("name", "")
-        name, ok = QInputDialog.getText(self, t("pin.rename_title"),
-                                        t("pin.rename_body"), text=cur)
-        if not ok or not name.strip():
-            return
-        okr, r, err = self._mcp_try("device_rename", {"name": name.strip()},
-                                    timeout=15)
-        if okr and isinstance(r, dict):
-            self.add_message(t("pin.renamed", name=r.get("name", name)), "system")
-            mine = r.get("id", "")
-            for c in (self._chat_ctxs or {}).values():
-                p = getattr(c, "pinned_device", None)
-                if p and p.get("id") == mine:
-                    p["name"] = r.get("name", name)
-            self._render_chat_tabs()
-        else:
-            self.add_message(t("pin.no_device", e=err or "?"), "error")
-
     def _set_log_mode(self, tab_id, mode):
         ctx = self._chat_ctxs.get(tab_id)
         if ctx is None or mode not in ("full", "local", "incognito"):
@@ -2525,15 +2700,15 @@ class ChatAssistantWindow(QMainWindow):
         e = ev.get("event")
         if e == "remote_input":
             return "👤 " + str(ev.get("message", ""))[:2000]
+        if e == "user_message":
+            return "👤 " + str(ev.get("text", ""))[:2000]
         if e == "tool_call":
             return f"🔧 {ev.get('tool', '?')}"
         if e == "reply":
             return str(ev.get("reply", ""))[:6000]
         if e == "error":
             return "❌ " + str(ev.get("error", ""))[:500]
-        if e == "session_open":
-            return "● " + str(ev.get("message", ""))[:500]
-        return f"· {e}"
+        return None
 
     def _poll_pending_approvals(self):
         try:
@@ -2557,10 +2732,11 @@ class ChatAssistantWindow(QMainWindow):
             if r.status_code != 200:
                 return
             live = {p.get("id") for p in r.json().get("pending", [])}
+            expired = set(r.json().get("expired") or [])
         except Exception:
             return
         if aid not in live:
-            box.setProperty("withdrawn", True)
+            box.setProperty("expired" if aid in expired else "withdrawn", True)
             box.done(0)
 
     def _on_session_incoming(self, peer, message, aid=""):
@@ -2579,16 +2755,24 @@ class ChatAssistantWindow(QMainWindow):
         box.addButton(t("session.reject"), QMessageBox.ButtonRole.RejectRole)
         box.exec()
         self._approval_boxes.pop(aid, None)
+        if box.property("expired"):
+            self.thread_msg(t("session.incoming_expired", peer=peer), "system")
+            return
         if box.property("withdrawn"):
             self.thread_msg(t("session.incoming_withdrawn", peer=peer), "system")
             return
         approved = box.clickedButton() == yes
+        landed = True
         try:
-            requests.post(f"{self._mcp_url}/agent/resolve-approval",
-                          json={"peer": peer, "approved": approved, "id": aid},
-                          timeout=5)
+            r = requests.post(f"{self._mcp_url}/agent/resolve-approval",
+                              json={"peer": peer, "approved": approved, "id": aid},
+                              timeout=5)
+            landed = bool((r.json() or {}).get("ok", True))
         except Exception as e:
             self.thread_msg(f"❌ resolve approval: {e}", "error")
+        if not landed:
+            self.thread_msg(t("session.incoming_expired", peer=peer), "system")
+            return
         if approved:
             self.thread_msg("↘ " + t("fed.session_inbound_running", peer=peer),
                             "system")
@@ -2697,6 +2881,8 @@ class ChatAssistantWindow(QMainWindow):
 
     def _init_ui(self):
         from PyQt6.QtCore import Qt as _Qt
+        import mac_dialogs
+        mac_dialogs.install()
         self.setWindowTitle(t("app.title") + "  " + HOPLITA_LABEL)
         self.setWindowFlag(_Qt.WindowType.FramelessWindowHint, True)
         self.setAttribute(_Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -3155,7 +3341,7 @@ class ChatAssistantWindow(QMainWindow):
         self.whiteboard = None
         try:
             from whiteboard_widget import WhiteboardWidget
-            self.whiteboard = WhiteboardWidget(getattr(self, "_mcp_url", "") or "")
+            self.whiteboard = WhiteboardWidget(self._wb_url)
             self.whiteboard.host_request.connect(self._on_wb_host)
             self.whiteboard.shown.connect(self._code_wb_shown)
             pv.addWidget(self.whiteboard, 1)
@@ -3283,7 +3469,7 @@ class ChatAssistantWindow(QMainWindow):
             fn()
 
     def _wb_url(self):
-        return (getattr(self, "_mcp_url", "") or "").rstrip("/")
+        return (self._tab_url() or "").rstrip("/")
 
     def _code_wb_paint(self):
         root = (self._code_project or "").rstrip("/\\")
@@ -3567,7 +3753,7 @@ class ChatAssistantWindow(QMainWindow):
             params.update({"repositoryId": q["repositoryId"], "head": q["commit"]})
             params["side"] = "head"
         try:
-            r = requests.get(f"{self._mcp_url}/wb/api/{wid}/file", params=params, timeout=15).json()
+            r = requests.get(f"{self._wb_url()}/wb/api/{wid}/file", params=params, timeout=15).json()
         except Exception as e:
             self.add_message(t("msg.error", e=str(e)), "error")
             return
@@ -3577,15 +3763,14 @@ class ChatAssistantWindow(QMainWindow):
         root, commit, text = r.get("root", ""), r.get("commit", ""), r.get("text", "")
         disk = os.path.join(root, file)
         same = False
-        if commit == "worktree":
-            same = True
-        else:
-            try:
-                with open(disk, "rb") as f:
-                    same = f.read().decode("utf-8", "replace") == text
-            except OSError:
-                same = False
-        if same and os.path.isfile(disk):
+        _isfile = False
+        try:
+            _raw, _m = self._proj_read(disk)
+            _isfile = True
+            same = commit == "worktree" or _raw.decode("utf-8", "replace") == text
+        except Exception:
+            same = False
+        if same and _isfile:
             key = disk
         else:
             key = f"{disk}@{commit[:8]}"
@@ -3669,6 +3854,9 @@ class ChatAssistantWindow(QMainWindow):
             self._hands_hid_window = self.isVisible()
             if self._hands_hid_window:
                 self.hide()
+            if sys.platform == "darwin":
+                import mac_dialogs
+                mac_dialogs.deactivate_app()
             hud = self._hands_hud()
             hud.set_state("working")
             hud.set_action("")
@@ -3708,7 +3896,7 @@ class ChatAssistantWindow(QMainWindow):
 
         def _go():
             try:
-                requests.post(f"{self._mcp_url}/agent/hands",
+                requests.post(f"{self._tab_url()}/agent/hands",
                               json={"turn_id": turn_id, "action": action}, timeout=5)
             except Exception:
                 pass
@@ -3731,7 +3919,7 @@ class ChatAssistantWindow(QMainWindow):
         if turn_id:
             def _go():
                 try:
-                    requests.post(f"{self._mcp_url}/agent/stop",
+                    requests.post(f"{self._tab_url()}/agent/stop",
                                   json={"turn_id": turn_id}, timeout=5)
                 except Exception:
                     pass
@@ -3795,7 +3983,7 @@ class ChatAssistantWindow(QMainWindow):
     def _hands_answer_consent(self, ack_id, decision):
         def _go():
             try:
-                requests.post(f"{self._mcp_url}/agent/plan_ack",
+                requests.post(f"{self._tab_url()}/agent/plan_ack",
                               json={"ack_id": ack_id, "decision": decision}, timeout=5)
             except Exception:
                 pass
@@ -6213,7 +6401,7 @@ enabled = true
 
         def work():
             try:
-                r = requests.post(f"{self._mcp_url}/agent/council_ack",
+                r = requests.post(f"{self._tab_url()}/agent/council_ack",
                                   json={"ack_id": ack_id, "decision": decision},
                                   timeout=15)
                 return r.json()
@@ -6492,8 +6680,11 @@ enabled = true
         if sess is None:
             return
 
+        _surl = self._tab_url(ctx)
+
         def work():
-            return self._mcp_call_json("chat_session_save", {"session": sess})
+            return self._mcp_call_json("chat_session_save", {"session": sess},
+                                       timeout=30, url=_surl)
 
         def done(res):
             if isinstance(res, dict) and res.get("ok"):
@@ -6699,8 +6890,8 @@ enabled = true
             rest.setFixedSize(38, 26)
             rest.setCursor(Qt.CursorShape.PointingHandCursor)
             rest.setStyleSheet(_icon_css % "#3b82f6")
-            rest.clicked.connect(lambda _=False, u=uid:
-                                 (self._restore_session(u), dlg.accept()))
+            rest.clicked.connect(lambda _=False, u=uid, pd=s.get("pinned_device"):
+                                 (self._restore_session(u, pin=pd), dlg.accept()))
             acts.addWidget(rest)
             dele = QPushButton("🗑")
             dele.setToolTip(t("ui.delete"))
@@ -6735,16 +6926,51 @@ enabled = true
                 return c.tab_id
         return None
 
-    def _restore_session(self, uuid, quiet=False):
+    def _reload_tab_from_row(self, tab_id, uuid=""):
+        ctx = self._chat_ctxs.get(tab_id)
+        tab = self._tab_by_id(tab_id)
+        if ctx is None or tab is None or getattr(ctx, "task_running", False):
+            return
+        uuid = uuid or getattr(ctx, "session_uuid", "") or ""
+        if not uuid:
+            return
+
+        def work():
+            return self._mcp_call_json("chat_session_load", {"uuid": uuid},
+                                       url=self._mcp_url)
+
+        def done(res):
+            sess = (res or {}).get("session") if isinstance(res, dict) else None
+            if not isinstance(sess, dict) or getattr(ctx, "task_running", False):
+                return
+            ctx.session_uuid = sess.get("uuid") or uuid
+            ctx.history = sess.get("history") or []
+            tab["html"] = sess.get("html", "") or ""
+            if self._active_tab_id == tab_id and getattr(self, "_chat_stack", None) \
+                    and self._chat_stack.currentIndex() == 0:
+                self.chat_display.setHtml(tab["html"])
+                self._chat_scroll_bottom()
+
+        self._bg(work, done)
+
+    def _restore_session(self, uuid, quiet=False, pin=None):
         _open = self._tab_by_session_uuid(uuid)
         if _open is not None:
             self._switch_chat_tab(_open)
             return
 
         def work():
+            if pin and pin.get("id"):
+                _p, _remote = self._tab_runs_remotely(type("_P", (), {"pinned_device": pin})())
+                if _remote:
+                    ok, d, _ = self._mcp_try("chat_session_load", {"uuid": uuid}, timeout=30,
+                                             url=f"{self._mcp_url}/tied/{pin['id']}")
+                    if ok and d.get("session"):
+                        return d
             return self._mcp_call_json("chat_session_load", {"uuid": uuid})
 
         def done(res):
+            getattr(self, "_pinned_waiting", set()).discard(uuid)
             sess = (res or {}).get("session") if isinstance(res, dict) else None
             if not sess:
                 self.add_message(t("sess.load_fail"), "error")
@@ -6814,16 +7040,30 @@ enabled = true
             _going_to = getattr(self, "_reopening_pinned", None)
             if _going_to is None:
                 _going_to = self._reopening_pinned = set()
-            for sess in ((res or {}).get("sessions") or []) \
-                    if isinstance(res, dict) else []:
+            _rows = ((res or {}).get("sessions") or []) if isinstance(res, dict) else []
+            _rows = sorted(_rows, key=lambda r: r.get("created_at") or "")
+            _convs = getattr(self, "_reopening_syncs", None)
+            if _convs is None:
+                _convs = self._reopening_syncs = set()
+            for sess in _rows:
                 _sid = sess.get("uuid")
                 if not sess.get("pinned_device") or _sid in _going_to:
                     continue
+                _sync = sess.get("sync_id") or ""
                 if self._tab_by_session_uuid(_sid) is not None:
+                    _convs.add(_sync)
                     continue
+                if _sync and (_sync in _convs or self._tab_by_sync_id(_sync)):
+                    continue
+                if _sync:
+                    _convs.add(_sync)
                 _going_to.add(_sid)
-                self._restore_session(_sid, quiet=True)
+                self._pinned_waiting.add(_sid)
+                self._restore_session(_sid, quiet=True, pin=sess.get("pinned_device"))
+            self._pinned_listed = True
 
+        if not hasattr(self, "_pinned_waiting"):
+            self._pinned_waiting = set()
         self._bg(work, done)
 
     def _reopen_cron_tab(self):
@@ -6979,6 +7219,26 @@ enabled = true
 
         self._bg(work, done)
 
+    def _own_tab_for(self, sync_id, ev):
+        self._local_tab_seq += 1
+        tid = f"local:{self._local_tab_seq}"
+        first = str(ev.get("text") or ev.get("message") or "").strip()
+        title = (first.splitlines()[0][:40] if first
+                 else t("chat.tab_local_n", n=self._local_tab_seq + 1))
+        ctx = ChatCtx(tid, title)
+        ctx.sync_id = sync_id
+        try:
+            ok, d, _ = self._mcp_try("device_info", {}, timeout=10)
+            if ok and isinstance(d, dict) and d.get("id"):
+                ctx.pinned_device = {"id": d["id"], "name": d.get("name", "")}
+        except Exception:
+            pass
+        self._chat_ctxs[tid] = ctx
+        self._chat_tabs.append({"id": tid, "kind": "local", "peer": None,
+                                "title": title, "html": "", "history_ref": True})
+        self._render_chat_tabs()
+        return tid
+
     def _new_local_tab(self):
         self._local_tab_seq += 1
         n = self._local_tab_seq
@@ -7122,8 +7382,9 @@ enabled = true
                 self._auto_extract_facts_async(segment)
                 self._auto_extract_lessons_async(segment)
             _skey = getattr(_c, "sync_id", "") or tab_id
+            _surl = self._tab_url(_c)
             self._bg(lambda: requests.post(
-                f"{self._mcp_url}/agent/memory_snapshot",
+                f"{_surl}/agent/memory_snapshot",
                 json={"session": _skey, "action": "reset"}, timeout=5))
         if tab_id == "local":
             if self._active_tab_id == "local" \
@@ -8195,7 +8456,7 @@ enabled = true
             return True
         if href.startswith("hoplita:open:"):
             p = href[len("hoplita:open:"):]
-            if not os.path.isdir(p):
+            if not (self._proj_stat([p]).get(p) or {}).get("isdir"):
                 self._code_remember_project(p, forget=True)
                 self._code_welcome()
                 return True
@@ -8450,7 +8711,7 @@ enabled = true
             if okk and expect and (r or {}).get("exit_code", 1) == 0:
                 try:
                     jr = requests.post(
-                        f"{self._mcp_url}/code/judge",
+                        f"{self._tab_url()}/code/judge",
                         json={"command": cmd, "expect": expect,
                               "output": (((r or {}).get("stdout") or "")
                                          + ((r or {}).get("stderr") or ""))[-6000:]},
@@ -9438,38 +9699,61 @@ enabled = true
                 self.categories_list.setCurrentRow(i)
                 break
 
+    def _proj_get(self, ep, params=None, timeout=30):
+        r = requests.get(f"{self._tab_url()}/code/{ep}", params=params or {},
+                         headers=self._tab_headers(), timeout=timeout)
+        if r.status_code != 200:
+            raise OSError(self._http_error(r))
+        return r.json()
+
+    def _proj_post(self, ep, body, timeout=30):
+        r = requests.post(f"{self._tab_url()}/code/{ep}", json=body,
+                          headers=self._tab_headers(), timeout=timeout)
+        if r.status_code != 200:
+            raise OSError(self._http_error(r))
+        return r.json()
+
+    def _proj_read(self, path):
+        import base64 as _b64
+        d = self._proj_get("file", {"path": path})
+        return _b64.b64decode(d.get("b64") or ""), d.get("mtime")
+
+    def _proj_stat(self, paths):
+        try:
+            return (self._proj_post("stat", {"paths": list(paths)}) or {}).get("stat") or {}
+        except Exception:
+            return {}
+
+    def _proj_mtime(self, path):
+        return (self._proj_stat([path]).get(path) or {}).get("mtime")
+
     def _code_load_tree(self):
         self.code_tree.clear()
         if not self._code_project:
             return
-        skip = {".git", "node_modules", "__pycache__", "venv", ".venv",
-                "dist", "build", ".mypy_cache", ".pytest_cache", "target"}
         root_item = QTreeWidgetItem([os.path.basename(self._code_project) or "/"])
         self.code_tree.addTopLevelItem(root_item)
-        nodes = {self._code_project: root_item}
-        n = 0
-        for base, dirs, files in os.walk(self._code_project):
-            dirs[:] = sorted(d for d in dirs
-                             if d not in skip and not d.startswith("."))
-            parent = nodes.get(base)
+        try:
+            tree = self._proj_get("tree", {"root": self._code_project, "limit": 4000})
+        except Exception as e:
+            self._code_say(t("msg.error", e=str(e)), bad=True)
+            return
+        nodes = {".": root_item}
+        for d in tree.get("dirs") or []:
+            parent = nodes.get(os.path.dirname(d) or ".")
             if parent is None:
                 continue
-            for d in dirs:
-                it = QTreeWidgetItem([d])
-                parent.addChild(it)
-                nodes[os.path.join(base, d)] = it
-            for f in sorted(files):
-                if f.startswith(".") or f.endswith((".pyc", ".so", ".o")):
-                    continue
-                it = QTreeWidgetItem([f])
-                it.setData(0, Qt.ItemDataRole.UserRole,
-                           os.path.join(base, f))
-                parent.addChild(it)
-                n += 1
-                if n > 4000:
-                    break
-            if n > 4000:
-                break
+            it = QTreeWidgetItem([os.path.basename(d)])
+            parent.addChild(it)
+            nodes[d] = it
+        for f in tree.get("files") or []:
+            parent = nodes.get(os.path.dirname(f) or ".")
+            if parent is None:
+                continue
+            it = QTreeWidgetItem([os.path.basename(f)])
+            it.setData(0, Qt.ItemDataRole.UserRole,
+                       os.path.join(self._code_project, f))
+            parent.addChild(it)
         root_item.setExpanded(True)
 
     def _code_open_file(self, item, _col=0):
@@ -9541,7 +9825,7 @@ enabled = true
             self._code_show_buf(path)
             return
         try:
-            raw = open(path, "rb").read()
+            raw, _mtime = self._proj_read(path)
         except Exception as e:
             self._code_say(t("msg.error", e=str(e)), bad=True)
             return
@@ -9550,10 +9834,6 @@ enabled = true
                              path=os.path.basename(path)), bad=True)
             return
         self._code_stash_current()
-        try:
-            _mtime = os.path.getmtime(path)
-        except OSError:
-            _mtime = None
         self._code_bufs[path] = {"text": raw.decode("utf-8", errors="replace"),
                                  "dirty": False, "pos": 0, "scroll": 0,
                                  "mtime": _mtime}
@@ -10090,10 +10370,7 @@ enabled = true
             self._code_say(t("code.readonly_commit"), bad=True)
             return
         _b = self._code_buf()
-        try:
-            _disk_m = os.path.getmtime(self._code_open_path)
-        except OSError:
-            _disk_m = None
+        _disk_m = self._proj_mtime(self._code_open_path)
         if (_b is not None and _disk_m is not None
                 and _b.get("mtime") is not None
                 and _disk_m != _b.get("mtime")):
@@ -10119,10 +10396,9 @@ enabled = true
             _b["text"] = self.code_editor.toPlainText()
             if _b.get("doc") is not None:
                 _b["doc"].setModified(False)
-            try:
-                _b["mtime"] = os.path.getmtime(self._code_open_path)
-            except OSError:
-                pass
+            _m = self._proj_mtime(self._code_open_path)
+            if _m is not None:
+                _b["mtime"] = _m
         self._code_paint_open_label()
         self._code_rebuild_tabs()
         rel = os.path.relpath(self._code_open_path, self._code_project)
@@ -10141,7 +10417,7 @@ enabled = true
     def _code_remember_project(self, path, forget=False):
         from PyQt6.QtCore import QSettings
         keep = [p for p in self._code_recents() if p != path]
-        if not forget and path and os.path.isdir(path):
+        if not forget and path and (self._proj_stat([path]).get(path) or {}).get("isdir"):
             keep.insert(0, path)
         QSettings("hoplita", "hoplita").setValue(
             "code_recents", json.dumps(keep[:6]))
@@ -10149,8 +10425,10 @@ enabled = true
     def _code_welcome(self):
         import html as _h
         rec = ""
-        for p in self._code_recents():
-            if not os.path.isdir(p):
+        _recs = self._code_recents()
+        _st = self._proj_stat(_recs)
+        for p in _recs:
+            if not (_st.get(p) or {}).get("isdir"):
                 continue
             rec += (
                 '<tr><td style="padding:3px 0;">'
@@ -10207,25 +10485,29 @@ enabled = true
             self.code_right_stack.setCurrentIndex(0)
 
     def _code_pick_project(self):
-        d = QFileDialog.getExistingDirectory(self, t("code.browse"),
-                                             self._code_project or os.path.expanduser("~"))
+        _pin, _remote = self._tab_runs_remotely(self._turn_ctx())
+        if _remote:
+            from PyQt6.QtWidgets import QInputDialog
+            d, okp = QInputDialog.getText(self, t("code.browse"),
+                                          t("code.pick_remote", name=_pin.get("name", "?")),
+                                          text=self._code_project or "")
+            d = (d or "").strip() if okp else ""
+        else:
+            d = QFileDialog.getExistingDirectory(self, t("code.browse"),
+                                                 self._code_project or os.path.expanduser("~"))
         if d:
             self.code_project_edit.setText(d)
             self._code_open_project()
 
     def _code_offer_git(self, path):
         try:
-            p = os.path.expanduser(path or "")
-            if not p or not os.path.isdir(p):
+            p = path or ""
+            _st = self._proj_stat([p]).get(p) or {}
+            if not p or not _st.get("isdir"):
                 return
-            if os.path.isdir(os.path.join(p, ".git")):
+            if self._proj_post("git", {"path": p, "action": "check"}).get("is_git"):
                 return
-            _r = subprocess.run(["git", "-C", p, "rev-parse", "--git-dir"],
-                                capture_output=True, text=True, timeout=10,
-                                **__import__("hoplita_paths").no_console())
-            if _r.returncode == 0:
-                return
-            _empty = not any(True for _ in os.scandir(p))
+            _empty = bool(_st.get("empty"))
         except Exception:
             return
         _msg = (t("code.git_offer_empty", path=p) if _empty
@@ -10237,16 +10519,12 @@ enabled = true
             self._code_say(t("code.git_declined"), bad=False)
             return
         try:
-            _r = subprocess.run(["git", "-C", p, "init"], capture_output=True,
-                                text=True, timeout=30,
-                                **__import__("hoplita_paths").no_console())
+            _r = self._proj_post("git", {"path": p, "action": "init"})
         except Exception as e:
             self._code_say(t("code.git_failed", err=str(e)[:120]), bad=True)
             return
-        if _r.returncode != 0:
-            self._code_say(t("code.git_failed",
-                             err=(_r.stderr or _r.stdout or "?")[:120]),
-                           bad=True)
+        if not _r.get("ok"):
+            self._code_say(t("code.git_failed", err=(_r.get("out") or "?")[:120]), bad=True)
             return
         self._code_say(t("code.git_done", path=p))
 
@@ -10327,12 +10605,12 @@ enabled = true
         if not path.startswith(os.path.normpath(self._code_project) + os.sep):
             self._code_say(t("code.new_outside", name=name), bad=True)
             return
-        if os.path.exists(path):
+        if (self._proj_stat([path]).get(path) or {}).get("exists"):
             self._code_say(t("code.new_exists", name=name), bad=True)
             self._code_open_in_tab(path)
             return
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            self._proj_post("mkdir", {"path": os.path.dirname(path)})
         except Exception as e:
             self._code_say(t("msg.error", e=str(e)), bad=True)
             return
@@ -10431,17 +10709,17 @@ enabled = true
         bufs = getattr(self, "_code_bufs", None)
         if not bufs:
             return
+        _st = self._proj_stat(bufs.keys())
         for path, b in bufs.items():
-            try:
-                m = os.path.getmtime(path)
-            except OSError:
+            m = (_st.get(path) or {}).get("mtime")
+            if m is None:
                 continue
             if b.get("mtime") is None or m == b.get("mtime"):
                 continue
             if b.get("dirty"):
                 continue
             try:
-                raw = open(path, "rb").read()
+                raw, m = self._proj_read(path)
             except Exception:
                 continue
             b["text"] = raw.decode("utf-8", errors="replace")
@@ -10691,18 +10969,12 @@ enabled = true
         if not self._code_project:
             return
         from PyQt6.QtWidgets import QDialog
-        skip = {'.git', 'node_modules', '__pycache__', '.venv', 'venv',
-                'dist', 'build', 'target', '.mypy_cache', '.next', 'coverage'}
-        files = []
-        for root, dirs, fnames in os.walk(self._code_project):
-            dirs[:] = [d for d in dirs if d not in skip
-                       and not d.startswith('.')]
-            for fn in fnames:
-                files.append(os.path.relpath(os.path.join(root, fn),
-                                             self._code_project))
-            if len(files) > 5000:
-                break
-        files.sort()
+        try:
+            files = sorted(self._proj_get("tree", {"root": self._code_project,
+                                                   "limit": 5000}).get("files") or [])
+        except Exception as e:
+            self._code_say(t("msg.error", e=str(e)), bad=True)
+            return
         dlg = QDialog(self)
         dlg.setWindowTitle(t("code.quickopen_title"))
         dlg.resize(560, 420)
@@ -10829,7 +11101,7 @@ enabled = true
     def _setup_notes_page(self, parent_layout):
         header = QHBoxLayout()
         header.setContentsMargins(16, 12, 16, 12)
-        header.addWidget(QLabel(f"<b>{t("notes.title")}</b>"))
+        header.addWidget(QLabel(f"<b>{t('notes.title')}</b>"))
         header.addStretch()
         refresh_btn = QPushButton(t("cron.update"))
         refresh_btn.clicked.connect(self.refresh_notes_lists)
@@ -10843,7 +11115,7 @@ enabled = true
         cat_widget.setMaximumWidth(200)
         cat_layout = QVBoxLayout(cat_widget)
         cat_layout.setContentsMargins(4, 4, 4, 4)
-        cat_layout.addWidget(QLabel(f"<b>{t("notes.categories")}</b>"))
+        cat_layout.addWidget(QLabel(f"<b>{t('notes.categories')}</b>"))
         cat_row = QHBoxLayout()
         self.category_entry = QLineEdit()
         self.category_entry.setPlaceholderText(t("notes.new_category"))
@@ -10861,7 +11133,7 @@ enabled = true
         list_widget.setMaximumWidth(250)
         list_layout = QVBoxLayout(list_widget)
         list_layout.setContentsMargins(4, 4, 4, 4)
-        self.notes_title_label = QLabel(f"<b>{t("notes.notes_list")}</b>")
+        self.notes_title_label = QLabel(f"<b>{t('notes.notes_list')}</b>")
         list_layout.addWidget(self.notes_title_label)
         self.notes_list = QListWidget()
         self.notes_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -13447,7 +13719,7 @@ enabled = true
         if _tid:
             def _stop_now(tid=_tid):
                 try:
-                    requests.post(f"{self._mcp_url}/agent/stop", json={"turn_id": tid}, timeout=5)
+                    requests.post(f"{self._tab_url()}/agent/stop", json={"turn_id": tid}, timeout=15)
                 except Exception:
                     pass
             threading.Thread(target=_stop_now, daemon=True, name="stop-now").start()
@@ -13558,7 +13830,7 @@ enabled = true
                 payload["endpoint"] = dict(zip(
                     ("base_url", "api_key", "model"),
                     self._resolve_model_by_name(self._chat_model_override)))
-            r = requests.post(f"{self._mcp_url}/memory/compact", json=payload,
+            r = requests.post(f"{self._tab_url()}/memory/compact", json=payload,
                               timeout=(10, None))
             data = r.json() if r.status_code == 200 else {}
             if not data.get("compacted"):
@@ -13847,6 +14119,16 @@ enabled = true
         _own = int(getattr(_tc(), "context_limit", 0) or 0) if callable(_tc) else 0
         if _own > 0:
             return _own
+        _pin, _remote = self._tab_runs_remotely(_tc()) if callable(_tc) else (None, False)
+        if _remote:
+            key = f"tied:{_pin['id']}"
+            cache = getattr(self, "_ctx_limit_cache", None)
+            if not isinstance(cache, dict):
+                cache = self._ctx_limit_cache = {}
+            if key in cache:
+                return cache[key]
+            self._detect_ctx_async(key, None, None, url=self._tab_url(_tc()))
+            return 0 if measured_only else 20000
         sec = self._active_model_section()
         cl = self.config.getint(sec, "context_length", fallback=0)
         if cl <= 0:
@@ -13879,7 +14161,7 @@ enabled = true
             return 0
         return 20000
 
-    def _detect_ctx_async(self, key, base_url, api_key):
+    def _detect_ctx_async(self, key, base_url, api_key, url=None):
         pend = getattr(self, "_ctx_detecting", None)
         if pend is None:
             pend = set()
@@ -13896,17 +14178,17 @@ enabled = true
                 cache[key] = n
                 f = lambda x: f"{x/1000:.1f}k" if x >= 1000 else str(x)
                 self._paint_token_meter()
-        self._bg(lambda: self._detect_context_length(base_url, api_key), done)
+        self._bg(lambda: self._detect_context_length(base_url, api_key, url=url), done)
 
-    def _detect_context_length(self, base_url=None, api_key=None):
+    def _detect_context_length(self, base_url=None, api_key=None, url=None):
         try:
             params = {}
             if base_url:
                 _b, _k, _m = self._chat_base_endpoint()
                 params = {"base_url": base_url, "api_key": api_key or "",
                           "model": _m if base_url == _b else ""}
-            r = requests.get(f"{self._mcp_url}/agent/context_limit",
-                             params=params, timeout=10)
+            r = requests.get(f"{url or self._tab_url()}/agent/context_limit",
+                             params=params, timeout=30)
             return int(r.json().get("limit", 0)) if r.status_code == 200 else 0
         except Exception:
             return 0
@@ -14065,6 +14347,9 @@ enabled = true
             self.entry.clear()
             self.entry.clear_pending()
 
+        if _in_session and msg.strip().startswith("/"):
+            self._session_command(active, msg)
+            return
         if _in_session:
             if active["id"] in self._session_waiting:
                 self._session_queue.setdefault(active["id"], []).append(msg)
@@ -14115,9 +14400,9 @@ enabled = true
                         import tempfile
                         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                             tmp.write(raw); tmp_path = tmp.name
-                        r = subprocess.run(["pdftotext", tmp_path, "-"], capture_output=True, text=True, timeout=30,
-                                                   **__import__("hoplita_paths").no_console())
-                        pdf_text = r.stdout[:8000] if r.returncode == 0 else "(could not extract text)"
+                        import hoplita_pdf
+                        _txt, _err = hoplita_pdf.plain_text(tmp_path, 8000)
+                        pdf_text = _txt if not _err else f"(could not extract text: {_err})"
                         os.unlink(tmp_path)
                     except:
                         pdf_text = "(error reading PDF)"
@@ -14772,7 +15057,7 @@ enabled = true
 
     def _inject_into_turn(self, turn_id, msg):
         try:
-            r = requests.post(f"{self._mcp_url}/agent/inject", timeout=8,
+            r = requests.post(f"{self._tab_url()}/agent/inject", timeout=15,
                               json={"turn_id": turn_id, "message": msg})
             return bool(r.ok and r.json().get("injected"))
         except Exception as e:
@@ -15524,7 +15809,7 @@ enabled = true
         if subtasks is not None:
             payload["subtasks"] = subtasks
         try:
-            requests.post(f"{self._mcp_url}/agent/plan_ack", json=payload,
+            requests.post(f"{self._tab_url()}/agent/plan_ack", json=payload,
                           timeout=10)
         except Exception as e:
             print(f"[ACK] could not answer the plan: {e}", file=sys.stderr)
@@ -15795,21 +16080,6 @@ enabled = true
         w.setText(cmd)
         getattr(self, "_code_verify_paint", lambda: None)()
 
-    def _call_pinned_device(self, user_message, pin):
-        name = pin.get("name", "?")
-        self.thread_msg(t("pin.running_on", name=name), "system")
-        okr, r, err = self._mcp_try(
-            "fed_ask_agent",
-            {"handle": self._fed_handle(), "message": user_message,
-             "device": pin.get("id", ""),
-             "tab": getattr(self._turn_ctx(), "sync_id", "")},
-            timeout=self.config.getint("CHAT", "timeout", fallback=120) + 600)
-        if not okr or not isinstance(r, dict):
-            return t("pin.unreachable", name=name, e=err or "?")
-        if r.get("error"):
-            return t("pin.failed", name=name, e=str(r["error"])[:200])
-        return r.get("reply") or t("pin.empty", name=name)
-
     def _fed_handle(self):
         h = getattr(self, "_fed_handle_cache", None)
         if h:
@@ -15826,7 +16096,7 @@ enabled = true
         payload = {"messages": hist,
                    "code_project": getattr(ctx, "code_project", "") or ""}
         try:
-            r = requests.post(f"{self._mcp_url}/agent/context_map", json=payload,
+            r = requests.post(f"{self._tab_url()}/agent/context_map", json=payload,
                               timeout=60)
             data = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
         except Exception as e:
@@ -15937,13 +16207,40 @@ enabled = true
         self._render_chat_tabs()
         self._persist_tab(self._active_tab_id, quiet=True)
 
+    def _tab_url(self, ctx=None):
+        try:
+            ctx = ctx if ctx is not None else self._turn_ctx()
+            pin, remote = self._tab_runs_remotely(ctx)
+        except Exception:
+            return self._mcp_url
+        return f"{self._mcp_url}/tied/{pin['id']}" if remote else self._mcp_url
+
+    def _tab_headers(self, ctx=None):
+        try:
+            ctx = ctx if ctx is not None else self._turn_ctx()
+            sid = getattr(ctx, "sync_id", "") or ""
+        except Exception:
+            sid = ""
+        return {"X-Hoplita-Tab": sid} if sid else {}
+
+    @staticmethod
+    def _http_error(r):
+        try:
+            d = r.json() or {}
+            why = d.get("error") or d.get("detail")
+            if why:
+                return f"HTTP {r.status_code}: {why}"
+        except Exception:
+            pass
+        return f"HTTP {r.status_code}"
+
     def _tab_runs_remotely(self, ctx):
         pin = getattr(ctx, "pinned_device", None)
         if not pin or not pin.get("id"):
             return None, False
         mine = getattr(self, "_device_id", None)
         if mine is None:
-            ok, d, _ = self._mcp_try("device_info", {}, timeout=10)
+            ok, d, _ = self._mcp_try("device_info", {}, timeout=10, url=self._mcp_url)
             mine = (d or {}).get("id", "") if ok else ""
             self._device_id = mine
         return pin, bool(mine) and pin["id"] != mine
@@ -16119,6 +16416,9 @@ enabled = true
         timeout = self.config.getint("CHAT", "timeout", fallback=120)
         max_iterations = max_iterations or 1
         payload = dict(payload)
+        _tpin, _tremote = self._tab_runs_remotely(self._turn_ctx())
+        if _tremote:
+            payload.setdefault("delegate", list(_SCREEN_TOOLS))
         payload.setdefault("delegate", ["*"])
         payload.setdefault("client_tool_timeout", self.config.getint(
             "CHAT", "client_tool_timeout", fallback=3600))
@@ -16167,8 +16467,8 @@ enabled = true
             if stop_sent or not turn_id:
                 return
             try:
-                rs = requests.post(f"{self._mcp_url}/agent/stop",
-                                   json={"turn_id": turn_id}, timeout=5)
+                rs = requests.post(f"{self._tab_url(_c)}/agent/stop",
+                                   json={"turn_id": turn_id}, timeout=15)
                 if rs.status_code == 200:
                     stop_sent = True
             except Exception:
@@ -16202,7 +16502,7 @@ enabled = true
             except Exception:
                 pass
             try:
-                _r = requests.post(f"{self._mcp_url}/agent/tool_result",
+                _r = requests.post(f"{self._tab_url(_c)}/agent/tool_result",
                               json={"turn_id": turn_id,
                                     "call_id": ev.get("call_id"),
                                     "result": result if isinstance(result, str)
@@ -16221,12 +16521,13 @@ enabled = true
                 self.thread_msg(f"❌ tool_result → MCP: {e}", "error")
 
         try:
-            with requests.post(f"{self._mcp_url}/agent/turn", json=payload,
+            with requests.post(f"{self._tab_url(_c)}/agent/turn", json=payload,
+                               headers=self._tab_headers(_c),
                                stream=True, timeout=(10, timeout + 60)) as r:
                 if r.status_code != 200:
-                    self.thread_msg(t("msg.llm_net_err",
-                                      e=f"/agent/turn HTTP {r.status_code}"), "error")
-                    raise Exception(f"/agent/turn HTTP {r.status_code}: {r.text[:200]}")
+                    _why = self._http_error(r)
+                    self.thread_msg(t("msg.llm_net_err", e=f"/agent/turn {_why}"), "error")
+                    raise Exception(f"/agent/turn {_why}")
                 for line in r.iter_lines():
                     if not line:
                         continue
@@ -16586,7 +16887,7 @@ enabled = true
         _ctx = self._turn_ctx()
         _pin, _remote = self._tab_runs_remotely(_ctx)
         if _remote:
-            return self._call_pinned_device(user_message, _pin)
+            self.thread_msg(t("pin.running_on", name=_pin.get("name", "?")), "system")
         try:
             context_parts = []
             _sticky = (self.sticky or "").strip()
@@ -17088,7 +17389,7 @@ enabled = true
     def _setup_cron_page(self, parent_layout):
         header = QHBoxLayout()
         header.setContentsMargins(16, 12, 16, 12)
-        header.addWidget(QLabel(f"<b>{t("cron.title")}</b>"))
+        header.addWidget(QLabel(f"<b>{t('cron.title')}</b>"))
         header.addStretch()
         ob = QPushButton(t("cron.open_tab"))
         ob.setToolTip(t("cron.open_tab_tip"))
@@ -17106,7 +17407,7 @@ enabled = true
         parent_layout.addWidget(splitter, 1)
 
         fw = QWidget(); fw.setMaximumWidth(450); fl = QVBoxLayout(fw)
-        self.cron_form_label = QLabel(f"<b>{t("cron.new_job")}</b>")
+        self.cron_form_label = QLabel(f"<b>{t('cron.new_job')}</b>")
         fl.addWidget(self.cron_form_label)
         self.cron_name_entry = QLineEdit(); self.cron_name_entry.setPlaceholderText(t("gui.cron_job_name"))
         fl.addWidget(self.cron_name_entry)
@@ -17213,11 +17514,11 @@ enabled = true
         fl.addStretch(); splitter.addWidget(fw)
 
         rw = QWidget(); rl = QVBoxLayout(rw)
-        rl.addWidget(QLabel(f"<b>{t("cron.jobs")}</b>"))
+        rl.addWidget(QLabel(f"<b>{t('cron.jobs')}</b>"))
         self.cron_jobs_list = QListWidget()
         self.cron_jobs_list.currentRowChanged.connect(self._on_cron_job_selected)
         rl.addWidget(self.cron_jobs_list, 1)
-        rl.addWidget(QLabel(f"<b>{t("cron.log")}</b>"))
+        rl.addWidget(QLabel(f"<b>{t('cron.log')}</b>"))
         self.cron_log_display = QTextEdit(); self.cron_log_display.setReadOnly(True)
         self.cron_log_display.setFont(QFont("Consolas" if IS_WINDOWS else "Monospace", 10))
         self.cron_log_display.setMaximumHeight(250); rl.addWidget(self.cron_log_display)
@@ -17835,7 +18136,8 @@ enabled = true
         refresh_table()
 
         form = QGroupBox(t("grp.add_edit"))
-        fl = QFormLayout(form)
+        from config_editor import left_form
+        fl = left_form(QFormLayout(form))
         kind_c = QComboBox()
         for _k, _lbl in (("web", t("cred.kind_web")),
                          ("apikey", t("cred.kind_apikey")),
@@ -18039,6 +18341,8 @@ def main():
         from PyQt6 import QtWebEngineCore
     except ImportError:
         pass
+    if sys.platform == "darwin":
+        _mac_menu_name("HOPLITA")
     app = QApplication(sys.argv)
     app.setApplicationName("HOPLITA Chat Assistant")
     from PyQt6.QtGui import QPalette as _QPal, QColor as _QCol
@@ -18059,7 +18363,10 @@ def main():
     if not args.solo:
         from PyQt6.QtNetwork import QLocalServer, QLocalSocket
         import getpass as _gp
-        _key = f"hoplita-gui-{_gp.getuser()}"
+        import hashlib as _hl
+        from hoplita_paths import hoplita_base as _hb
+        _key = (f"hoplita-gui-{_gp.getuser()}-"
+                f"{_hl.sha1(os.path.realpath(_hb()).encode()).hexdigest()[:10]}")
         _probe = QLocalSocket()
         _probe.connectToServer(_key)
         if _probe.waitForConnected(400):
@@ -18078,6 +18385,11 @@ def main():
     window._normal_geo = window.geometry()
     window._is_max = False
     window.show()
+    window.raise_()
+    window.activateWindow()
+    if sys.platform == "darwin":
+        import mac_dialogs
+        mac_dialogs.activate_app()
 
     def _raise_existing():
         _c = _single.nextPendingConnection()

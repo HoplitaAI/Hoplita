@@ -44,6 +44,36 @@ def _open_reader(source, password=""):
         return None, f"cannot open {os.path.basename(p)}: {e}"
 
 
+def plain_text(source, limit=10_000):
+    import subprocess
+    p = os.path.expanduser(str(source or ""))
+    try:
+        r = subprocess.run(["pdftotext", p, "-"], capture_output=True, text=True,
+                           timeout=30, **__import__("hoplita_paths").no_console())
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout[:limit], None
+    except (OSError, subprocess.SubprocessError):
+        pass
+    reader, err = _open_reader(p)
+    if err:
+        return "", err
+    out = []
+    size = 0
+    for page in reader.pages:
+        try:
+            chunk = page.extract_text() or ""
+        except Exception:
+            chunk = ""
+        out.append(chunk)
+        size += len(chunk)
+        if size >= limit:
+            break
+    text = "\n".join(out).strip()
+    if not text:
+        return "", "no text layer (a scanned PDF: pdf_info can render its pages to look at)"
+    return text[:limit], None
+
+
 def _parse_pages(spec, total):
     if spec in (None, "", "all"):
         return list(range(total)), None

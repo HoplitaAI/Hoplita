@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -281,9 +282,15 @@ func mcpTurn(cfg Config, messages []Message, verify string) (string, error) {
 
 			pargs := map[string]string{}
 			if am, okm := ev["args"].(map[string]interface{}); okm {
+
 				for k, v := range am {
-					if sv, oks := v.(string); oks {
-						pargs[k] = sv
+					switch vv := v.(type) {
+					case string:
+						pargs[k] = vv
+					case float64:
+						pargs[k] = strconv.FormatFloat(vv, 'f', -1, 64)
+					case bool:
+						pargs[k] = strconv.FormatBool(vv)
 					}
 				}
 			}

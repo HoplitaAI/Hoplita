@@ -104,6 +104,7 @@ class PTYBackend:
             env["COLORTERM"] = "truecolor"
             env["LANG"] = env.get("LANG", "en_US.UTF-8")
             env["PS1"] = r"\u@\h:\w\$ "
+            env["BASH_SILENCE_DEPRECATION_WARNING"] = "1"
             for k in list(env.keys()):
                 if k.startswith("HOPLITA_VAULT_PASSWORD"):
                     del env[k]
@@ -322,8 +323,14 @@ try {
   term.loadAddon(fitAddon);
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(document.getElementById('terminal'));
-  try { fitAddon.fit(); } catch(e) {}
-  setTimeout(function() { try { fitAddon.fit(); } catch(e) {} }, 500);
+  function realFit() {
+    const d = fitAddon.proposeDimensions();
+    if (!d || d.cols < 20 || d.rows < 4) return false;
+    fitAddon.fit();
+    return true;
+  }
+  try { realFit(); } catch(e) {}
+  setTimeout(function() { try { realFit(); } catch(e) {} }, 500);
 
   new QWebChannel(qt.webChannelTransport, function(channel) {
     const bridge = channel.objects.bridge;
@@ -332,7 +339,7 @@ try {
     });
     term.onData(function(data) { bridge.input(data); });
     function reportSize() {
-      try { fitAddon.fit(); bridge.resize(term.cols, term.rows); } catch(e) {}
+      try { if (realFit()) bridge.resize(term.cols, term.rows); } catch(e) {}
     }
     reportSize();
     new ResizeObserver(reportSize).observe(document.getElementById('terminal'));

@@ -1326,6 +1326,15 @@ def tool_fed_verify(pin):
     try:
         fed.server_verify(server_url, handle, pin)
     except fed.FedServerError as e:
+        d = getattr(e, "data", None) or {}
+        if d.get("error") == "PIN expired":
+            return {"error": "Verification failed: the PIN expired.",
+                    "resent": bool(d.get("resent")),
+                    "next_step": ("A new PIN was sent to the registration "
+                                  "email: run fed_verify with it."
+                                  if d.get("resent") else
+                                  "Wait a minute and run fed_verify with the "
+                                  "same expired PIN again: that sends a new one.")}
         return {"error": f"Verification failed: {e}"}
     store.data["email_verified"] = True
     store.save_data()
@@ -2188,10 +2197,22 @@ def tool_fed_ask_agent(handle, message, max_iterations=None, device="", tab="",
         return {"error": str(e)}
 
     collected = {"events": [], "reply": None, "terminal": None}
+    try:
+        _emit = TURN_EMITTER() if TURN_EMITTER else None
+    except Exception:
+        _emit = None
 
     def on_event(ev):
         collected["events"].append(ev)
         et = ev.get("event")
+        if et == "session_ack" and _emit:
+            try:
+                _emit({"event": "tool_progress", "args": {"peer": handle},
+                       "key": ("fed.session_awaiting_approval"
+                               if ev.get("state") == "awaiting_approval"
+                               else "fed.session_accepted")})
+            except Exception:
+                pass
         if et == "reply":
             collected["reply"] = ev.get("reply", "")
         if et in fed_session.TERMINAL_EVENTS:
@@ -2216,6 +2237,13 @@ def tool_fed_ask_agent(handle, message, max_iterations=None, device="", tab="",
     if et == "iteration_limit":
         return {"ok": True, "from": handle,
                 "message": f"'{handle}' ran out of iterations without concluding."}
+    if terminal.get("code") == "no_answer":
+        return {"error": f"'{handle}': {terminal.get('error', 'no answer')}",
+                "no_answer": True, "retryable": False,
+                "message": f"Nobody at '{handle}' answered the request in time: "
+                           f"it was not refused, nobody was there. Do not call "
+                           f"this tool again now; tell the user, who can try "
+                           f"later or ask them to be at their machine."}
     if terminal.get("code") == "declined" or terminal.get("retryable") is False:
         return {"error": f"'{handle}': {terminal.get('error', 'declined')}",
                 "declined": True,
@@ -3746,6 +3774,8 @@ def _catchup_due(ws_up, prev_ws_up, last_ts, now):
 import queue as _queue
 _PENDING_APPROVALS = {}
 _PENDING_LOCK = _threading.Lock()
+_EXPIRED_APPROVALS = set()
+APPROVAL_TIMEOUT_S = 300
 _approval_seq = 0
 
 
@@ -3777,10 +3807,12 @@ def _bridge_approver(peer, message, analyze, session_id=""):
                                    "analyze": analyze, "queue": q,
                                    "session_id": session_id or ""}
     try:
-        answer = q.get(timeout=300)
+        answer = q.get(timeout=APPROVAL_TIMEOUT_S)
         return None if answer is None else bool(answer)
     except _queue.Empty:
-        return False
+        with _PENDING_LOCK:
+            _EXPIRED_APPROVALS.add(aid)
+        return "timeout"
     finally:
         with _PENDING_LOCK:
             _PENDING_APPROVALS.pop(aid, None)
@@ -3805,6 +3837,11 @@ def list_pending_approvals():
         return [{"id": aid, "peer": v["peer"], "message": v["message"],
                  "analyze": v["analyze"]}
                 for aid, v in _PENDING_APPROVALS.items()]
+
+
+def approval_expired(approval_id):
+    with _PENDING_LOCK:
+        return approval_id in _EXPIRED_APPROVALS
 
 
 def resolve_approval(peer, approved, approval_id=""):
@@ -3835,6 +3872,7 @@ _OUTBOUND_LOCK = _threading.Lock()
 
 
 TURN_STOP_PROBE = None
+TURN_EMITTER = None
 
 
 def _turn_stop_probe():
@@ -4004,8 +4042,30 @@ def _mine_by_device(envelopes):
     return out
 
 
+_DISPATCHED_ENVS = {}
+_DISPATCHED_GUARD = _threading.Lock()
+
+
+def _first_dispatch(env_id):
+    if not env_id:
+        return True
+    now = _time.time()
+    with _DISPATCHED_GUARD:
+        if env_id in _DISPATCHED_ENVS:
+            return False
+        _DISPATCHED_ENVS[env_id] = now
+        if len(_DISPATCHED_ENVS) > 2000:
+            for k in sorted(_DISPATCHED_ENVS, key=_DISPATCHED_ENVS.get)[:1000]:
+                _DISPATCHED_ENVS.pop(k, None)
+    return True
+
+
 def _dispatch_session_envelope(env):
     import fed_session
+    if not _first_dispatch(env.get("id")):
+        print(f"[SESSION-IN] envelope {env.get('id')} already dispatched: skipped",
+              file=_sys.stderr)
+        return
     rtype = env.get("resource_type")
     if rtype == fed_session.T_STOP:
         fed_session.handle_incoming_stop(env)
@@ -4047,6 +4107,12 @@ def _turn_lock(peer):
 def _serialized_incoming_turn(env, get_trust, approver, sink):
     import fed_session
     peer = env.get("sender", "")
+    try:
+        _me = _store().data.get("handle", "")
+    except Exception:
+        _me = ""
+    if peer and peer == _me:
+        return fed_session.handle_incoming_turn(env, get_trust, approver, sink)
     lk = _turn_lock(peer)
     if lk.locked():
         print(f"[SESSION-IN] {peer!r} busy → this turn waits its place in line",
@@ -5391,6 +5457,26 @@ def _sync_row_key(p):
             or p.get("key") or "")
 
 
+def _tied_copy_wins(store, incoming, current):
+    if store != "chat_sessions" or not isinstance(current, dict) \
+            or not isinstance(incoming, dict):
+        return None
+
+    def _pin(row):
+        v = row.get("pinned_device")
+        return v.get("id") if isinstance(v, dict) else None
+    pin = _pin(incoming) or _pin(current)
+    if not pin:
+        return None
+    in_home = incoming.get("writer_device") == pin
+    cur_home = current.get("writer_device") == pin
+    if in_home and not cur_home:
+        return True
+    if cur_home and not in_home:
+        return False
+    return None
+
+
 def _sync_row_version(p):
     rev = int(p.get("rev", 0) or 0)
     ts = str(p.get("updated_at") or p.get("updated") or p.get("ts")
@@ -5667,7 +5753,10 @@ def tool_fed_sync_pull():
                 continue
             key = _sync_row_key(p)
             cur = local.get(store, {}).get(key)
-            if cur is None or _sync_row_version(p) > _sync_row_version(cur):
+            _tied = _tied_copy_wins(store, p, cur)
+            if _tied is False:
+                continue
+            if cur is None or _tied or _sync_row_version(p) > _sync_row_version(cur):
                 sql.upsert(store, key, _sync_import_row(store, p))
                 merged += 1
         for store in _SYNC_STORES:

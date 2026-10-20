@@ -56,6 +56,8 @@ Non-terminal, in no guaranteed order except that `turn_start` is first:
 | Event | Payload | Meaning |
 |---|---|---|
 | `turn_start` | `turn_id`, `tools`, `max_iterations`, `shelf`, `carried` | Keep the `turn_id`: you need it to stop or to answer tools. `carried` names the tools that travel with their full schema this turn; `shelf` counts the rest, available by name through `load_tools`. |
+| `tab_saved` | `uuid`, `sync_id` | Only to the window of the machine a tied tab lives on: another of your machines saved that tab here through `/tied/…`; an open window takes the saved copy. |
+| `proxy_response` / `proxy_end` | `status`, `ctype`, `body_b64` / `status` | Internal to `/tied/…`: the answer of a request that does not stream, and the end of one that does. A client of `/tied/…` receives the answer itself, never these. |
 | `prep` | `note:{key,args}` | What the MCP put in front of the model. **An i18n key, not text** — it does not know your language. |
 | `iteration` | `n`, `max` | |
 | `injected` | `message`, `n` | Something arrived on `/agent/inject` while this turn was running and was appended as a user message on iteration `n`. |
@@ -519,6 +521,24 @@ offer the same screens.
 `POST /agent/inject` · `POST /agent/hands` · `POST /agent/memory_snapshot` ·
 `POST /agent/qa` · `GET /agent/context_limit` · `GET /agent/prompt_budget` ·
 `POST /agent/context_map` · `POST /code/judge` · `POST /call`.
+
+**Another of your machines** — `/tied/<device>/<path>`, any method: the same
+request, asked of the server of one of your own machines (`device` is its
+`device_info` id). It reaches that machine's own server through the
+federation, sealed, and comes back as that server answered it — the same
+status and bytes, or the same NDJSON stream when it streams, as
+`/agent/turn` does. A tab tied to another machine uses it for everything
+about the tab: `/tied/<device>/agent/turn` runs the turn there with its whole
+conversation, memory, skills, project and tools, and its `turn_id` is that
+machine's, so `/tied/<device>/agent/stop`, `…/agent/plan_ack`,
+`…/agent/council_ack` and `…/agent/inject` reach it. Compaction
+(`…/memory/compact`), the saved conversation (`…/call` with
+`chat_session_save` / `chat_session_load`), the project's files and git
+(`…/call` with `code_*` / `git_*`) all run there. The optional header
+`X-Hoplita-Tab: <sync id>` names the tab, so that machine's window paints the
+turn in it and takes a saved copy. Only between machines of one federated
+identity; `/shutdown` and a second hop are refused (403), and a request over
+~2.8 MB is refused (413).
 
 **Tools and configuration**
 

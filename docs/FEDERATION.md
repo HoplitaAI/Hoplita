@@ -99,11 +99,21 @@ the chat…*
    machine's data folder.
 3. Start the MCP there with **the same master password** as on the first
    machine. The file is sealed with that password: a different one fails to
-   open it, and the MCP asks for the password again.
+   open it, and the MCP asks for the password again. On its first start the
+   window says the machine is **joining** your identity and asks for your
+   other machine's password — it is not a new one to choose.
+
+   If this machine was already started on its own, it has a vault of its own,
+   sealed with whatever password you chose then. Either that password is
+   already the same as on the first machine, or start it clean:
+   `python3 install.py --uninstall --purge` (this deletes what that vault
+   held), install again, copy the file, then start.
 4. Start the GUI. About 3.5 seconds after launch it pulls your snapshot. Press
    **⇊ Pull** in the header if you do not want to wait.
-5. Give each machine a name, so that you can tell them apart. Right-click a
-   chat tab → **🏷 Name this machine…**.
+
+Each machine is shown by its hostname. Nothing has to be named: work is routed
+to a machine by an id of its own. To show it under another name, ask in the
+chat («call this machine home»).
 
 Do not run `fed_register` on the second machine: that would create a second,
 different identity.
@@ -192,7 +202,8 @@ identity.
 
 The dot on a contact's avatar shows presence: green is online, grey is
 offline. The list refreshes every 5 seconds while the tab is visible, or
-press **↻ Refresh**.
+press **↻ Refresh**. Presence is shared only between accepted contacts: a
+request that has not been accepted shows nothing, either way.
 
 If the tab shows *Your live socket is … — contacts see YOU offline…*, your
 own connection is down: everything still works, but others see you offline
@@ -393,11 +404,34 @@ up» (`fed_ask_agent`).
 
 **A session.** **Contacts** → right-click the contact → **💬 Open session**.
 
-1. A chat tab opens, connected to their agent: *Session opened with bob. Type
-   here to talk to their agent…*
+1. A chat tab opens, connected to their agent: *Session tab with bob: what
+   you type here goes to their agent…*
 2. Everything you type there runs on their machine.
 3. Attachments do not travel.
 4. Press ✕ on the banner to end the session.
+
+**What the tab tells you.** A message is *sent*, then *confirmed*, then it
+runs:
+
+- *→ Sent to bob. Waiting for their HOPLITA to confirm it…*
+- *⏳ bob's HOPLITA received it and is asking its person…* — when their
+  permission for you is review (below).
+- *● bob accepted the session: their agent is on it.*
+- *⚠ bob's HOPLITA has not confirmed it after 20 s* — their machine is off
+  or disconnected; it gets the message when it connects.
+
+**Commands in a session tab.** They act on your own tabs and never travel as
+a message. `/model` alone says which model answers you there (the one their
+agent really called); `/model <name>` says the model is chosen on their
+machine; any other command says it is not available in a session tab.
+
+**What their agent knows of you, and of them.** Their agent works with their
+model and tools, and **without their memory**: a session with a contact (or
+with a child) never puts the executor's facts and lessons in its context,
+because the answer goes back to the other side. What a contact or a child
+needs to know is shared on purpose, as a skill (5.4) or a pack (7). Only a
+session with **yourself** — your identity on another machine, see `/pin`
+below — works with your memory.
 
 **How fast it shows.** What their agent is doing appears on your tab as it
 happens: each step goes from their machine to yours through the server without
@@ -411,8 +445,11 @@ decides:
 
 - auto-accept: the request runs.
 - review: they get *Incoming session request — "alice" wants your agent to run
-  a task. Approve?* with **Approve** / **Reject**. The prompt needs their GUI
-  open.
+  a task. Approve?* with **Approve** / **Reject**, once per session: the next
+  messages of an accepted session run without asking. A new session, or one
+  idle for 30 minutes, asks again. The prompt needs their GUI open; if nobody
+  answers in 5 minutes the request runs out, and you are told nobody
+  answered — not that it was refused.
 - no: the request is declined. The agent treats a decline as final and does
   not retry.
 
@@ -428,8 +465,13 @@ This works between machines that share your identity (step 2).
 
 1. On the machine that has the files, services or disks the tab needs, type
    `/pin` in that tab, or right-click the tab → **📍 Tie to this machine**.
-2. The tab travels to your other machines in the snapshot. Its turns run on
-   the tied machine, wherever you type.
+2. The tab travels to your other machines in the snapshot. From any of them
+   it is that machine's tab, as if you sat at it: its turns run there, and so
+   does everything else about the tab — Stop, plan and council approvals,
+   compaction (`/compact` and the automatic one), the context map, the saved
+   conversation, the project's files, git, checkpoints and diff, and the
+   whiteboards. Only what is drawn on the screen (canvas, the sticky note,
+   alerts) comes back to the window you are at.
 3. `/pin ?` says which machine the tab is tied to. `/pin off` unties it.
 
 The tied machine must be running and logged in to the federation. If it is
@@ -545,9 +587,10 @@ Where that password is kept matters, because the child's agent runs commands
 as the user the MCP runs as:
 
 - At start the MCP takes the variable **out of its environment**, so no
-  command it runs inherits it. On Linux it also clears it from the start-up
-  copy that `/proc/<pid>/environ` shows. On macOS and Windows that start-up
-  copy is not cleared, and a process of the same user may still read it there.
+  command it runs inherits it. It also clears it from the start-up copy that
+  `/proc/<pid>/environ` shows on Linux and `ps -E` shows on macOS. On Windows
+  that start-up copy is not cleared, and a process of the same user may still
+  read it there.
 - A file the MCP's user can read can be read by the agent's commands too. Keep
   the password in a file **only root can read**, and let the service manager
   hand it over.

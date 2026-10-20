@@ -16,10 +16,12 @@ T_STOP = "agent.stop"
 T_CLIENT_TOOL_CALL = "agent.client_tool_call"
 T_TOOL_RESULT = "agent.tool_result"
 
-TERMINAL_EVENTS = ("reply", "cancelled", "iteration_limit", "error")
+TERMINAL_EVENTS = ("reply", "cancelled", "iteration_limit", "error",
+                   "proxy_response", "proxy_end")
 
 _store_getter = None
 _run_turn = None
+TIED_REQUEST = None
 def _incoming_qa_mode():
     import os
     return (os.environ.get("HOPLITA_INCOMING_QA", "always").strip().lower()
@@ -59,11 +61,18 @@ def _session_tools_for():
         return None
 
 
-def _session_system_for(message):
+def _session_system_for(message, peer=""):
     if _session_system is None:
         return None
     try:
-        return _session_system(message)
+        me = (_session_ctx()[0].data or {}).get("handle", "")
+    except Exception:
+        me = ""
+    own = bool(peer) and peer == me
+    try:
+        return _session_system(message, own=own)
+    except TypeError:
+        return None
     except Exception:
         return None
 
@@ -142,8 +151,9 @@ class SessionOriginator:
         return max(1.0, float(getattr(exc, "retry_after", None) or 2.0))
 
     def __init__(self, peer_handle, on_event, poll_interval=None,
-                 overall_timeout=1800, device="", tab=""):
+                 overall_timeout=1800, device="", tab="", extra=None):
         self.peer = peer_handle
+        self.extra = dict(extra or {})
         self.device = (device or "").strip()
         self.tab = (tab or "").strip()
         _emit = on_event or (lambda ev: None)
@@ -179,6 +189,8 @@ class SessionOriginator:
                         "live": fed.ws_live_ok()}
         if self.tab:
             turn_payload["tab"] = self.tab
+        if self.extra:
+            turn_payload.update(self.extra)
         _send(server_url, token, my_priv, self.peer, peer_pub, T_TURN,
               turn_payload, self.session_id, device=self.device)
         print(f"[SESSION-OUT] turn SENT → recipient={self.peer!r} "
@@ -593,19 +605,45 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
         except Exception:
             pass
         return {"ok": False, "reason": f"'{sender}' has no session permission"}
+    _first = not has_inbound_session(sender)
+
+    def _ack(state):
+        try:
+            _send(server_url, token, my_priv, sender, sender_pub, T_EVENT,
+                  {"event": "session_ack", "state": state,
+                   "by": store.data.get("handle", "")}, session_id)
+        except Exception as e:
+            print(f"[SESSION-IN] could not send the {state} ack to {sender!r}: {e}",
+                  file=sys.stderr)
+
+    if trust != "open" and _session_approved(sender, session_id):
+        trust = "open"
     if trust != "open":
         approved = False
         if approver is not None:
+            _ack("awaiting_approval")
             try:
                 answer = approver(sender, message, trust == "analyze",
                                   session_id=session_id)
             except Exception:
                 answer = False
+            if answer == "timeout":
+                mins = max(1, int(getattr(sys.modules.get("fed_tools"),
+                                          "APPROVAL_TIMEOUT_S", 300)) // 60)
+                _send(server_url, token, my_priv, sender, sender_pub, T_EVENT,
+                      {"event": "error", "code": "no_answer", "retryable": False,
+                       "error": f"'{store.data['handle']}' did not answer in "
+                                f"{mins} minutes: nobody accepted or refused it. "
+                                f"Send it again when they are there."},
+                      session_id)
+                return {"ok": False, "reason": "nobody answered in time"}
             if answer is None:
                 print(f"[SESSION-IN] {sender!r} withdrew session={session_id} "
                       f"before it was approved", file=sys.stderr)
                 return {"ok": False, "reason": "withdrawn by the originator"}
             approved = bool(answer)
+            if approved:
+                _remember_approval(sender, session_id)
         if not approved:
             _send(server_url, token, my_priv, sender, sender_pub, T_EVENT,
                   {"event": "error", "code": "declined", "retryable": False,
@@ -613,6 +651,8 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
                             f"(trust '{trust}', not approved)."},
                   session_id)
             return {"ok": False, "reason": "not approved by the gate"}
+    if _first:
+        _ack("accepted")
 
     cancel_flag = threading.Event()
     _register_cancel(session_id, cancel_flag)
@@ -621,26 +661,32 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
     _register_inbound_session(sender, session_id, sender_pub, live=_peer_live)
 
     _tab = str((payload or {}).get("tab") or "").strip()
+    _own = bool(sender and sender == store.data.get("handle"))
+    _treq = (payload or {}).get("tied_request") if _own else None
+    if not isinstance(_treq, dict):
+        _treq = None
+    _paint = _treq is None or _treq.get("path") == "/agent/turn"
 
     outbox = EventOutbox(lambda ev: _send(server_url, token, my_priv, sender,
                                           sender_pub, T_EVENT, ev, session_id))
     live = LiveTx(my_priv, sender, sender_pub, session_id, _peer_live)
 
     def on_event(ev):
-        if local_sink:
+        if local_sink and (_paint or ev.get("event") == "tab_saved"):
             try:
                 local_sink(dict(ev, tab=_tab) if _tab else ev)
             except Exception:
                 pass
         live.route(live.stamp(dict(ev, t_exec=time.time())), outbox)
 
-    if local_sink:
+    if local_sink and _paint:
+        def _sink(ev):
+            local_sink(dict(ev, tab=_tab) if _tab else ev)
         try:
             if _new_session:
-                local_sink({"event": "session_open", "peer": sender,
-                            "session_id": session_id})
-            local_sink({"event": "user_message", "from": sender,
-                        "text": message})
+                _sink({"event": "session_open", "peer": sender,
+                       "session_id": session_id})
+            _sink({"event": "user_message", "from": sender, "text": message})
         except Exception:
             pass
 
@@ -686,6 +732,27 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
             time.sleep(1.0)
         raise TimeoutError("the originator did not return the tool in time")
 
+    if _own and (payload or {}).get("tied_turn") is not None:
+        on_event({"event": "error", "code": "update", "retryable": False,
+                  "error": "this tab is tied to a machine running a newer "
+                           "HOPLITA: update this one to use it"})
+        _unregister_cancel(session_id)
+        outbox.close(timeout=30)
+        return {"ok": False, "reason": "tied turn from an older version"}
+    if _treq is not None and TIED_REQUEST is not None:
+        print(f"[SESSION-IN] tied {_treq.get('method', '?')} {_treq.get('path', '?')} "
+              f"· session={session_id}", file=sys.stderr)
+        try:
+            result = TIED_REQUEST(_treq, on_event, cancel_flag)
+        finally:
+            _unregister_cancel(session_id)
+            if not outbox.close(timeout=60):
+                print(f"[SESSION-OUT] outbox did not drain in 60s "
+                      f"(session {session_id})", file=sys.stderr)
+            outbox.report(session_id)
+            _report_live(live)
+        return {"ok": True, "session_id": session_id, "result": result}
+
     _delegated = ("render_html", "dashboard_render", "alert")
     try:
         with _orchestrating(emit=on_event, cancel=cancel_flag.is_set,
@@ -693,7 +760,7 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
                             unattended=True, turn_id=session_id):
             result = _run_turn(
                 user_message=message, max_iterations=max_iter,
-                system=_session_system_for(message),
+                system=_session_system_for(message, sender),
                 allowed_tools=_session_tools_for(),
                 on_event=on_event, cancel=cancel_flag.is_set,
                 turn_id=session_id,
@@ -720,6 +787,33 @@ _INBOUND_SESSIONS = {}
 _INBOUND_LOCK = threading.Lock()
 
 
+_APPROVED_SESSIONS = {}
+APPROVAL_IDLE_S = 30 * 60
+
+
+def _remember_approval(peer, session_id):
+    with _INBOUND_LOCK:
+        _APPROVED_SESSIONS[session_id] = (peer, time.time())
+
+
+def _session_approved(peer, session_id):
+    with _INBOUND_LOCK:
+        hit = _APPROVED_SESSIONS.get(session_id)
+        if not hit or hit[0] != peer:
+            return False
+        if time.time() - hit[1] > APPROVAL_IDLE_S:
+            _APPROVED_SESSIONS.pop(session_id, None)
+            return False
+        _APPROVED_SESSIONS[session_id] = (peer, time.time())
+        return True
+
+
+def _forget_approvals(peer):
+    with _INBOUND_LOCK:
+        for sid in [k for k, v in _APPROVED_SESSIONS.items() if v[0] == peer]:
+            _APPROVED_SESSIONS.pop(sid, None)
+
+
 def _register_inbound_session(peer, session_id, sender_pub, live=False):
     with _INBOUND_LOCK:
         _INBOUND_SESSIONS[peer] = {"session_id": session_id,
@@ -743,6 +837,7 @@ def close_inbound_session(peer):
         return {"ok": False, "reason": f"no incoming session with '{peer}'"}
     session_id = sess["session_id"]
     sender_pub = sess["sender_pub"]
+    _forget_approvals(peer)
     try:
         store, server_url, token, my_priv, my_pub = _session_ctx()
         _send(server_url, token, my_priv, peer, sender_pub, T_EVENT,
@@ -838,7 +933,7 @@ def inject_local_turn(peer, message, local_sink=None):
                             unattended=True, turn_id=session_id):
             result = _run_turn(
                 user_message=message, max_iterations=None,
-                system=_session_system_for(message),
+                system=_session_system_for(message, peer),
                 allowed_tools=_session_tools_for(),
                 on_event=on_event, cancel=cancel_flag.is_set,
                 turn_id=session_id,

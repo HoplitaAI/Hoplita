@@ -172,6 +172,9 @@ class FedWS:
         self._lock = threading.Lock()
         self._pending = {}
         self._on_event = None
+        import queue as _queue
+        self._events = _queue.Queue()
+        self._events_thread = None
         self._url = None
         self._token = None
         self._stop = threading.Event()
@@ -180,6 +183,24 @@ class FedWS:
         self.state = {"phase": "idle", "error": "", "since": 0.0}
         self._said = ""
         self.server = {}
+
+    def _emit(self, event, data):
+        if not self._on_event:
+            return
+        if self._events_thread is None or not self._events_thread.is_alive():
+            self._events_thread = threading.Thread(target=self._drain_events,
+                                                   daemon=True, name="fed-ws-events")
+            self._events_thread.start()
+        self._events.put((event, data))
+
+    def _drain_events(self):
+        while True:
+            event, data = self._events.get()
+            try:
+                if self._on_event:
+                    self._on_event(event, data)
+            except Exception:
+                pass
 
     def _set_state(self, phase, error=""):
         import sys as _s
@@ -299,11 +320,7 @@ class FedWS:
                 self.authenticated = True
                 self._set_state("up")
                 up_at = time.monotonic()
-                if self._on_event:
-                    try:
-                        self._on_event("ws.connected", {})
-                    except Exception:
-                        pass
+                self._emit("ws.connected", {})
                 self._last_rx = time.monotonic()
                 threading.Thread(target=self._heartbeat, args=(ws,),
                                  daemon=True, name="fed-ws-heartbeat").start()
@@ -323,10 +340,7 @@ class FedWS:
                         slot["resp"] = msg
                         slot["event"].set()
                     elif "event" in msg and self._on_event:
-                        try:
-                            self._on_event(msg["event"], msg.get("data") or {})
-                        except Exception:
-                            pass
+                        self._emit(msg["event"], msg.get("data") or {})
             except Exception as e:
                 if self.state.get("phase") not in ("auth_failed",):
                     self._set_state("down", repr(e)[:200])

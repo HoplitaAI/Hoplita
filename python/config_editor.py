@@ -215,6 +215,13 @@ DEFAULTS = {
     ("CRAWL4AI", "timeout"): "60",
 }
 
+def left_form(form):
+    form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+    form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+    return form
+
+
 class AutoSpinBox(QSpinBox):
 
     def __init__(self, auto_text="auto", parent=None):
@@ -757,7 +764,7 @@ class ConfigEditorDialog(QDialog):
         title = QLabel(f"[{section}]")
         title.setObjectName("cfgsection")
         cv.addWidget(title)
-        form = QFormLayout()
+        form = left_form(QFormLayout())
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight |
                                Qt.AlignmentFlag.AlignVCenter)
         form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -863,13 +870,13 @@ class ConfigEditorDialog(QDialog):
         self._pool_add_btn = add
         _ar = QHBoxLayout(); _ar.addWidget(add); _ar.addStretch(1)
         mv.addLayout(_ar)
-        _vf = QFormLayout()
+        _vf = left_form(QFormLayout())
         _vf.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._add_row(_vf, "CHAT", "vision", "bool", None, label=self._t("cfg.vision_default"))
         mv.addLayout(_vf)
         self._pool_layout.addWidget(mcard)
         card, cv = self._card("cfg.roles_title", "cfg.roles_note")
-        form = QFormLayout()
+        form = left_form(QFormLayout())
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(9)
@@ -909,7 +916,7 @@ class ConfigEditorDialog(QDialog):
         form.addRow(QLabel(self._t("cfg.role_images")), _imgs)
         self._pool_layout.addWidget(card)
         icard, iv = self._card("cfg.images_title", "cfg.images_note")
-        iform = QFormLayout()
+        iform = left_form(QFormLayout())
         iform.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         iform.setHorizontalSpacing(18)
         iform.setVerticalSpacing(9)
@@ -1208,7 +1215,7 @@ class ConfigEditorDialog(QDialog):
         top.addWidget(rm)
         bl.addLayout(top)
         details = QWidget()
-        form = QFormLayout(details)
+        form = left_form(QFormLayout(details))
         form.setContentsMargins(0, 6, 0, 2)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         fields = {}
