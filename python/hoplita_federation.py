@@ -76,7 +76,7 @@ def _api(server_url):
     return server_url.rstrip("/") + "/api/fed"
 
 
-PROTO = 2
+PROTO = 3
 CAPS = ("live",)
 
 
