@@ -91,6 +91,9 @@ def _session_ctx():
 
 def _peer_pubkey(server_url, token, handle):
     import fed_tools
+    st = fed_tools._store()
+    if handle and handle == st.data.get("handle"):
+        return st.data.get("public_key_b64")
     pub, err = fed_tools._trusted_pub(server_url, token, handle)
     if not pub:
         raise RuntimeError(err)

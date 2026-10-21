@@ -198,6 +198,14 @@ Accepting or adding signs the other side's keys with your own key. That
 signature is what makes them your contact, on every machine that carries your
 identity.
 
+Everything that travels is sealed by its sender for its recipient: notes,
+folders, projects, code, appointments, sessions, and your own sync copy,
+which you seal for yourself. Each item is opened with the sender's key you
+signed, and one that does not open with it is not accepted: the server, which
+holds every public key, can neither read what you send nor write in anybody's
+name. An older HOPLITA, which sealed anonymously, can no longer share with
+this one: both sides need to be updated.
+
 ### Presence
 
 The dot on a contact's avatar shows presence: green is online, grey is

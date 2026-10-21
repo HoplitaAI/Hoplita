@@ -201,7 +201,7 @@ def _code_send(handle, etype, cat, branch, base, tip, bundle_path):
                    "tip": tip, "xfer": xfer, "part": i,
                    "parts": len(chunks), "data": chunk}
         envelope = crypto.make_envelope(etype, payload, sender_pub_b64=my_pub)
-        blob = crypto.seal_for(recipient_pub, envelope)
+        blob = _seal(_store(), recipient_pub, envelope)
         try:
             r = _with_relogin(lambda b=blob: fed.server_send_envelope(
                 server_url, token, handle, etype, b, {}))
@@ -224,7 +224,7 @@ def _code_send_one(handle, etype, payload):
     if err:
         raise RuntimeError(err)
     env = crypto.make_envelope(etype, payload, sender_pub_b64=my_pub)
-    blob = crypto.seal_for(recipient_pub, env)
+    blob = _seal(_store(), recipient_pub, env)
     return _with_relogin(lambda: fed.server_send_envelope(
         server_url, token, handle, etype, blob, {}))
 
@@ -239,7 +239,7 @@ def _code_fetch_type(etype, ack_ids=None):
     out = []
     for env in resp.get("envelopes", []):
         try:
-            dec = crypto.unseal(my_priv, env["ciphertext"])
+            dec = _unsealed(env)
             p = dec.get("payload", {})
         except Exception:
             continue
@@ -1367,6 +1367,54 @@ def inbound_contact_pub(server_url, token, handle):
     return srv_pub
 
 
+def _seal(st, recipient_pub, envelope):
+    return crypto.box_for(st.data.get("private_key_b64"), recipient_pub, envelope)
+
+
+def _open_from(st, server_url, token, env, keys=None):
+    sender = env.get("sender") or ""
+    keys = {} if keys is None else keys
+    if sender not in keys:
+        if sender and sender == st.data.get("handle"):
+            keys[sender] = st.data.get("public_key_b64")
+        else:
+            try:
+                keys[sender] = inbound_contact_pub(server_url, token, sender)
+            except Exception as e:
+                print(f"[FED] envelope {env.get('id')} from {sender!r} not opened: {e}",
+                      file=_sys.stderr)
+                keys[sender] = None
+    pub = keys.get(sender)
+    if not pub:
+        return sender, None
+    try:
+        dec = crypto.unbox(st.data.get("private_key_b64"), pub, env.get("ciphertext") or "")
+    except Exception:
+        print(f"[FED] envelope {env.get('id')} does not open with {sender!r}'s key: "
+              f"not theirs", file=_sys.stderr)
+        return sender, None
+    rtype = env.get("resource_type")
+    if rtype and dec.get("type") and dec.get("type") != rtype:
+        return sender, None
+    return sender, dec
+
+
+_OPEN_KEYS = {}
+_OPEN_KEYS_TTL = 30
+
+
+def _unsealed(env):
+    st, server_url, token = _require_session()
+    now = _time.time()
+    keys = {h: p for h, (t, p) in list(_OPEN_KEYS.items()) if now - t < _OPEN_KEYS_TTL}
+    sender, dec = _open_from(st, server_url, token, env, keys)
+    if sender not in _OPEN_KEYS or now - _OPEN_KEYS[sender][0] >= _OPEN_KEYS_TTL:
+        _OPEN_KEYS[sender] = (now, keys.get(sender))
+    if dec is None:
+        raise ValueError(f"not shown to come from {sender!r}")
+    return dec
+
+
 def tool_fed_register(handle, email, server_url, invite=""):
     store = _store()
     if store.has_identity():
@@ -1810,7 +1858,7 @@ def tool_fed_share(handle, resource_type, payload):
     my_pub = store.data.get("public_key_b64")
     envelope = crypto.make_envelope(resource_type, payload, sender_pub_b64=my_pub)
     try:
-        blob = crypto.seal_for(recipient_pub, envelope)
+        blob = _seal(_store(), recipient_pub, envelope)
     except Exception as e:
         return {"error": f"Encryption failed: {e}"}
 
@@ -1858,7 +1906,7 @@ def tool_fed_inbox(resource_type=None):
         if resource_type and rtype != resource_type:
             continue
         try:
-            decrypted = crypto.unseal(my_priv, env["ciphertext"])
+            decrypted = _unsealed(env)
             items.append({
                 "from": env.get("sender"),
                 "resource_type": rtype,
@@ -2016,7 +2064,7 @@ def tool_fed_share_appointment(handle, title, date, description="", urgency="Nor
     }
     env = crypto.make_envelope("calendar_event", payload, sender_pub_b64=my_pub)
     try:
-        blob = crypto.seal_for(peer_pub, env)
+        blob = _seal(_store(), peer_pub, env)
         _with_relogin(lambda: fed.server_send_envelope(
             server_url, _store().data["token"], handle, "calendar_event", blob, {}))
     except Exception as e:
@@ -2048,7 +2096,7 @@ def tool_fed_list_incoming_appointments():
         if env.get("resource_type") != "calendar_event":
             continue
         try:
-            dec = crypto.unseal(my_priv, env["ciphertext"])
+            dec = _unsealed(env)
             p = dec.get("payload", {})
             incoming.append({
                 "from": env.get("sender", "?"),
@@ -2084,7 +2132,7 @@ def tool_fed_list_appointment_bounces():
         if env.get("resource_type") != "cita_denied":
             continue
         try:
-            p = crypto.unseal(my_priv, env["ciphertext"]).get("payload", {})
+            p = _unsealed(env).get("payload", {})
         except Exception:
             acked.append(env.get("id")); continue
         out.append({"from": env.get("sender", "?"),
@@ -2137,14 +2185,14 @@ def _auto_accept_appointments():
             try:
                 spub, _kerr = _trusted_pub(server_url, token, sender)
                 if spub:
-                    b = crypto.seal_for(spub, crypto.make_envelope(
+                    b = _seal(_store(), spub, crypto.make_envelope(
                         "cita_denied", {"reason": "you don't have permission"}, sender_pub_b64=my_pub))
                     fed.server_send_envelope(server_url, token, sender, "cita_denied", b, {})
             except Exception:
                 pass
             acked.append(env.get("id")); denied += 1; continue
         try:
-            p = crypto.unseal(my_priv, env["ciphertext"]).get("payload", {})
+            p = _unsealed(env).get("payload", {})
             key = (p.get("date", ""), p.get("title", "").strip().lower())
             if f"{key[0]}|{key[1]}" in tombs:
                 acked.append(env.get("id")); continue
@@ -2859,6 +2907,9 @@ def tool_fed_subscribe_folder(handle, folder_name=None, folder_id=None):
                 "available": [{"folder_name": p["folder_name"],
                                "folder_id": p["folder_id"]} for p in pubs]}
     target = match[0]
+    _pub, kerr = _trusted_pub(server_url, token, handle)
+    if not _pub:
+        return {"error": f"Could not subscribe: {kerr}"}
     try:
         resp = _with_relogin(lambda: fed.server_subscribe_folder(
             _store().data["server_url"], _store().data["token"],
@@ -3167,7 +3218,7 @@ def _fed_push(kind, name, store):
                     cfg["etype"], {"name": name, "item": it},
                     sender_pub_b64=my_pub)
             try:
-                blob = crypto.seal_for(ppub, env)
+                blob = _seal(_store(), ppub, env)
                 fed.server_send_envelope(server_url, token, ph, cfg["etype"], blob,
                                          {"folder_id": folder_id, cfg["metakey"]: name})
                 sent += 1
@@ -3223,7 +3274,7 @@ def _fed_pull(kind, name, store):
     for env in [e for e in all_env if e.get("resource_type") == del_type
                 and cfg.get("dissolve", True)]:
         try:
-            p = crypto.unseal(my_priv, env["ciphertext"]).get("payload", {})
+            p = _unsealed(env).get("payload", {})
         except Exception:
             continue
         sender = env.get("sender", "")
@@ -3242,7 +3293,7 @@ def _fed_pull(kind, name, store):
     by_name = {}
     for env in [e for e in all_env if e.get("resource_type") == cfg["etype"]]:
         try:
-            p = crypto.unseal(my_priv, env["ciphertext"]).get("payload", {})
+            p = _unsealed(env).get("payload", {})
         except Exception:
             acked.append(env.get("id")); continue
         rname = p.get("name") or ""
@@ -3546,7 +3597,7 @@ def tool_fed_delete_shared(kind, name):
                 continue
             payload = {"kind": kind, "name": name, "folder_id": fid}
             env = crypto.make_envelope(rtype, payload, sender_pub_b64=my_pub)
-            blob = crypto.seal_for(pub, env)
+            blob = _seal(_store(), pub, env)
             fed.server_send_envelope(server_url, token, m["handle"], rtype,
                                      blob, {"folder_id": fid})
             notified += 1
@@ -3600,7 +3651,7 @@ def _unshare(kind, name, peer=None):
         ids = []
         for env in resp.get("envelopes", []):
             try:
-                dec = crypto.unseal(my_priv, env["ciphertext"])
+                dec = _unsealed(env)
                 p = dec.get("payload", {})
             except Exception:
                 continue
@@ -5764,7 +5815,7 @@ def tool_fed_sync_push():
             "stores": _sync_row_stores()}
     pad = (-len(_json.dumps(snap, ensure_ascii=False))) % 65536
     snap["_pad"] = "0" * pad
-    sealed = crypto.seal_for(my_pub, snap)
+    sealed = _seal(_store(), my_pub, snap)
     base = int(sql.meta_get("sync_version") or 0)
     try:
         resp = fed.server_sync_push(server_url, token, sealed, base)
@@ -5851,9 +5902,16 @@ def tool_fed_sync_pull():
     if not blob:
         return {"ok": True, "merged": 0, "message": "Nothing on the server yet."}
     try:
-        snap = crypto.unseal(my_priv, blob)
+        snap = crypto.unbox(my_priv, st.data.get("public_key_b64"), blob)
     except Exception:
-        return {"error": "decrypt_failed"}
+        try:
+            crypto.unseal(my_priv, blob)
+        except Exception:
+            return {"error": "decrypt_failed"}
+        sql.meta_set("sync_version", str(version))
+        return {"ok": True, "merged": 0, "unsigned_replaced": True,
+                "message": "The copy on the server was not sealed by this "
+                           "identity: not merged; the next upload replaces it."}
     global _snap_merging
     _snap_merging = True
     local = {}
