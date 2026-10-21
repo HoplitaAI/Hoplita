@@ -224,6 +224,12 @@ has one row per resource. Each row is set to **auto-accept**, **review** or
 Appointments are refused until you set their row. When **Remote sessions** is
 not set, the contact's trust level decides.
 
+The permissions and the trust level are signed by you together with the
+contact's keys, and that signature is what HOPLITA reads. The server keeps a
+copy for your other machines; a change made there does not change what your
+HOPLITA allows, and a contact listed there that you never added or accepted
+is treated as a stranger.
+
 ### Verify a contact
 
 A contact's keys are learned from the server the first time, and signed by

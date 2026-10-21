@@ -1,4 +1,5 @@
 
+import copy as _copy
 import os
 import threading as _threading
 import sys as _sys
@@ -1093,14 +1094,17 @@ def _signing_keys(st):
         return None, None
 
 
-def _sign_contact(st, peer, peer_pub, peer_sign_pub=""):
+def _sign_contact(st, peer, peer_pub, peer_sign_pub="", trust=None):
     priv, _pub = _signing_keys(st)
     if not priv:
         return ""
-    return crypto.sign_attestation(priv, {
+    payload = {
         "typ": "contact", "me": st.data.get("handle"), "peer": peer,
         "peer_pub": peer_pub, "peer_sign_pub": peer_sign_pub or "",
-        "ts": int(_time.time())})
+        "ts": int(_time.time())}
+    if trust is not None:
+        payload["trust"] = trust
+    return crypto.sign_attestation(priv, payload)
 
 
 def _sign_grant(st, folder_id, peer, peer_pub):
@@ -1262,6 +1266,105 @@ def _trusted_pub(server_url, token, handle):
         return None, (f"Could not SIGN an attestation for '{handle}': "
                       f"refusing to encrypt toward an unattested key.")
     return srv_pub, None
+
+
+_TRUST_DEFAULT = {"level": "accept", "permissions": {}}
+
+
+def _my_contact_att(st, handle, row=None):
+    pinned = ((st.data.get("pinned_keys") or {}).get(handle) or {}).get("att") or ""
+    best, best_att = None, ""
+    for att in (pinned, (row or {}).get("attestation") or ""):
+        payload = _open_contact_att(st, handle, att)
+        if payload and (best is None or int(payload.get("ts") or 0) > int(best.get("ts") or 0)):
+            best, best_att = payload, att
+    return best, best_att
+
+
+def _adopt_unsigned_trust(st, server_url, token, rows):
+    if st.data.get("trust_signed"):
+        return
+    for c in rows:
+        h = c.get("handle")
+        if not h or c.get("status") != "accepted":
+            continue
+        payload, _att = _my_contact_att(st, h, c)
+        if not payload or "trust" in payload:
+            continue
+        trust = {"level": c.get("trust_level") or "accept",
+                 "permissions": c.get("permissions") or {}}
+        att = _sign_contact(st, h, payload.get("peer_pub", ""),
+                            payload.get("peer_sign_pub", ""), trust=trust)
+        if not att:
+            return
+        _pin_contact(st, h, payload.get("peer_pub", ""), att)
+        try:
+            fed.server_attest_contact(server_url, token, h, att)
+        except Exception:
+            pass
+    st.data["trust_signed"] = int(_time.time())
+    try:
+        st.save_data()
+    except Exception:
+        pass
+
+
+def _signed_trust_of(st, server_url, token, rows):
+    _adopt_unsigned_trust(st, server_url, token, rows)
+    out = {}
+    for c in rows:
+        h = c.get("handle")
+        if not h or c.get("status") != "accepted":
+            continue
+        payload, _att = _my_contact_att(st, h, c)
+        if payload:
+            out[h] = payload.get("trust") or dict(_TRUST_DEFAULT)
+    return out
+
+
+def _resign_trust(st, server_url, token, handle, trust):
+    try:
+        rows = fed.server_list_contacts(server_url, token).get("contacts", [])
+    except fed.FedServerError:
+        rows = []
+    row = next((c for c in rows if c.get("handle") == handle), None)
+    payload, _att = _my_contact_att(st, handle, row)
+    if not payload:
+        return ""
+    att = _sign_contact(st, handle, payload.get("peer_pub", ""),
+                        payload.get("peer_sign_pub", ""), trust=trust)
+    if not att:
+        return ""
+    _pin_contact(st, handle, payload.get("peer_pub", ""), att)
+    try:
+        fed.server_attest_contact(server_url, token, handle, att)
+    except Exception:
+        pass
+    return att
+
+
+def inbound_contact_pub(server_url, token, handle):
+    st = _store()
+    if handle and handle == (st.data.get("owner") or ""):
+        pub, err = _trusted_pub(server_url, token, handle)
+        if not pub:
+            raise RuntimeError(err)
+        return pub
+    try:
+        srv_pub = fed.server_get_key(server_url, token, handle).get("public_key") or ""
+        rows = fed.server_list_contacts(server_url, token).get("contacts", [])
+    except fed.FedServerError as e:
+        raise RuntimeError(f"Could not check '{handle}': {e}")
+    row = next((c for c in rows if c.get("handle") == handle), None)
+    payload, _att = _my_contact_att(st, handle, row)
+    if not payload:
+        raise RuntimeError(f"'{handle}' is not a contact I signed: the server "
+                           f"listing them is not enough.")
+    if not srv_pub or payload.get("peer_pub") != srv_pub:
+        raise RuntimeError(f"⚠ The key the server gives for '{handle}' is not "
+                           f"the one I signed: possible MITM or compromised "
+                           f"relay — BLOCKED.")
+    return srv_pub
 
 
 def tool_fed_register(handle, email, server_url, invite=""):
@@ -1503,7 +1606,8 @@ def tool_fed_add_contact(handle, trust_level="accept"):
         peer_pub = kr.get("public_key") or ""
         if peer_pub:
             att = _sign_contact(st, handle, peer_pub,
-                                kr.get("sign_pub") or "")
+                                kr.get("sign_pub") or "",
+                                trust={"level": trust_level, "permissions": {}})
     except fed.FedServerError:
         pass
     try:
@@ -1532,7 +1636,9 @@ def tool_fed_accept_contact(handle, trust_level=None):
         peer_pub = kr.get("public_key") or ""
         if peer_pub:
             att = _sign_contact(st, handle, peer_pub,
-                                kr.get("sign_pub") or "")
+                                kr.get("sign_pub") or "",
+                                trust={"level": trust_level or "accept",
+                                       "permissions": {}})
     except fed.FedServerError:
         pass
     try:
@@ -1788,22 +1894,36 @@ def _consume_envelope(envelope_id):
 
 def tool_fed_set_permissions(handle, resource_type, perms):
     try:
-        _, server_url, token = _require_session()
+        st, server_url, token = _require_session()
     except Exception as e:
         return {"error": str(e)}
     if not isinstance(perms, dict):
         return {"error": "perms must be an object (e.g. {'can_add': true, "
                          "'visibility': 'busy'})."}
     try:
-        resp = fed.server_set_permissions(server_url, token, handle,
-                                          resource_type, perms)
+        rows = fed.server_list_contacts(server_url, token).get("contacts", [])
     except fed.FedServerError as e:
         return {"error": f"Could not set permissions: {e}"}
+    trust = _signed_trust_of(st, server_url, token, rows).get(handle)
+    if trust is None:
+        return {"error": f"'{handle}' is not an accepted contact I signed: "
+                         f"there is nothing to set permissions on."}
+    trust = _copy.deepcopy(trust)
+    merged = dict((trust.setdefault("permissions", {})).get(resource_type) or {})
+    merged.update(perms)
+    trust["permissions"][resource_type] = merged
+    if not _resign_trust(st, server_url, token, handle, trust):
+        return {"error": f"Could not SIGN the new permissions for '{handle}' "
+                         f"(vault unavailable?): nothing was changed."}
+    try:
+        fed.server_set_permissions(server_url, token, handle, resource_type, perms)
+    except fed.FedServerError:
+        pass
     return {
         "ok": True,
         "handle": handle,
         "resource_type": resource_type,
-        "permissions": resp.get("permissions", {}),
+        "permissions": trust["permissions"],
         "message": f"Permissions for '{resource_type}' on '{handle}' updated.",
     }
 
@@ -1999,9 +2119,10 @@ def _auto_accept_appointments():
         contacts = fed.server_list_contacts(server_url, token).get("contacts", [])
     except fed.FedServerError:
         return
-    contact_handles = {c.get("handle") for c in contacts}
-    appt_level = {c.get("handle"): (((c.get("permissions") or {}).get("citas") or {}).get("level") or "no")
-                  for c in contacts}
+    signed = _signed_trust_of(store, server_url, token, contacts)
+    contact_handles = set(signed)
+    appt_level = {h: (((t.get("permissions") or {}).get("citas") or {}).get("level") or "no")
+                  for h, t in signed.items()}
     existing = {(a.get("date"), a.get("title", "").strip().lower()) for a in todo.get_appointments()}
     tombs = (todo.get_deleted_appointments() if hasattr(todo, "get_deleted_appointments") else {})
     acked, added, denied = [], 0, 0
@@ -3618,7 +3739,8 @@ def _process_share_offers():
         contacts = fed.server_list_contacts(server_url, token).get("contacts", [])
     except fed.FedServerError:
         contacts = []
-    perms_by = {c.get("handle"): (c.get("permissions") or {}) for c in contacts}
+    perms_by = {h: (t.get("permissions") or {})
+                for h, t in _signed_trust_of(store, server_url, token, contacts).items()}
     for f in pend:
         owner = f.get("with")
         fid = f.get("folder_id")
@@ -3735,24 +3857,26 @@ def stop_sync_engine():
 
 def get_contact_trust(handle):
     try:
-        _, server_url, token = _require_session()
+        st, server_url, token = _require_session()
     except Exception:
         return None
+    if handle and handle == (st.data.get("owner") or ""):
+        return "open"
     try:
         resp = fed.server_list_contacts(server_url, token)
     except fed.FedServerError:
         return None
-    for c in resp.get("contacts", []):
-        if c.get("handle") == handle and c.get("status") == "accepted":
-            lvl = ((c.get("permissions") or {}).get("sesiones") or {}).get("level")
-            if lvl == "auto":
-                return "open"
-            if lvl == "review":
-                return "accept"
-            if lvl == "no":
-                return "reject"
-            return c.get("trust_level", "accept")
-    return None
+    trust = _signed_trust_of(st, server_url, token, resp.get("contacts", [])).get(handle)
+    if trust is None:
+        return None
+    lvl = ((trust.get("permissions") or {}).get("sesiones") or {}).get("level")
+    if lvl == "auto":
+        return "open"
+    if lvl == "review":
+        return "accept"
+    if lvl == "no":
+        return "reject"
+    return trust.get("level") or "accept"
 
 
 _session_thread = None

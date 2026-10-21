@@ -90,11 +90,16 @@ def _session_ctx():
 
 
 def _peer_pubkey(server_url, token, handle):
-    resp = fed.server_get_key(server_url, token, handle)
-    pub = resp.get("public_key")
+    import fed_tools
+    pub, err = fed_tools._trusted_pub(server_url, token, handle)
     if not pub:
-        raise RuntimeError(f"'{handle}' has no public key on the server.")
+        raise RuntimeError(err)
     return pub
+
+
+def _inbound_pubkey(server_url, token, handle):
+    import fed_tools
+    return fed_tools.inbound_contact_pub(server_url, token, handle)
 
 
 def _send(server_url, token, my_priv, recipient, recipient_pub, rtype,
@@ -576,8 +581,21 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
     sender = env.get("sender", "")
 
     try:
-        sender_pub = _peer_pubkey(server_url, token, sender)
+        if sender and sender == store.data.get("handle"):
+            sender_pub = my_pub
+        else:
+            sender_pub = _inbound_pubkey(server_url, token, sender)
     except Exception as e:
+        try:
+            _raw = fed.server_get_key(server_url, token, sender).get("public_key")
+            if _raw:
+                _send(server_url, token, my_priv, sender, _raw, T_EVENT,
+                      {"event": "error", "code": "declined", "retryable": False,
+                       "error": f"'{store.data.get('handle', '')}' does not take "
+                                f"sessions from you: not a contact of theirs."},
+                      session_id)
+        except Exception:
+            pass
         return {"ok": False, "reason": f"no key for '{sender}': {e}"}
 
     try:
