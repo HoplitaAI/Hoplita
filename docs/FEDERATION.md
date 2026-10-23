@@ -163,6 +163,10 @@ Chat or CLI equivalents: «pull my snapshot» (`fed_sync_pull`) and «push my
 snapshot» (`fed_sync_push`). «What does my snapshot weigh?»
 (`fed_sync_breakdown`) lists its size store by store.
 
+The snapshot is sealed by you, to you. A copy on the server that this identity
+did not seal (one left by a HOPLITA from before protocol 3, or one the server
+made) is not merged, and the next upload replaces it.
+
 When you press **⇊ Pull** or **⇈ Push**, the chat tells you what happened:
 *⇊ Sync: N item(s) merged*, *⇊ Sync: nothing new on the server.* or
 *⇈ Sync: uploaded (vN, M rows).* A push that finds a newer snapshot on the
@@ -709,7 +713,8 @@ it → **🗑 Revoke child**. Or from the chat: «revoke my child kitchen-pc»
 | *⚠ The public key for 'bob' does NOT match…* — BLOCKED | The key the server returns is not the one you signed | Compare fingerprints with bob over another channel (section 4). If bob really reset their identity, remove bob and add the contact again |
 | *This server speaks protocol … and your HOPLITA speaks … Update HOPLITA (install.py --update)…* | The server no longer serves your version of HOPLITA | Update: `python3 install.py --update` ([INSTALL.md](INSTALL.md)) |
 | *Your live socket is … — contacts see YOU offline…* | The live connection is down; everything else uses REST | Check that a proxy or firewall allows WebSocket to the server, and that `websocket-client` is installed in HOPLITA's venv |
-| *📴 Sync: can't reach the server (offline)…* | No network, or the server is down | Nothing is lost. Sync runs again later |
+| *📴 Sync: can't reach the server (offline)…* with the cause underneath | No network, the server is down, or it did not answer in time (the line says which, how long it took and the size) | Nothing is lost. Sync runs again later. The same line is in the MCP's log as `[SYNC] push failed after …` |
+| *⚠️ Your last automatic upload didn't go through…* (at start) | A background upload of the last session failed, for the reason that follows | Press **⇈ Push** |
 | *🔑 Sync: couldn't decrypt the server snapshot…* | This machine has a different identity from the one that pushed | Use the same identity file on both machines (step 2) |
 | *⚠ Sync: the server refused the upload twice…* | Two machines pushed at the same moment | Press **⇊ Pull**, then **⇈ Push** |
 | *🚫 Quota exceeded (…)* | Your tier's limit on the server | Prune heavy stores (`fed_sync_breakdown`), or ask the server's operator |
