@@ -1632,6 +1632,7 @@
   "tray.show_hide": "Show/Hide Chat",
   "tray.stats_rag": "📊 RAG Stats",
   "tray.view_fixed": "📌 View /fixed",
+  "ui.more_tip": "More: what does not fit in this row",
   "ui.add_job": "➕ Add Job",
   "ui.api_button_tip": "Configuration: models, keys and everything else · base model: {model}",
   "ui.config_button": "Configuration",

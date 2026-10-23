@@ -1632,6 +1632,7 @@
   "tray.show_hide": "Mostrar/Ocultar Chat",
   "tray.stats_rag": "📊 Stats RAG",
   "tray.view_fixed": "📌 Ver /fixed",
+  "ui.more_tip": "Más: lo que no cabe en esta fila",
   "ui.add_job": "➕ Añadir Job",
   "ui.api_button_tip": "Configuración: modelos, claves y todo lo demás · modelo base: {model}",
   "ui.config_button": "Configuración",

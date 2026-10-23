@@ -593,13 +593,28 @@ class ChatInput(QTextEdit):
 
 class ElidedLabel(QLabel):
 
-    def __init__(self, text="", parent=None):
+    def __init__(self, text="", parent=None, hug=False):
         super().__init__(parent)
         self._full = ""
+        self._hug = hug
         from PyQt6.QtWidgets import QSizePolicy
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred if hug else QSizePolicy.Policy.Ignored,
+                           QSizePolicy.Policy.Preferred)
         self.setMinimumWidth(40)
         self.setText(text)
+
+    def sizeHint(self):
+        sh = super().sizeHint()
+        if self._hug:
+            m = self.contentsMargins()
+            sh.setWidth(self.fontMetrics().horizontalAdvance(self._full)
+                        + m.left() + m.right() + 2)
+        return sh
+
+    def minimumSizeHint(self):
+        sh = super().minimumSizeHint()
+        sh.setWidth(40)
+        return sh
 
     changed = None
 
@@ -607,6 +622,8 @@ class ElidedLabel(QLabel):
         self._full = str(text or "")
         self.setToolTip(self._full if self._full else "")
         self._fit()
+        if self._hug:
+            self.updateGeometry()
         if self.changed:
             try:
                 self.changed(self._full)
@@ -623,6 +640,174 @@ class ElidedLabel(QLabel):
     def _fit(self):
         shown = self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, max(10, self.width()))
         QLabel.setText(self, shown)
+
+
+class ElidedButton(QPushButton):
+
+    def __init__(self, text="", parent=None, pad=24):
+        super().__init__(parent)
+        self._full = ""
+        self._pad = pad
+        from PyQt6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(60)
+        self.setText(text)
+
+    def setText(self, text):
+        self._full = str(text or "")
+        self.setToolTip(self._full)
+        self._fit()
+
+    def text(self):
+        return self._full
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._fit()
+
+    def _fit(self):
+        shown = self.fontMetrics().elidedText(
+            self._full, Qt.TextElideMode.ElideRight, max(10, self.width() - self._pad))
+        QPushButton.setText(self, shown)
+
+
+class ShrinkRow(QWidget):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QLayout
+        self._lay = QHBoxLayout(self)
+        self._lay.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self._pieces = []
+        self._floor = None
+        self._fitting = False
+        self._fit_w = None
+        self._more = QPushButton("⋯")
+        self._more.setToolTip(t("ui.more_tip"))
+        self._more.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._more.clicked.connect(self._more_menu)
+        self._more.hide()
+
+    def row(self):
+        return self._lay
+
+    def add(self, w, drop=None, stretch=0, align=None):
+        if align is not None:
+            self._lay.addWidget(w, stretch, align)
+        else:
+            self._lay.addWidget(w, stretch)
+        if isinstance(w, QPushButton):
+            self._pieces.append({"w": w, "rank": drop, "full": None, "short": None})
+        self._floor = None
+        return w
+
+    def addStretch(self, n=0):
+        self._lay.addStretch(n)
+
+    def addSpacing(self, n):
+        self._lay.addSpacing(n)
+
+    @staticmethod
+    def _short_of(btn, full):
+        if not btn.icon().isNull():
+            return ""
+        head = full.strip().split(" ", 1)
+        if len(head) == 2 and head[0] and not head[0][0].isalnum():
+            return head[0]
+        return full
+
+    def _track(self, p):
+        cur = QPushButton.text(p["w"])
+        if p["full"] is None or (cur != p["short"] and cur != p["full"]):
+            p["full"] = cur
+            p["short"] = self._short_of(p["w"], cur)
+
+    def _apply(self, compact, dropped):
+        for p in self._pieces:
+            self._track(p)
+            short = compact is True or p["w"] in compact
+            want = p["short"] if short else p["full"]
+            if QPushButton.text(p["w"]) != want:
+                QPushButton.setText(p["w"], want)
+            p["w"].setVisible(p["w"] not in dropped)
+        if dropped:
+            if self._lay.indexOf(self._more) < 0:
+                self._lay.addWidget(self._more)
+            self._more.show()
+        else:
+            self._more.hide()
+
+    def _need(self):
+        self._lay.invalidate()
+        return self._lay.minimumSize().width()
+
+    def _droppables(self):
+        return sorted((p for p in self._pieces if p["rank"] is not None),
+                      key=lambda p: p["rank"])
+
+    def _fit(self, width):
+        if self._fitting:
+            return
+        self._fitting = True
+        try:
+            if self._floor is None:
+                self._apply(True, {p["w"] for p in self._droppables()})
+                self._floor = self._need()
+                self.updateGeometry()
+            order = self._droppables() + [p for p in self._pieces if p["rank"] is None]
+            compact, dropped = set(), set()
+            self._apply(compact, dropped)
+            for p in order:
+                if self._need() <= width:
+                    return
+                compact.add(p["w"])
+                self._apply(compact, dropped)
+            for p in self._droppables():
+                if self._need() <= width:
+                    break
+                dropped.add(p["w"])
+                self._apply(compact, dropped)
+        finally:
+            self._last = self._texts()
+            self._fitting = False
+
+    def _texts(self):
+        return tuple(QPushButton.text(p["w"]) for p in self._pieces)
+
+    def event(self, ev):
+        from PyQt6.QtCore import QEvent
+        if (ev.type() == QEvent.Type.LayoutRequest and not self._fitting
+                and self._texts() != getattr(self, "_last", None)):
+            self._floor = None
+            QTimer.singleShot(0, lambda: self._fit(self.width()))
+        return super().event(ev)
+
+    def minimumSizeHint(self):
+        from PyQt6.QtCore import QSize
+        h = self._lay.minimumSize().height()
+        return QSize(self._floor if self._floor is not None else 120, h)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if ev.size().width() != self._fit_w:
+            self._fit_w = ev.size().width()
+            self._fit(self._fit_w)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        self._fit(self.width())
+
+    def _more_menu(self):
+        m = QMenu(self)
+        for p in self._pieces:
+            w = p["w"]
+            if p["rank"] is None or w.isVisible():
+                continue
+            a = m.addAction(w.icon(), (p["full"] or "").strip() or w.toolTip())
+            a.setToolTip(w.toolTip())
+            a.setEnabled(w.isEnabled())
+            a.triggered.connect(lambda _=False, b=w: b.click())
+        m.exec(self._more.mapToGlobal(self._more.rect().bottomLeft()))
 
 
 class WorkerSignals(QObject):
@@ -3240,16 +3425,17 @@ class ChatAssistantWindow(QMainWindow):
         hv = QVBoxLayout(head)
         hv.setContentsMargins(16, 9, 16, 7)
         hv.setSpacing(5)
-        hb = QHBoxLayout()
-        hb.setSpacing(10)
-        hv.addLayout(hb)
+        hb = ShrinkRow()
+        hb.row().setContentsMargins(0, 0, 0, 0)
+        hb.row().setSpacing(10)
+        hv.addWidget(hb)
         _h1 = QLabel("\U0001F9ED  " + t("code.wb_title"))
         _h1.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; font-weight:700; letter-spacing:1.5px; }")
-        hb.addWidget(_h1)
-        self.code_wb_where = QLabel("")
+        hb.add(_h1)
+        self.code_wb_where = ElidedLabel("", hug=True)
         self.code_wb_where.setStyleSheet(
             "QLabel { color:#7d8aa3; font-family:monospace; font-size:11px; }")
-        hb.addWidget(self.code_wb_where)
+        hb.add(self.code_wb_where)
         hb.addStretch(1)
         seg = QFrame()
         seg.setObjectName("wbSeg")
@@ -3272,7 +3458,7 @@ class ChatAssistantWindow(QMainWindow):
             b.clicked.connect(lambda _c=False, w=what: self._code_wb_draw(w))
             sl.addWidget(b)
             self._code_wb_btns[what] = b
-        hb.addWidget(seg)
+        hb.add(seg)
         hb.addStretch(1)
         self.code_wb_model = QComboBox()
         self.code_wb_model.setToolTip(t("code.wb_model_tip"))
@@ -3289,23 +3475,23 @@ class ChatAssistantWindow(QMainWindow):
             " selection-background-color:%s; outline:0; padding:4px; }"
             % (self._WB_SEG, self._wb_chevron(), self._WB_BG, self._WB_LINE, self._WB_ON))
         self.code_wb_model.setStyleSheet(self._wb_model_css % self._WB_LINE)
-        hb.addWidget(self.code_wb_model)
+        hb.add(self.code_wb_model)
         _ghost = ("QPushButton { background:transparent; color:#b6c2d6; border:1px solid transparent;"
                   " border-radius:8px; padding:5px 10px; font-size:12px; }"
                   "QPushButton:hover { background:#131d33; color:#e6edf7; border-color:%s; }"
                   "QPushButton:disabled { color:#3b4a63; }" % self._WB_LINE)
 
-        def _quiet(text, slot, tip, danger=False):
+        def _quiet(text, slot, tip, danger=False, drop=None):
             q = QPushButton(text)
             q.setCursor(Qt.CursorShape.PointingHandCursor)
             q.setToolTip(tip)
             q.setStyleSheet(_ghost + ("QPushButton:hover { color:#ff7b72; }" if danger else ""))
             q.clicked.connect(slot)
-            hb.addWidget(q)
+            hb.add(q, drop=drop)
             return q
-        self.code_wb_redraw = _quiet("\u21bb  " + t("code.wb_redraw"), self._code_wb_redraw, t("code.wb_redraw_tip"))
-        self.code_wb_delete = _quiet("\u2715  " + t("code.wb_delete"), self._code_wb_delete, t("code.wb_delete_tip"), True)
-        _quiet("\u2630  " + t("code.wb_all"), self._code_wb_home, t("code.wb_all_tip"))
+        self.code_wb_redraw = _quiet("\u21bb  " + t("code.wb_redraw"), self._code_wb_redraw, t("code.wb_redraw_tip"), drop=2)
+        self.code_wb_delete = _quiet("\u2715  " + t("code.wb_delete"), self._code_wb_delete, t("code.wb_delete_tip"), True, drop=1)
+        _quiet("\u2630  " + t("code.wb_all"), self._code_wb_home, t("code.wb_all_tip"), drop=3)
         for _b in (self.code_wb_redraw, self.code_wb_delete):
             _b.setEnabled(False)
         self._wb_status_row = QWidget()
@@ -4503,7 +4689,9 @@ enabled = true
         refresh_facts_btn.clicked.connect(self._load_memory_facts)
         fh.addWidget(refresh_facts_btn)
         fl.addLayout(fh)
-        fl.addWidget(QLabel(t("mem.facts_hint_full")))
+        _hint = QLabel(t("mem.facts_hint_full"))
+        _hint.setWordWrap(True)
+        fl.addWidget(_hint)
         _ff = QHBoxLayout()
         _seg = QFrame()
         _seg.setObjectName("factsSeg")
@@ -4620,7 +4808,9 @@ enabled = true
         refresh_exp_btn.clicked.connect(self._load_memory_experience)
         eh.addWidget(refresh_exp_btn)
         el.addLayout(eh)
-        el.addWidget(QLabel(t("mem.exp_hint")))
+        _hint = QLabel(t("mem.exp_hint"))
+        _hint.setWordWrap(True)
+        el.addWidget(_hint)
         self.exp_table = QListWidget()
         self.exp_table.setSelectionMode(
             QListWidget.SelectionMode.ExtendedSelection)
@@ -5477,10 +5667,10 @@ enabled = true
         self._bg(work, done)
 
     def _setup_header(self, parent_layout):
-        header = QWidget()
+        header = ShrinkRow()
         header.setObjectName("header_box")
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(16, 10, 16, 10)
+        hl = header
+        hl.row().setContentsMargins(16, 10, 16, 10)
 
 
         model = self._base_model_name()
@@ -5489,21 +5679,21 @@ enabled = true
         self.api_button.setIcon(self._svg_icon("config", "#38bdf8", 18))
         self.api_button.setToolTip(t("ui.api_button_tip", model=model))
         self.api_button.clicked.connect(self.open_config_editor)
-        hl.addWidget(self.api_button)
+        hl.add(self.api_button)
 
         self.sync_pull_btn = QPushButton("⇊ Pull")
         self.sync_pull_btn.setToolTip(t("fed.sync_pull_tip"))
         self.sync_pull_btn.clicked.connect(lambda: self._do_sync(pull=True, manual=True))
-        hl.addWidget(self.sync_pull_btn)
+        hl.add(self.sync_pull_btn, drop=8)
         self.sync_push_btn = QPushButton("⇈ Push")
         self.sync_push_btn.setToolTip(t("fed.sync_push_tip"))
         self.sync_push_btn.clicked.connect(lambda: self._do_sync(pull=False, manual=True))
-        hl.addWidget(self.sync_push_btn)
+        hl.add(self.sync_push_btn, drop=7)
 
         self.stats_btn = QPushButton(t("ui.usage_btn"))
         self.stats_btn.setToolTip(t("ui.stats_btn_tip"))
         self.stats_btn.clicked.connect(self._open_usage_dialog)
-        hl.addWidget(self.stats_btn)
+        hl.add(self.stats_btn, drop=6)
 
 
 
@@ -5515,30 +5705,30 @@ enabled = true
         self.headless_button.setToolTip(t("gui.headless_tooltip"))
         self.headless_button.clicked.connect(self._toggle_headless)
         self._update_headless_button()
-        hl.addWidget(self.headless_button)
+        hl.add(self.headless_button, drop=5)
 
-        self.rag_status_label = QLabel(t("ui.rag_status_init"))
+        self.rag_status_label = ElidedLabel(t("ui.rag_status_init"), hug=True)
         self.rag_status_label.setObjectName("status_label")
-        hl.addWidget(self.rag_status_label)
+        hl.add(self.rag_status_label)
 
-        self.fixed_status_label = QLabel("/fixed: 0")
+        self.fixed_status_label = ElidedLabel("/fixed: 0", hug=True)
         self.fixed_status_label.setObjectName("status_label")
-        hl.addWidget(self.fixed_status_label)
+        hl.add(self.fixed_status_label)
 
         hl.addStretch()
 
-        for icon_name, label, slot, tip, icon_color in [
-            ("stats",  "Stats",   self.show_rag_stats,      t("btn.stats_tip"),  "#38bdf8"),
-            ("rag",    "RAG",     self.clear_rag_index,     t("btn.rag_tip"),    "#fbbf24"),
-            ("fixed",  "@fixed",  self.view_fixed_contexts, t("btn.fixed_tip"),  "#34d399"),
-            ("config", t("btn.config_reload"), self.reload_config,      t("btn.config_tip"), "#a78bfa"),
-            ("chat",   "Chat",    self.clear_chat,          t("btn.chat_tip"),   "#f87171"),
+        for icon_name, label, slot, tip, icon_color, rank in [
+            ("stats",  "Stats",   self.show_rag_stats,      t("btn.stats_tip"),  "#38bdf8", 4),
+            ("rag",    "RAG",     self.clear_rag_index,     t("btn.rag_tip"),    "#fbbf24", 3),
+            ("fixed",  "@fixed",  self.view_fixed_contexts, t("btn.fixed_tip"),  "#34d399", 2),
+            ("config", t("btn.config_reload"), self.reload_config,      t("btn.config_tip"), "#a78bfa", 1),
+            ("chat",   "Chat",    self.clear_chat,          t("btn.chat_tip"),   "#f87171", 9),
         ]:
             btn = QPushButton(f" {label}")
             btn.setIcon(self._svg_icon(icon_name, icon_color, 18))
             btn.setToolTip(tip)
             btn.clicked.connect(slot)
-            hl.addWidget(btn)
+            hl.add(btn, drop=rank)
 
         parent_layout.addWidget(header)
 
@@ -5628,7 +5818,7 @@ enabled = true
         _sb = QVBoxLayout(self._sticky_bar)
         _sb.setContentsMargins(0, 0, 0, 0)
         _sb.setSpacing(2)
-        self._sticky_head = QPushButton()
+        self._sticky_head = ElidedButton(pad=26)
         self._sticky_head.setCursor(Qt.CursorShape.PointingHandCursor)
         self._sticky_head.setStyleSheet(
             "QPushButton{background:#3a3413;border:1px solid #6b5d18;"
