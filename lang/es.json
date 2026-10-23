@@ -911,7 +911,7 @@
   "fed.public_none": "No tiene carpetas públicas.",
   "fed.published_err": "❌ No se pudo publicar «{folder}»: {e}",
   "fed.published_ok": "🌍 «{folder}» ya es pública: cualquiera del servidor puede suscribirse pidiendo tus carpetas públicas. Tú escribes, ellos leen. (Retirarla: dile al agente «despublica {folder}».)",
-  "fed.push_failed_boot": "⚠️ Tu última subida al cerrar no se completó: {err} — pulsa ⇈ Push para reintentar.",
+  "fed.push_failed_boot": "⚠️ Tu última subida automática no se completó: {err} — pulsa ⇈ Push para reintentar.",
   "fed.quota_exceeded": "🚫 Cuota superada ({resource}): intentabas enviar {incoming}, con {used} ya usado de un límite de {limit}. Sube el límite del tier (0 = ilimitado) o pídeselo al operador.",
   "fed.readonly_badge_tip": "Suscrito a una carpeta pública: sus cambios te llegan; no puedes escribir de vuelta.",
   "fed.refresh": "↻ Refrescar",

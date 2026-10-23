@@ -1954,7 +1954,8 @@ class ChatAssistantWindow(QMainWindow):
                      used=res.get("used", "?"), limit=res.get("limit", "?"),
                      incoming=res.get("incoming", "?"))
         if res.get("error") == "offline":
-            return t("fed.sync_offline")
+            _d = res.get("detail")
+            return t("fed.sync_offline") + (f"\n({_d})" if _d else "")
         if res.get("error") == "decrypt_failed":
             return t("fed.sync_decrypt_failed")
         if res.get("error") == "sync_conflict":
@@ -4402,7 +4403,7 @@ enabled = true
             if isinstance(r, dict) and r.get("skipped"):
                 pass
             elif isinstance(r, dict) and r.get("error"):
-                self._mark_push_failed(str(r["error"]))
+                self._mark_push_failed(self._fmt_sync_error(r))
             elif isinstance(r, dict) and r.get("ok"):
                 self._clear_push_mark()
         except Exception:

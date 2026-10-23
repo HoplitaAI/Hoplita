@@ -5817,10 +5817,13 @@ def tool_fed_sync_push():
     snap["_pad"] = "0" * pad
     sealed = _seal(_store(), my_pub, snap)
     base = int(sql.meta_get("sync_version") or 0)
+    _t0 = _time.time()
     try:
         resp = fed.server_sync_push(server_url, token, sealed, base)
     except fed.FedServerError as e:
         d = getattr(e, "data", {}) or {}
+        _why = (f"{_time.time() - _t0:.1f} s, {len(sealed) / 1e6:.1f} MB: {e}")
+        print(f"[SYNC] push failed after {_why}", file=_sys.stderr)
         if getattr(e, "status", None) == 409 or "409" in str(e) \
                 or "conflict" in str(e).lower():
             return {"ok": False, "needs_pull": True,
@@ -5829,7 +5832,7 @@ def tool_fed_sync_push():
             return {"error": "quota_exceeded", "resource": d.get("resource"),
                     "limit": d.get("limit"), "used": d.get("used")}
         if d.get("error") == "offline":
-            return {"error": "offline"}
+            return {"error": "offline", "detail": _why}
         return {"error": f"Sync push failed: {e}"}
     sql.meta_set("sync_version", resp.get("version", base + 1))
     try:
@@ -5891,11 +5894,14 @@ def tool_fed_sync_pull():
         return {"error": str(e)}
     st = _store()
     my_priv = st.data.get("private_key_b64")
+    _t0 = _time.time()
     try:
         resp = fed.server_sync_pull(server_url, token)
     except fed.FedServerError as e:
         if (getattr(e, "data", {}) or {}).get("error") == "offline":
-            return {"error": "offline"}
+            _why = f"{_time.time() - _t0:.1f} s: {e}"
+            print(f"[SYNC] pull failed after {_why}", file=_sys.stderr)
+            return {"error": "offline", "detail": _why}
         return {"error": f"Sync pull failed: {e}"}
     blob = resp.get("ciphertext")
     version = int(resp.get("version", 0) or 0)

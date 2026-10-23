@@ -911,7 +911,7 @@
   "fed.public_none": "No public folders.",
   "fed.published_err": "❌ Could not publish “{folder}”: {e}",
   "fed.published_ok": "🌍 “{folder}” is now public: anyone on the server can subscribe by asking for your public folders. You write, they read. (Withdraw it: tell the agent to unpublish {folder}.)",
-  "fed.push_failed_boot": "⚠️ Your last upload on close didn't go through: {err} — press ⇈ Push to retry.",
+  "fed.push_failed_boot": "⚠️ Your last automatic upload didn't go through: {err} — press ⇈ Push to retry.",
   "fed.quota_exceeded": "🚫 Quota exceeded ({resource}): tried to send {incoming}, with {used} already used of a {limit} limit. Raise the tier's limit (0 = unlimited) or ask the operator.",
   "fed.readonly_badge_tip": "Subscribed to a public folder: their changes reach you; you cannot write back.",
   "fed.refresh": "↻ Refresh",
