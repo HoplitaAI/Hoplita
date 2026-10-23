@@ -876,6 +876,19 @@ edit made while away beats the deletion. Nothing is dropped on the word of a
 snapshot from an older client that does not sync that kind of row, of a folder
 locked on the other machine, or of a server restored to an older snapshot.
 
+**What the server cannot do.** It holds everybody's public keys, so nothing it
+says about a sender is taken on its word. Who your contacts are, their keys and
+what each may do (trust level and permissions) are signed by you into each
+contact's attestation; a contact planted in the server's database, or one
+raised there to «auto», is a stranger. Everything that travels — folder and
+project content, a folder's dissolution, code, notes, skills, a child's pack,
+appointments, session turns, your own snapshot — is sealed by its sender and
+opened only with the key you signed for that sender (your own, for your
+machines). What does not open with it is refused, and a snapshot you did not
+seal is not merged. A HOPLITA from before this scheme (federation protocol 3)
+cannot share with this one, and a server set to require it tells such a client
+in words to update ([FEDERATION.md](FEDERATION.md)).
+
 ## Children: local packs and remote nodes
 
 There are two kinds of child. An **emancipated** child is a headless node on
