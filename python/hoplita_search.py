@@ -120,3 +120,138 @@ def rank_by_words(query, items, textof, k=5):
     suelo = relevance_floor(best, 0.05, 0.5)
     out = [h for h in out if h["score"] >= suelo]
     return sorted(out, key=lambda x: -x["score"])[:k]
+
+
+
+BLOCK_CHARS = 700
+PASSAGE_PIECES = 3
+
+
+def text_blocks(content, size=BLOCK_CHARS):
+    out, cur, start = [], [], None
+
+    def _flush():
+        nonlocal cur, start
+        if not cur:
+            return
+        buf, b0 = [], start
+        for k, ln in enumerate(cur):
+            no = start + k
+            while len(ln) > size:
+                if buf:
+                    out.append((b0, no - 1, "\n".join(buf)))
+                    buf = []
+                out.append((no, no, ln[:size]))
+                ln = ln[size:]
+                b0 = no
+            if buf and sum(len(x) + 1 for x in buf) + len(ln) > size:
+                out.append((b0, no - 1, "\n".join(buf)))
+                buf = []
+            if not buf:
+                b0 = no
+            if ln:
+                buf.append(ln)
+        if buf:
+            out.append((b0, start + len(cur) - 1, "\n".join(buf)))
+        cur, start = [], None
+
+    for no, ln in enumerate((content or "").split("\n"), 1):
+        if ln.strip():
+            if start is None:
+                start = no
+            cur.append(ln)
+        else:
+            _flush()
+    _flush()
+    return out
+
+
+def find_passages(query, docs, regex=False, context=1, k=5, budget=None,
+                  pieces=PASSAGE_PIECES):
+    query = (query or "").strip()
+    if not query or not docs:
+        return {"passages": [], "total": 0}
+    if not regex:
+        _stems = [w[:4] for w in dict.fromkeys(_norm_words(query))]
+        if not _stems:
+            return {"passages": [], "total": 0}
+
+        def _plain(t):
+            t = unicodedata.normalize("NFD", (t or "").lower())
+            return "".join(c for c in t if unicodedata.category(c) != "Mn")
+        docs = [d for d in docs
+                if any(st in _plain(d["text"] if d.get("blocks") is None else
+                                    " ".join(x[2] for x in d["blocks"]))
+                       for st in _stems)]
+    items = []
+    for d in docs:
+        blocks = d.get("blocks")
+        if blocks is None:
+            blocks = text_blocks(d.get("text", ""))
+        for (a, b, txt) in blocks:
+            if txt and txt.strip():
+                items.append({"i": len(items), "doc": d, "from": a, "to": b,
+                              "text": txt})
+    groups = []
+    if regex:
+        try:
+            rx = re.compile(query, re.I)
+        except re.error:
+            rx = re.compile(re.escape(query), re.I)
+        for it in items:
+            if not rx.search(it["text"]):
+                continue
+            last = groups[-1]["items"][-1] if groups else None
+            if (last is not None and last["i"] == it["i"] - 1
+                    and last["doc"] is it["doc"]
+                    and len(groups[-1]["items"]) < pieces):
+                groups[-1]["items"].append(it)
+            else:
+                groups.append({"items": [it], "covers": [query], "score": 1.0})
+    else:
+        q = list(dict.fromkeys(_norm_words(query)))
+        if not q:
+            return {"passages": [], "total": 0}
+        words = {}
+
+        def _ws(it):
+            if it["i"] not in words:
+                words[it["i"]] = set(_norm_words(it["text"]))
+            return words[it["i"]]
+
+        df_cache = {}
+
+        def _df(w):
+            if w not in df_cache:
+                df_cache[w] = sum(1 for it in items
+                                  if any(_same_word(w, x) for x in _ws(it)))
+            return df_cache[w]
+        by_doc = {}
+        for it in items:
+            by_doc.setdefault(id(it["doc"]), []).append(it)
+        for mine in by_doc.values():
+            for g in group_and_score(query, mine, lambda x: x["text"],
+                                     lambda x: x["i"], _df, len(items),
+                                     gap=1, k=len(mine)):
+                for j in range(0, len(g["items"]), pieces):
+                    groups.append({**g, "items": g["items"][j:j + pieces]})
+        groups.sort(key=lambda g: (-len(g["covers"]), -g["score"]))
+    total = len(groups)
+    out, used = [], 0
+    for g in groups[:k]:
+        first, last = g["items"][0]["i"], g["items"][-1]["i"]
+        doc = g["items"][0]["doc"]
+        span = [it for it in items[max(0, first - context):last + context + 1]
+                if it["doc"] is doc]
+        text = "\n…\n".join(x["text"] for x in span)
+        if budget is not None:
+            if out and used + len(text) > budget:
+                break
+            if len(text) > budget:
+                text = text[:budget] + " …"
+        used += len(text)
+        out.append({"doc": doc, "from": span[0]["from"], "to": span[-1]["to"],
+                    "matched": list(g.get("covers", [])),
+                    "score": g.get("score", 0), "text": text,
+                    "pieces": [x["from"] for x in g["items"]]})
+    return {"passages": out, "total": total}

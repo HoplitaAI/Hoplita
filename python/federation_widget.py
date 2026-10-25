@@ -406,6 +406,114 @@ class _AddContactDialog(QDialog):
         return self.handle.text().strip(), self.trust.currentText()
 
 
+class _BoxChildDialog(QDialog):
+
+    _FIELD = ("QLineEdit, QComboBox { background:#0f172a; color:#e2e8f0; "
+              "border:1px solid #334155; border-radius:6px; padding:7px; }")
+
+    def __init__(self, parent, models):
+        super().__init__(parent)
+        self.setWindowTitle(t("child.box_title"))
+        self.setMinimumWidth(460)
+        self.setStyleSheet("QDialog { background:#1e293b; } "
+                           "QLabel, QCheckBox { color:#e2e8f0; } " + self._FIELD)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+        intro = QLabel(t("child.box_intro"))
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+
+        lay.addWidget(QLabel(t("child.box_name")))
+        self.name = QLineEdit()
+        lay.addWidget(self.name)
+
+        lay.addWidget(QLabel(t("child.box_model")))
+        self.model = QComboBox()
+        self.model.addItem(t("child.box_model_base"), "")
+        for m in models:
+            self.model.addItem(m, m)
+        self.model.addItem(t("child.box_model_own"), "__own__")
+        lay.addWidget(self.model)
+
+        self.own = QWidget()
+        ol = QVBoxLayout(self.own)
+        ol.setContentsMargins(0, 0, 0, 0)
+        self.url = QLineEdit()
+        self.url.setPlaceholderText(t("child.box_url"))
+        self.model_id = QLineEdit()
+        self.model_id.setPlaceholderText(t("child.box_model_id"))
+        self.key = QLineEdit()
+        self.key.setPlaceholderText(t("child.box_key"))
+        self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        for w in (self.url, self.model_id, self.key):
+            ol.addWidget(w)
+        self.own.setVisible(False)
+        lay.addWidget(self.own)
+        self.model.currentIndexChanged.connect(
+            lambda _i: self.own.setVisible(self.model.currentData() == "__own__"))
+
+        note = QLabel(t("child.box_key_note"))
+        note.setWordWrap(True)
+        note.setStyleSheet("QLabel { color:#fbbf24; }")
+        lay.addWidget(note)
+
+        self.search = QCheckBox(t("child.box_search"))
+        lay.addWidget(self.search)
+
+        bb = QDialogButtonBox()
+        self.btn_launch = bb.addButton(t("child.box_launch"),
+                                       QDialogButtonBox.ButtonRole.AcceptRole)
+        self.btn_token = bb.addButton(t("child.box_token_only"),
+                                      QDialogButtonBox.ButtonRole.AcceptRole)
+        bb.addButton(QDialogButtonBox.StandardButton.Cancel)
+        self.launch = True
+        self.btn_launch.clicked.connect(lambda: self._done(True))
+        self.btn_token.clicked.connect(lambda: self._done(False))
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def _done(self, launch):
+        if not self.name.text().strip():
+            self.name.setFocus()
+            return
+        self.launch = launch
+        self.accept()
+
+    def values(self):
+        v = {"label": self.name.text().strip(), "search": self.search.isChecked(),
+             "launch": self.launch}
+        if self.model.currentData() == "__own__":
+            v.update(base_url=self.url.text().strip(),
+                     model_id=self.model_id.text().strip(),
+                     api_key=self.key.text().strip())
+        else:
+            v["model"] = self.model.currentData() or ""
+        return v
+
+
+class _CopyableResult(QDialog):
+
+    def __init__(self, parent, title, text):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(620)
+        self.setStyleSheet("QDialog { background:#1e293b; }")
+        lay = QVBoxLayout(self)
+        box = QTextEdit()
+        box.setReadOnly(True)
+        box.setPlainText(text)
+        box.setStyleSheet("QTextEdit { background:#0f172a; color:#e2e8f0; "
+                          "border:1px solid #334155; border-radius:6px; "
+                          "padding:8px; font-family:monospace; }")
+        lay.addWidget(box)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        cp = bb.addButton(t("child.box_copy"), QDialogButtonBox.ButtonRole.ActionRole)
+        from PyQt6.QtWidgets import QApplication
+        cp.clicked.connect(lambda: QApplication.clipboard().setText(text))
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+
 class _ContactDelegate(QStyledItemDelegate):
 
     _PALETTE = ["#6366f1", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981",
@@ -591,6 +699,10 @@ class FederationWidget(QWidget):
         add_child_btn.setStyleSheet(self._btn_css())
         add_child_btn.clicked.connect(self._on_add_child)
         bar.addWidget(add_child_btn)
+        box_child_btn = QPushButton("+ 🐳 " + t("child.box_add"))
+        box_child_btn.setStyleSheet(self._btn_css())
+        box_child_btn.clicked.connect(self._on_add_box_child)
+        bar.addWidget(box_child_btn)
         refresh_btn = QPushButton(t("fed.refresh"))
         refresh_btn.setStyleSheet(self._btn_css())
         refresh_btn.clicked.connect(self.refresh)
@@ -989,6 +1101,25 @@ class FederationWidget(QWidget):
             return
         self.refresh()
         self.edit_local_child({"handle": name, "local": True})
+
+    def _on_add_box_child(self):
+        dlg = _BoxChildDialog(self, self._pool_models())
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        v = dlg.values()
+        if v["launch"]:
+            QMessageBox.information(self, t("child.box_title"),
+                                    t("child.box_starting"))
+        self._run("fed_spawn_child", v, self._on_box_child)
+
+    def _on_box_child(self, data):
+        data = data if isinstance(data, dict) else {}
+        if data.get("error"):
+            QMessageBox.warning(self, t("child.box_title"), data["error"])
+            return
+        _CopyableResult(self, t("child.box_title"),
+                        data.get("message") or json.dumps(data, indent=1)).exec()
+        self.refresh()
 
     def _on_add(self):
         dlg = _AddContactDialog(self)

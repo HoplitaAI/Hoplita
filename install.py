@@ -791,7 +791,7 @@ def copy_payload(prefix):
     example = os.path.join(SRC_DIR, "config.ini.example")
     if os.path.exists(example):
         shutil.copy(example, os.path.join(prefix, "config.ini.example"))
-    for doc in ("README.md",):
+    for doc in ("README.md", "requirements.txt"):
         d = os.path.join(SRC_DIR, doc)
         if os.path.exists(d):
             shutil.copy(d, prefix)

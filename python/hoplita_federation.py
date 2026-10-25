@@ -1,4 +1,6 @@
 
+import hashlib
+import io
 import json
 import random
 import re
@@ -77,7 +79,7 @@ def _api(server_url):
 
 
 PROTO = 3
-CAPS = ("live",)
+CAPS = ("live", "sync_parts")
 
 
 def _proto_headers(token=None):
@@ -89,8 +91,9 @@ def _proto_headers(token=None):
 
 def _post(server_url, path, payload, token=None, timeout=15):
     headers = dict(_proto_headers(token), **{"Content-Type": "application/json"})
+    body = io.BytesIO(json.dumps(payload).encode("utf-8"))
     try:
-        r = requests.post(f"{_api(server_url)}/{path}", json=payload,
+        r = requests.post(f"{_api(server_url)}/{path}", data=body,
                           headers=headers, timeout=timeout)
     except requests.exceptions.RequestException as e:
         raise FedServerError(f"Could not connect to server: {e}",
@@ -570,6 +573,11 @@ def server_create_spawn_token(server_url, token, label=""):
     return _post(server_url, "spawn/create", {"label": label}, token=token)
 
 
+def server_set_spawn_kit(server_url, token, spawn_id, kit):
+    return _post(server_url, "spawn/kit", {"spawn_id": spawn_id, "kit": kit},
+                 token=token)
+
+
 def server_redeem_spawn_token(server_url, spawn_token, handle, public_key,
                               fingerprint=""):
     return _post(server_url, "spawn/redeem", {
@@ -846,15 +854,83 @@ def server_list_folders(server_url, token):
     return _op(server_url, token, "list_folders", {},
                lambda: _get(server_url, "folders", token=token))
 
-def server_sync_pull(server_url, token):
-    return _op(server_url, token, "sync_pull", {},
-               lambda: _get(server_url, "sync/pull", token=token))
+def server_sync_pull(server_url, token, have_version=None):
+    if not _sync_parts_info(server_url):
+        return _op(server_url, token, "sync_pull", {},
+                   lambda: _get(server_url, "sync/pull", token=token))
+    head = _get(server_url, "sync/pull?parts=1", token=token)
+    n = int(head.get("parts") or 0)
+    if not n:
+        return head
+    version = int(head["version"])
+    try:
+        if have_version is not None and int(have_version) == version:
+            return dict(head, ciphertext=None, unchanged=True)
+    except (TypeError, ValueError):
+        pass
+    pieces = [_retrying(lambda i=i: _get(
+        server_url, f"sync/pull/part?idx={i}&version={version}",
+        token=token, timeout=_SYNC_PART_TIMEOUT))["data"] for i in range(n)]
+    blob = "".join(pieces)
+    if hashlib.sha256(blob.encode("utf-8")).hexdigest() != head.get("sha256"):
+        raise FedServerError("the snapshot's parts do not add up to the one "
+                             "that was uploaded", data={"error": "hash_mismatch"})
+    return dict(head, ciphertext=blob)
 
 
 def server_sync_push(server_url, token, ciphertext, base_version):
-    params = {"ciphertext": ciphertext, "base_version": int(base_version)}
-    return _op(server_url, token, "sync_push", params,
-               lambda: _post(server_url, "sync/push", params, token=token))
+    info = _sync_parts_info(server_url)
+    if not info:
+        params = {"ciphertext": ciphertext, "base_version": int(base_version)}
+        return _op(server_url, token, "sync_push", params,
+                   lambda: _post(server_url, "sync/push", params, token=token))
+    step = int(info["sync_part_bytes"])
+    pieces = [ciphertext[i:i + step] for i in range(0, len(ciphertext), step)] or [""]
+    begin = _post(server_url, "sync/push/begin",
+                  {"parts": len(pieces), "size": len(ciphertext),
+                   "sha256": hashlib.sha256(ciphertext.encode("utf-8")).hexdigest(),
+                   "base_version": int(base_version)}, token=token)
+    up = begin["upload_id"]
+    for i, piece in enumerate(pieces):
+        _retrying(lambda i=i, piece=piece: _post(
+            server_url, "sync/push/part", {"upload_id": up, "idx": i, "data": piece},
+            token=token, timeout=_SYNC_PART_TIMEOUT))
+    return _post(server_url, "sync/push/commit", {"upload_id": up},
+                 token=token, timeout=_SYNC_PART_TIMEOUT)
+
+
+_SYNC_PART_TIMEOUT = 60
+_proto_cache = {}
+
+
+def server_protocol(server_url, max_age=300):
+    hit = _proto_cache.get(server_url)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    try:
+        info = _get(server_url, "protocol", timeout=10)
+    except FedServerError:
+        return {}
+    _proto_cache[server_url] = (time.time(), info)
+    return info
+
+
+def _sync_parts_info(server_url):
+    info = server_protocol(server_url)
+    if ("sync_parts" in (info.get("caps") or []) and "sync_parts" in CAPS
+            and int(info.get("sync_part_bytes") or 0) > 0):
+        return info
+    return None
+
+
+def _retrying(fn, tries=3):
+    for n in range(tries):
+        try:
+            return fn()
+        except FedServerError as e:
+            if (getattr(e, "data", {}) or {}).get("error") != "offline" or n == tries - 1:
+                raise
+            time.sleep(1 + 2 * n)
 
 
 def server_motd(server_url, token):

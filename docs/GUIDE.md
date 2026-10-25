@@ -892,8 +892,9 @@ in words to update ([FEDERATION.md](FEDERATION.md)).
 ## Children: local packs and remote nodes
 
 There are two kinds of child. An **emancipated** child is a headless node on
-**another** machine, with its own identity on the server, enrolled with
-`hoplita-cli --spawn --token <TOKEN>`.
+**another** machine (or in a container on this one), with its own identity on
+the server. It boots from a single-use token that carries its model, sealed so
+the server cannot read it: one command, nothing typed.
 
 An **unemancipated** child is a personalisation **pack** that runs *here*, as a
 sub-agent. No identity, no keys, no quota, no envelopes, nothing to enroll — it
@@ -1047,7 +1048,20 @@ model reads it whole in a side-call and the conversation receives a dense,
 data-first extract; the FULL text is kept as a note in that conversation's
 **working memory**, and the extract points at it. The inventory of it rides in
 every turn, so the model knows what it is holding and does not re-fetch the web
-for something it already has (`read_note('working-memory', <title>)`).
+for something it already has.
+
+An extract is a selection, and nobody reads a whole text they only have the
+extract of. So the store is **searched**, not reread:
+`search_working_memory(query)` takes any words, a name or a figure and returns
+the passages that mention them, with the paragraph before and after and their
+line numbers, ranked by how many of the rarer words each covers. It is the
+one engine every text search uses (`find_passages`): notes, attached
+documents and the working memory answer with the passage where the words are,
+never with a text's first lines, and the conversation log's moments are the
+same grouping with time as the axis. `regex=true` makes it grep, `title=` keeps
+it to one text, and `read_note('working-memory', <title>, start_line,
+end_line)` reads around a passage. The tool always travels with the model,
+and a JSON result is stored indented so it has lines to find.
 
 Three rules it lives by:
 

@@ -550,72 +550,91 @@ The pack travels to your other machines in the snapshot.
 
 ### 7b. A federated child (a headless node on another machine)
 
-**On your machine: create an enrollment token.** There is no button for this.
+A child of yours that runs on another machine (a server, a VPS, a spare box)
+with its own identity on the server. You drive it from here, through the
+server. It boots from a token with nothing typed into it. In a container, see
+7c. Without one, read on.
 
-1. Chat: «create an enrollment token for a new child labelled kitchen-pc»
-   (`fed_spawn_child`).
-2. The reply holds the token in clear and the exact command to run:
-   `hoplita-cli --spawn --server <your server> --token <TOKEN>`.
-3. The token is single use and valid for 60 minutes. Copy it now: it is not
-   shown again.
+**On your machine: create the token.**
 
-**On the child machine: install.** The child is a normal install that runs
-only the MCP. No one uses the GUI there.
+- **Contacts** → **+ 🐳 Child in a container** → **Token and command only**, or
+- chat: «create a child called kitchen-pc that thinks with my base model»
+  (`fed_spawn_child`).
 
-1. Download the HOPLITA source (clone github.com/HoplitaAI/Hoplita) and, from
-   that folder, install the core and the CLI:
-   `python install.py --cli --no-shortcuts`.
-   - `--cli` builds the Go CLI and needs Go. You can instead copy a
-     `hoplita-cli` built elsewhere (`cli/compile.sh`).
-   - Add `--browser` if the child must browse the web.
-2. Edit its `config.ini`:
-   - Point `[API]` at a model the child can reach. The child thinks with its
-     own model.
-   - If the machine is not yours, set `[MCP] sync_on_boot = false`.
+The token carries the child's **starter kit**: the model it thinks with (yours,
+a pool model, or one of its own) and optionally your web search. The kit is
+sealed to the token, so the server cannot read it (7c, *What travels*). The
+answer gives two commands, one for a container and one for a plain install.
+The token is single use and valid for 60 minutes, and it is not shown again.
 
-**On the child machine: start the MCP and enroll.**
+**On the child machine: install.** A normal install that runs only the MCP:
+download the HOPLITA source (clone github.com/HoplitaAI/Hoplita) and, from that
+folder, run `python install.py --no-shortcuts`. Add `--browser` if the child
+must browse the web.
 
-1. Start the MCP with a vault password for the child. This is the child's own
-   vault, not yours. Started by hand, the MCP asks for it in the terminal:
+**On the child machine: start it.** Paste the plain command from the answer:
 
-   ```bash
-   cd ~/hoplita           # the install folder
-   venv/bin/python hoplita-mcp.py
-   ```
+```bash
+HOPLITA_HOME=~/hoplita-alice-kitchen-pc HOPLITA_SPAWN_SERVER=https://hoplita.net \
+  HOPLITA_SPAWN_HANDLE=alice-kitchen-pc HOPLITA_SPAWN_TOKEN=<TOKEN> \
+  ~/hoplita/venv/bin/python ~/hoplita/hoplita-mcp.py
+```
 
-   On Windows the interpreter is `venv\Scripts\python.exe`. With no terminal,
-   the MCP opens a password dialog, which needs a display. For a start with
-   no one at the keyboard, see *Run it as a service* below.
-2. With the MCP running, enroll:
+- `HOPLITA_HOME` is the child's own data folder, created at start. It is never
+  the install's own data folder, which may already be someone.
+- Nothing is asked. The vault opens by itself (*Its vault*, below), the MCP
+  enrolls with the token, writes the kit into its `config.ini` and comes online.
+- The token is taken out of the MCP's environment. Once spent it is worthless,
+  so it does no harm in the shell's history.
+- Later starts need only `HOPLITA_HOME`. A restart sees the identity and does
+  not enroll again.
+- What the child runs, it runs on that machine as that user. For anything you
+  do not trust, use a container (7c).
 
-   ```bash
-   cli/dist/hoplita-cli --spawn --server https://hoplita.net --token <TOKEN> --handle kitchen-pc
-   ```
+**Its vault.** By default it is **open**: its key is the file `vault.key`
+beside it, and every start says so. It is open when a spawn token boots a
+machine with no vault yet, when `vault.key` already exists, or with
+`HOPLITA_VAULT=open`. Nobody types into such a machine, and a password kept in
+a file next to it would protect nothing. A machine whose vault already exists
+never gets an open one because a token shows up. To lock the vault, see
+*With a password*, below.
 
-   - `--handle` is optional. Without it, the machine's hostname is used. It
-     must not be taken on the server.
-   - On success: *✓ Child 'kitchen-pc' enrolled under 'alice'.*
-   - No email, PIN or password is involved: the token is the proof.
-3. Keep the MCP running. The child picks up its new identity without a
-   restart, and restarting it is harmless.
+**Run it as a service.** HOPLITA does not install one. With systemd (Linux),
+as root, the unit `/etc/systemd/system/hoplita-child.service` (replace `<user>`;
+paths must be absolute):
 
-**Run it as a service.** HOPLITA does not install one. An unattended MCP takes
-its vault password from the environment variable `HOPLITA_VAULT_PASSWORD`.
-Where that password is kept matters, because the child's agent runs commands
-as the user the MCP runs as:
+```ini
+[Unit]
+Description=HOPLITA child node
+After=network-online.target
+Wants=network-online.target
 
-- At start the MCP takes the variable **out of its environment**, so no
-  command it runs inherits it. It also clears it from the start-up copy that
-  `/proc/<pid>/environ` shows on Linux and `ps -E` shows on macOS. On Windows
-  that start-up copy is not cleared, and a process of the same user may still
-  read it there.
-- A file the MCP's user can read can be read by the agent's commands too. Keep
-  the password in a file **only root can read**, and let the service manager
-  hand it over.
-- Do not type it on a command line (`HOPLITA_VAULT_PASSWORD=… venv/bin/python …`):
-  it stays in the shell's history.
+[Service]
+User=<user>
+Environment=HOPLITA_HOME=/home/<user>/hoplita-alice-kitchen-pc
+WorkingDirectory=/home/<user>/hoplita
+ExecStart=/home/<user>/hoplita/venv/bin/python hoplita-mcp.py
+Restart=on-failure
 
-With systemd (Linux), as root:
+[Install]
+WantedBy=multi-user.target
+```
+
+Run the plain command once by hand to enroll, stop it, then start the service:
+
+```bash
+systemctl daemon-reload
+systemctl enable --now hoplita-child
+journalctl -u hoplita-child -f
+```
+
+**With a password (optional).** For whoever wants the vault locked at rest:
+an MCP given `HOPLITA_VAULT_PASSWORD` uses it, keeps no key file, and takes the
+variable out of its environment. It also clears it from the start-up copy that
+`/proc/<pid>/environ` shows on Linux and `ps -E` shows on macOS. On Windows that
+copy is not cleared. Decide this **before the first start**: a vault made
+open does not take a password later, nor the other way round. Keep the password where the MCP's user cannot read it, or the
+agent's commands can read it too:
 
 1. The password, readable only by root:
 
@@ -630,37 +649,17 @@ With systemd (Linux), as root:
    spaces as typed: without them systemd drops them. A password for this file
    cannot contain a single quote (`'`).
 
-2. The unit, `/etc/systemd/system/hoplita-child.service`. Replace `<user>` with
-   the user HOPLITA is installed for; paths must be absolute:
+2. In the unit, add `EnvironmentFile=/etc/hoplita/child.env`. systemd reads it
+   as root and passes it to the MCP, which runs as `<user>`. Neither the MCP nor
+   the agent's commands can read that file. For the first start, run the
+   service with the three `HOPLITA_SPAWN_*` variables added to that file, and
+   remove them once the child is enrolled.
 
-   ```ini
-   [Unit]
-   Description=HOPLITA child node
-   After=network-online.target
-   Wants=network-online.target
-
-   [Service]
-   User=<user>
-   WorkingDirectory=/home/<user>/hoplita
-   EnvironmentFile=/etc/hoplita/child.env
-   ExecStart=/home/<user>/hoplita/venv/bin/python hoplita-mcp.py
-   Restart=on-failure
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-3. Start it, now and at every boot, and follow its output:
-
-   ```bash
-   systemctl daemon-reload
-   systemctl enable --now hoplita-child
-   journalctl -u hoplita-child -f
-   ```
-
-systemd reads `/etc/hoplita/child.env` as root and passes it to the MCP, which
-runs as `<user>`. Neither the MCP nor the agent's commands can read that file.
-Enroll (step 2 above) while the service is running.
+**An older server, or an MCP already running.** A server that does not list
+`spawn_kit` mints a plain token with no kit. Set `[API]` in the child's
+`config.ini` by hand, start its MCP, and enroll it with the CLI
+(`python install.py --cli` builds it):
+`cli/dist/hoplita-cli --spawn --server https://hoplita.net --token <TOKEN> --handle kitchen-pc`.
 
 **Back on your machine.** The child appears in **Contacts** as an accepted
 contact with presence. Its trust is `open` both ways, because it is yours. Chat:
@@ -698,6 +697,86 @@ it → **🗑 Revoke child**. Or from the chat: «revoke my child kitchen-pc»
 - What it already received stays on that machine.
 - Revoking is irreversible. To bring it back, enroll it again with a new token.
 
+### 7c. A child in a container (docker or podman, Linux)
+
+A federated child (7b) that lives in a container on **this** machine. Use it for
+jobs you would rather keep off your own system: an MCP server you do not trust,
+media work with ffmpeg, «download that tool and figure it out». What it runs,
+installs or breaks stays inside the container. It reaches nothing of yours
+except what you send it.
+
+**Create it.** **Contacts** → **+ 🐳 Child in a container**:
+
+1. **Name**, for example `video`. Its handle on the server is your handle plus
+   the name (`alice-video`).
+2. **Model it thinks with**:
+   - your base model,
+   - one of your pool models, or
+   - **A model of its own…**: URL, model id and key.
+3. **Hand over my web search too**: optional. It needs a `[SEARCH]` provider
+   with an `api_key` on this machine.
+4. Pick one:
+   - **Create and start here** builds the `hoplita-child` image if this machine
+     lacks it, then starts the container. The first build takes a few minutes.
+   - **Token and command only** gives you the command to run yourself, here or
+     on another Linux machine with docker or podman, or without a container
+     on any machine with HOPLITA installed (below).
+
+From the chat: «create a container child called video and start it»
+(`fed_spawn_child` with `launch`).
+
+**What travels.** The enrollment token carries a **starter kit**:
+
+- the model's URL, id, key and `extra_body`;
+- your language;
+- optionally, the web search provider and its key.
+
+The kit is sealed with a key derived from the token. The server keeps only the
+token's hash, so it stores the kit but cannot open it. It hands the kit over once,
+on enrollment, and deletes it.
+
+> **Every key in the kit is one the child holds.** Anything running inside the
+> container can read it and spend it, including an untrusted MCP server. For a
+> child that acts on its own, give it **a model of its own** with a key that has
+> a spending cap.
+
+**The command.** Run it as is on any machine that has the image:
+
+```bash
+docker run -d --name alice-video --restart unless-stopped -v alice-video:/data \
+  -e HOPLITA_SPAWN_SERVER=https://hoplita.net -e HOPLITA_SPAWN_HANDLE=alice-video \
+  -e HOPLITA_SPAWN_TOKEN=<TOKEN> hoplita-child
+```
+
+- On a machine without the image, build it first from a HOPLITA install:
+  `python3 hoplita_child_image.py build`. The build copies only the code, its
+  languages, `config.ini.example` and `requirements.txt` (the GUI's packages are
+  left out). It never copies your data folder.
+- The image has Python, ffmpeg, git, curl, Node (`npx`) and `uv` (`uvx`).
+- `/data` is a named volume. It holds the child's vault, config and work, and it
+  survives restarts and image rebuilds. Remove it with `docker volume rm
+  alice-video`.
+- The child's MCP enrolls itself at start and writes the kit into its
+  `config.ini`. The token is taken out of its environment. A restart sees the
+  identity and does not enroll again.
+
+**Without a container.** Nothing in this boot needs the container: the answer
+also gives a plain command for any machine with HOPLITA installed (7b).
+
+**Its vault.** Open by default, as in 7b: its key is `/data/vault.key`, and
+every start says so. To lock it instead, start the container with
+`-e HOPLITA_VAULT_PASSWORD=…`. The MCP then keeps no key file and clears the
+password from its environment.
+
+**Use it** like any federated child (7b): **💬 Open session**, «ask
+alice-video to …», a plan target or a CRON job. To give it a file, share a
+folder or send it in a session. It can install an MCP server itself through its
+own config tools.
+
+**Server.** Only a server that lists `spawn_kit` in its protocol answer can carry
+the kit. An older server still mints a plain token. **Create and start here**
+refuses on such a server, because the container would have no model.
+
 ## 8. Troubleshooting
 
 | You see | What it means | What to do |
@@ -723,7 +802,7 @@ it → **🗑 Revoke child**. Or from the chat: «revoke my child kitchen-pc»
 | *Appointment rejected — You don't have permission…* | The recipient's **Appointments** permission for you is **no** or not set | Ask them to set it to auto-accept or review |
 | *That invite has not fully arrived yet.* / *This transfer died half-way…* | A code transfer is incomplete | Wait, or discard it and ask for a new invite (5.5) |
 | *'…' exists and is not empty.* | The destination for an accepted code project must be empty | Choose an empty or new folder |
-| *❌ The MCP is not responding at …* (`--spawn`) | The child's MCP is not running | Start it (7b), then run `--spawn` again |
+| *❌ The MCP is not responding at …* (`--spawn`) | The child's MCP is not running | Start it (7b, *An older server*), then run `--spawn` again |
 | *Enrollment failed: …* naming an invalid, used or expired token | Tokens are single use and live 60 minutes | Create a new token |
 | *This instance already has a federated identity…* | A child must enroll into a clean vault | Use a fresh install or data folder for the child |
 | *Could not reach "…"* on a tied tab | The tied machine is off or not logged in | Start it and log it in, or `/pin off` |

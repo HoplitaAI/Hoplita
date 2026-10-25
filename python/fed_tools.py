@@ -1755,26 +1755,173 @@ def tool_fed_list_contacts():
     }
 
 
-def tool_fed_spawn_child(label=""):
+def _child_kit(model="", base_url="", model_id="", api_key="", search=False):
+    import hoplita_llmcfg as llm
+    import hoplita_paths as _hp
+    cfg, _problem = llm.read_config(_hp.config_path(), restore=False)
+    if base_url or model_id:
+        if not (base_url and model_id):
+            return None, ("A model of its own needs both base_url and "
+                          "model_id (api_key if the endpoint asks for one).")
+        api = {"base_url": base_url.rstrip("/"), "api_key": api_key or "",
+               "model": model_id}
+        extra, vision = "", ""
+    else:
+        if model and model.lower() != "base":
+            sec = llm.model_section(cfg, model)
+            if not sec:
+                return None, (f"No pool model '{model}'. Leave it empty for "
+                              "the base model, or give base_url and model_id.")
+        else:
+            sec = "API"
+        url, key, mid = llm.resolve_endpoint(cfg, sec)
+        api = {"base_url": url, "api_key": key, "model": mid}
+        if sec == "API":
+            sec = llm.model_section(cfg, llm.base_alias(cfg)) or "API"
+        extra = (cfg.get(sec, "extra_body", fallback="") or "").strip()
+        vision = (cfg.get(sec, "vision", fallback="") or "").strip()
+    if not api["model"]:
+        return None, "This machine has no model configured to hand over."
+    if extra:
+        api["extra_body"] = extra
+    if vision:
+        api["vision"] = vision
+    kit = {"v": 1, "api": api,
+           "language": cfg.get("APP", "language", fallback="en") or "en"}
+    if search:
+        prov = (cfg.get("SEARCH", "provider", fallback="") or "").strip().lower()
+        sec = prov.upper()
+        if not (prov and cfg.has_section(sec)
+                and (cfg.get(sec, "api_key", fallback="") or "").strip()):
+            return None, ("This machine has no web search with a key to hand "
+                          "over ([SEARCH] provider and its api_key).")
+        kit["search"] = {"provider": prov,
+                         "settings": {k: cfg.get(sec, k) for k in cfg.options(sec)}}
+    return kit, ""
+
+
+def _child_handle(label):
+    import re
+    me = (_store().data.get("handle") or "").strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", (label or "child").lower()).strip("-")
+    return f"{me}-{slug or 'child'}" if me else (slug or "child")
+
+
+def host_command(handle, server_url, token):
+    return (f"HOPLITA_HOME=~/hoplita-{handle} "
+            f"HOPLITA_SPAWN_SERVER={server_url} HOPLITA_SPAWN_HANDLE={handle} "
+            f"HOPLITA_SPAWN_TOKEN={token} "
+            "~/hoplita/venv/bin/python ~/hoplita/hoplita-mcp.py")
+
+
+def tool_fed_spawn_child(label="", handle="", model="", base_url="",
+                         model_id="", api_key="", search=False,
+                         launch=False):
     try:
-        _, server_url, token = _require_session()
+        store, server_url, token = _require_session()
     except Exception as e:
         return {"error": str(e)}
+    kit, kerr = _child_kit(model, base_url, model_id, api_key, search)
+    if kerr:
+        return {"error": kerr}
+    has_kit = "spawn_kit" in (fed.server_protocol(server_url).get("caps") or [])
+    if launch and not has_kit:
+        return {"error": "This federation server is too old to hand a child its "
+                         "starter kit (no spawn_kit): it must be updated before "
+                         "a container child can boot by itself."}
+    handle = (handle or "").strip().lower() or _child_handle(label)
     try:
         resp = fed.server_create_spawn_token(server_url, token, label=label)
     except fed.FedServerError as e:
         return {"error": f"Could not create the enrollment token: {e}"}
-    return {
+    raw = resp.get("token")
+    out = {
         "ok": True,
-        "spawn_token": resp.get("token"),
+        "spawn_token": raw,
         "label": resp.get("label", label),
         "expires_at": resp.get("expires_at"),
         "server_url": server_url,
         "message": ("Enrollment token created (valid 60 min, single use). "
                     "Launch it on the target server with:\n"
                     f"  hoplita-cli --spawn --server {server_url} "
-                    f"--token {resp.get('token')}"),
+                    f"--token {raw}"),
     }
+    if not has_kit:
+        return out
+    try:
+        fed.server_set_spawn_kit(server_url, token, resp.get("spawn_id"),
+                                 crypto.seal_kit(raw, kit))
+    except fed.FedServerError as e:
+        return {"error": f"The token was created but its starter kit could not "
+                         f"be attached: {e}"}
+    import hoplita_child_image as img
+    rt = img.runtime() or "docker"
+    cmd = " ".join(img.run_args(rt, handle, server_url, raw))
+    host = host_command(handle, server_url, raw)
+    out.update({
+        "handle": handle,
+        "kit": {"model": kit["api"]["model"],
+                "search": (kit.get("search") or {}).get("provider", "")},
+        "container_command": cmd,
+        "build_command": f"python3 {img.__file__} build",
+        "host_command": host,
+        "message": (f"Child '{handle}' ready to boot (token valid 60 min, single "
+                    f"use). It will think with {kit['api']['model']}"
+                    + (f" and search with {kit['search']['provider']}"
+                       if kit.get("search") else "")
+                    + ". Every key in its kit is one the child holds and can "
+                      "spend. Start it in a container with:\n  " + cmd
+                    + f"\n(build the {img.IMAGE} image first if this machine "
+                      f"lacks it: python3 {img.__file__} build)"
+                    + "\n\nOr on any machine with HOPLITA installed (a server, "
+                      "a VPS), in a folder of its own:\n  " + host),
+    })
+    if launch:
+        r = img.launch(handle, server_url, raw)
+        if r.get("error"):
+            out["launch_error"] = r["error"]
+            out["message"] += "\n\nLaunching it here failed: " + r["error"]
+        else:
+            out["launched"] = r
+            out["message"] = (f"Child '{handle}' is starting in a {r['runtime']} "
+                              f"container"
+                              + (f" (the {img.IMAGE} image was built first)"
+                                 if r.get("built") else "")
+                              + f". It thinks with {kit['api']['model']}"
+                              + (f" and searches with {kit['search']['provider']}"
+                                 if kit.get("search") else "")
+                              + "; it appears in your contacts once it enrolls.")
+    return out
+
+
+def _apply_child_kit(kit):
+    import hoplita_llmcfg as llm
+    import hoplita_paths as _hp
+    path = _hp.config_path()
+    if os.path.exists(path):
+        text = open(path, encoding="utf-8").read()
+    else:
+        ex = os.path.join(_hp.hoplita_base(), "config.ini.example")
+        text = open(ex, encoding="utf-8").read() if os.path.exists(ex) else ""
+    done = []
+    for k, v in (kit.get("api") or {}).items():
+        text = llm.set_value(text, "API", k, v)
+        done.append(f"API.{k}")
+    if kit.get("language"):
+        text = llm.set_value(text, "APP", "language", kit["language"])
+        done.append("APP.language")
+    srch = kit.get("search") or {}
+    if srch.get("provider"):
+        text = llm.set_value(text, "SEARCH", "provider", srch["provider"])
+        sec = srch["provider"].upper()
+        for k, v in (srch.get("settings") or {}).items():
+            text = llm.set_value(text, sec, k, v)
+        done.append(f"SEARCH={srch['provider']}")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+    return done
 
 
 def tool_fed_list_children():
@@ -1833,7 +1980,7 @@ def tool_fed_enroll_child(server_url, spawn_token, handle):
         except Exception as e:
             print(f"[FED] could not record the owner: {e}", file=_sys.stderr)
 
-    return {
+    out = {
         "ok": True,
         "handle": handle,
         "owner": resp.get("owner"),
@@ -1842,6 +1989,15 @@ def tool_fed_enroll_child(server_url, spawn_token, handle):
         "message": f"Child '{handle}' enrolled under '{resp.get('owner')}'. "
                    f"Identity and session saved in the vault.",
     }
+    if resp.get("kit"):
+        try:
+            out["kit_applied"] = _apply_child_kit(
+                crypto.open_kit(spawn_token, resp["kit"]))
+            out["message"] += " Starter kit written to config.ini."
+        except Exception as e:
+            out["kit_error"] = f"The starter kit could not be applied: {e}"
+            out["message"] += " " + out["kit_error"]
+    return out
 
 
 
@@ -2499,6 +2655,7 @@ def tool_fed_leave(force_local=False):
         if sql is not None:
             sql.meta_set("sync_version", 0)
             sql.meta_set(_SYNC_KNOWN, "{}")
+            sql.meta_set(_SYNC_PUSHED_FP, "")
             for _p in (_code_projects() or []):
                 sql.meta_set(f"code_peers:{_p}", "{}")
                 sql.meta_set(f"code_await:{_p}", "")
@@ -4721,12 +4878,24 @@ FED_TOOLS = {
     "fed_spawn_child": {
         "desc": "Generate an enrollment token to create a CHILD: a headless "
                 "agent of yours that runs on another machine (a server without a "
-                "desktop). Returns a single-use token; you take it to that "
-                "machine and run 'hoplita-cli --spawn --token <TOKEN>'. The child "
-                "self-enrolls, appears in your children list and is fully trusted "
+                "desktop) or in a container. Returns a single-use token. The "
+                "child self-enrolls, appears in your children list and is fully trusted "
                 "(free rein, it's yours). Optional: 'label' to recognize it "
-                "(e.g. 'kitchen-pc').",
-        "fn": lambda a: tool_fed_spawn_child(a.get("label", ""))},
+                "(e.g. 'kitchen-pc'). The token also carries the child's starter "
+                "kit, sealed so the server cannot read it: the model it thinks "
+                "with ('model', a pool alias, empty for the base; or a model of "
+                "its OWN with base_url + model_id + api_key, the safer choice "
+                "for a child acting on its own, since it holds and can spend "
+                "every key it gets) and, with search=true, this machine's web "
+                "search. The answer includes two commands that boot it with "
+                "nothing typed in: one for a container, one for any machine "
+                "with HOPLITA installed; launch=true builds the image if "
+                "needed and starts that container on THIS machine, for jobs "
+                "you want boxed away from it (an untrusted MCP, media work).",
+        "fn": lambda a: tool_fed_spawn_child(
+            a.get("label", ""), a.get("handle", ""), a.get("model", ""),
+            a.get("base_url", ""), a.get("model_id", ""), a.get("api_key", ""),
+            bool(a.get("search")), bool(a.get("launch")))},
     "fed_list_children": {
         "desc": "List your children (headless agents you have enrolled) with "
                 "their online/offline presence. Use it to see which machines you "
@@ -5196,6 +5365,22 @@ FED_TOOL_PARAMS = {
         "properties": {
             "label": {"type": "string", "description": "Free label to recognize "
                       "the child later, e.g. 'kitchen-pc'. Optional."},
+            "handle": {"type": "string", "description": "The child's own handle "
+                       "on the server. Optional: by default your handle and the "
+                       "label."},
+            "model": {"type": "string", "description": "Pool alias of the model "
+                      "it thinks with. Empty = your base model."},
+            "base_url": {"type": "string", "description": "A model of its own: "
+                         "OpenAI-compatible endpoint URL (with model_id)."},
+            "model_id": {"type": "string", "description": "A model of its own: "
+                         "the model id at base_url."},
+            "api_key": {"type": "string", "description": "A model of its own: "
+                        "its key, if the endpoint needs one."},
+            "search": {"type": "boolean", "description": "Hand over this "
+                       "machine's web search too. Default false."},
+            "launch": {"type": "boolean", "description": "Build the image if "
+                       "missing and start the child in a container on this "
+                       "machine. Default false."},
         },
         "required": []},
     "fed_list_children": {"properties": {}, "required": []},
@@ -5668,6 +5853,9 @@ def _sync_fp(p):
                                     default=str).encode("utf-8")).hexdigest()[:16]
 
 
+_SYNC_PUSHED_FP = "sync_pushed_fp"
+
+
 def _sync_row_stores():
     return [s for s in _SYNC_STORES
             if not s.endswith("__blob") and s != hs.TOMBSTONE_STORE]
@@ -5775,7 +5963,20 @@ def _merge_blob_row(sql, store, incoming):
     return True
 
 
+_sync_lock = _threading.Lock()
+
+
 def tool_fed_sync_push():
+    with _sync_lock:
+        return _fed_sync_push()
+
+
+def tool_fed_sync_pull():
+    with _sync_lock:
+        return _fed_sync_pull()
+
+
+def _fed_sync_push():
     sql = _sql()
     if sql is None:
         return {"error": "SQL store unavailable (nothing to sync)."}
@@ -5811,12 +6012,16 @@ def tool_fed_sync_push():
     rows = [{"store": s, "payload": _export(s, p)}
             for s in _SYNC_STORES for p in sql.load(s)
             if _sync_row_visible(s, p, _locked)]
+    base = int(sql.meta_get("sync_version") or 0)
+    _fp = _hashlib.sha256(_json.dumps(rows, sort_keys=True, ensure_ascii=False,
+                                      default=str).encode("utf-8")).hexdigest()
+    if sql.meta_get(_SYNC_PUSHED_FP) == f"{base}:{_fp}":
+        return {"ok": True, "unchanged": True, "version": base, "rows": len(rows)}
     snap = {"v": 1, "ts": _dt.now().isoformat(), "n": len(rows), "rows": rows,
             "stores": _sync_row_stores()}
     pad = (-len(_json.dumps(snap, ensure_ascii=False))) % 65536
     snap["_pad"] = "0" * pad
     sealed = _seal(_store(), my_pub, snap)
-    base = int(sql.meta_get("sync_version") or 0)
     _t0 = _time.time()
     try:
         resp = fed.server_sync_push(server_url, token, sealed, base)
@@ -5835,6 +6040,7 @@ def tool_fed_sync_push():
             return {"error": "offline", "detail": _why}
         return {"error": f"Sync push failed: {e}"}
     sql.meta_set("sync_version", resp.get("version", base + 1))
+    sql.meta_set(_SYNC_PUSHED_FP, f"{resp.get('version', base + 1)}:{_fp}")
     try:
         _row_stores = set(_sync_row_stores())
         _sync_known_save(sql, [(s, p) for s in _row_stores for p in sql.load(s)
@@ -5882,7 +6088,7 @@ def tool_fed_sync_breakdown():
                      "lighter")}
 
 
-def tool_fed_sync_pull():
+def _fed_sync_pull():
     sql = _sql()
     if sql is None:
         return {"error": "SQL store unavailable."}
@@ -5896,7 +6102,8 @@ def tool_fed_sync_pull():
     my_priv = st.data.get("private_key_b64")
     _t0 = _time.time()
     try:
-        resp = fed.server_sync_pull(server_url, token)
+        resp = fed.server_sync_pull(server_url, token,
+                                    have_version=sql.meta_get("sync_version"))
     except fed.FedServerError as e:
         if (getattr(e, "data", {}) or {}).get("error") == "offline":
             _why = f"{_time.time() - _t0:.1f} s: {e}"
@@ -5905,7 +6112,10 @@ def tool_fed_sync_pull():
         return {"error": f"Sync pull failed: {e}"}
     blob = resp.get("ciphertext")
     version = int(resp.get("version", 0) or 0)
+    if resp.get("unchanged"):
+        return {"ok": True, "merged": 0, "unchanged": True, "version": version}
     if not blob:
+        sql.meta_set(_SYNC_PUSHED_FP, "")
         return {"ok": True, "merged": 0, "message": "Nothing on the server yet."}
     try:
         snap = crypto.unbox(my_priv, st.data.get("public_key_b64"), blob)
@@ -5956,6 +6166,7 @@ def tool_fed_sync_pull():
                     merged += 1
         known = _sync_known_load(sql)
         if version < int(sql.meta_get("sync_version") or 0):
+            sql.meta_set(_SYNC_PUSHED_FP, "")
             print(f"[SYNC] the server's snapshot (v{version}) is older than the "
                   f"last one seen here: nothing dropped for being absent",
                   file=_sys.stderr)

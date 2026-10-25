@@ -27,8 +27,7 @@ import time
 from datetime import datetime
 from typing import Dict, List, Set
 
-from hoplita_search import (group_and_score,
-                            _norm_words, _same_word)
+from hoplita_search import find_passages
 import requests
 
 try:
@@ -41,6 +40,20 @@ _CODE_STYLE = "github-dark"
 _CODE_BG = "#0f172a"
 _CODE_HEAD_BG = "#111d33"
 _CODE_BORDER = "#334155"
+
+_MD_CELL = re.compile(r'<(th|td)(?: style="text-align: ?(left|right|center);?")?>')
+
+
+def _style_md_tables(html):
+    def cell(m):
+        tag, align = m.group(1), m.group(2) or "left"
+        bg = f' bgcolor="{_CODE_HEAD_BG}"' if tag == "th" else ""
+        color = "color:#f1f5f9;" if tag == "th" else ""
+        return (f'<{tag} align="{align}" valign="top"{bg} style="{color}'
+                f'border:1px solid {_CODE_BORDER};padding:5px 10px;">')
+    html = html.replace("<table>", '<table cellspacing="0" cellpadding="0" '
+                        'style="border-collapse:collapse;margin:6px 0;">')
+    return _MD_CELL.sub(cell, html)
 _CODE_FG = "#e6edf7"
 
 from PyQt6.QtWidgets import (
@@ -296,30 +309,26 @@ class RAGDocumentStore:
     def search_similar_chunks(self, query, k=5, exclude_used=True):
         if len(self.chunks) == 0:
             return []
-        _items = [{"i": i, "text": t} for i, t in enumerate(self.chunks)
-                  if not (exclude_used and i in self.used_chunk_ids)]
-        if not _items:
+        docs = {}
+        for i, t_ in enumerate(self.chunks):
+            if exclude_used and i in self.used_chunk_ids:
+                continue
+            meta = self.chunk_metadata[i] if i < len(self.chunk_metadata) else {}
+            src = meta.get("source", "")
+            d = docs.setdefault(src, {"source": src, "blocks": []})
+            d["blocks"].append((i, i, t_))
+        if not docs:
             return []
-        _low = [(x["i"], set(_norm_words(x["text"] or "")))
-                for x in _items]
-
-        def _df(w):
-            return sum(1 for _, ws in _low
-                       if any(_same_word(w, x) for x in ws))
-
+        found = find_passages(query, list(docs.values()), context=0, k=k)
         out = []
-        for g in group_and_score(query, _items, lambda x: x["text"],
-                                 lambda x: x["i"], _df, len(self.chunks),
-                                 gap=2, k=k):
-            chunks = g["items"]
-            i0 = chunks[0]["i"]
+        for p_ in found["passages"]:
+            i0 = p_["pieces"][0]
             meta = (self.chunk_metadata[i0]
                     if i0 < len(self.chunk_metadata) else {})
-            out.append({"text": "\n".join(x["text"] for x in chunks),
-                        "score": g["score"], "metadata": meta,
-                        "chunk_index": i0, "rank": len(out) + 1,
-                        "why": g["covers"],
-                        "chunks": [x["i"] for x in chunks]})
+            out.append({"text": p_["text"], "score": p_["score"],
+                        "metadata": meta, "chunk_index": i0,
+                        "rank": len(out) + 1, "why": p_["matched"],
+                        "chunks": list(p_["pieces"])})
         return out
 
     def mark_chunks_as_used(self, chunk_indices):
@@ -1620,6 +1629,7 @@ class ChatCtx:
         self.council_first = ""
         self.council_context = True
         self.council_html = ""
+        self.council_events = []
         self.council_ack = None
 
 
@@ -1966,20 +1976,40 @@ class ChatAssistantWindow(QMainWindow):
         if getattr(self, "_sync_busy", False):
             return
         self._do_sync(pull=True)
-        QTimer.singleShot(20000, lambda: (None if getattr(self, "_sync_busy", False)
-                                          else self._do_sync(pull=False)))
+        self._sync_enqueue(pull=False, manual=False)
+
+    def _sync_enqueue(self, pull, manual):
+        q = self.__dict__.setdefault("_sync_queue", [])
+        for i, (p, m) in enumerate(q):
+            if p == pull:
+                q[i] = (p, m or manual)
+                return
+        q.append((pull, manual))
+
+    def _sync_drain(self):
+        q = self.__dict__.get("_sync_queue") or []
+        if q and not getattr(self, "_sync_busy", False):
+            pull, manual = q.pop(0)
+            self._do_sync(pull=pull, manual=manual)
 
     def _do_sync(self, pull, manual=False):
         tool = "fed_sync_pull" if pull else "fed_sync_push"
         if getattr(self, "_sync_busy", False):
+            if manual:
+                self.add_message(t("fed.sync_busy"), "system")
+            self._sync_enqueue(pull, manual)
             return
         self._sync_busy = True
+        if manual:
+            self.add_message(t("fed.sync_pulling") if pull
+                             else t("fed.sync_pushing"), "system")
 
         def work():
-            ok, res, err = self._mcp_try(tool, {}, timeout=120)
+            _wait = 1800
+            ok, res, err = self._mcp_try(tool, {}, timeout=_wait)
             if (not pull and isinstance(res, dict) and res.get("needs_pull")):
-                self._mcp_try("fed_sync_pull", {}, timeout=120)
-                ok, res, err = self._mcp_try("fed_sync_push", {}, timeout=120)
+                self._mcp_try("fed_sync_pull", {}, timeout=_wait)
+                ok, res, err = self._mcp_try("fed_sync_push", {}, timeout=_wait)
             if not ok and not (isinstance(res, dict) and res.get("error")):
                 return {"error": err or "no answer from the MCP"}
             if (not pull and isinstance(res, dict) and res.get("needs_pull")):
@@ -1988,6 +2018,12 @@ class ChatAssistantWindow(QMainWindow):
 
         def done(res):
             self._sync_busy = False
+            try:
+                report(res)
+            finally:
+                self._sync_drain()
+
+        def report(res):
             if isinstance(res, dict) and res.get("skipped"):
                 if manual:
                     self.add_message(t("fed.not_registered"), "system")
@@ -2012,6 +2048,9 @@ class ChatAssistantWindow(QMainWindow):
             elif manual:
                 if pull:
                     self.add_message(t("fed.sync_nothing"), "system")
+                elif res.get("unchanged"):
+                    self.add_message(t("fed.sync_unchanged", v=res.get('version', '?'),
+                                       rows=res.get('rows', '?')), "system")
                 else:
                     self.add_message(t("fed.sync_uploaded", v=res.get('version', '?'),
                                        rows=res.get('rows', '?')), "system")
@@ -2274,7 +2313,7 @@ class ChatAssistantWindow(QMainWindow):
 
     def _mcp_call(self, tool, arguments):
         try:
-            timeout = 900 if tool in ("browse_web", "screenshot_web") else self.config.getint("CHAT", "timeout", fallback=120)
+            timeout = 900 if tool in ("browse_web", "screenshot_web", "fed_spawn_child") else self.config.getint("CHAT", "timeout", fallback=120)
             print(f"[MCP_CALL] {tool} timeout={timeout}")
             url = self._tab_url() if _tool_is_tabs(tool) else self._mcp_url
             r = requests.post(f"{url}/call",
@@ -5923,6 +5962,34 @@ enabled = true
                 f"#chatTab QPushButton#tabClose:hover {{ background:#3a1d24; color:#f87171; }} "
                 f"#chatTab QPushButton#tabReset:hover {{ background:#1b2744; color:#93c5fd; }}")
 
+    _TAB_RESERVED_W = 320
+    _TAB_MIN_W = 128
+    _TAB_MAX_W = 300
+    _TAB_CHROME_W = 34
+
+    def _chat_tabs_fit(self):
+        tabs = list(self._chat_tabs)
+        bar = getattr(self, "_chat_tab_bar", None)
+        room = max(200, (bar.width() if bar is not None and bar.width() > 50
+                         else self.width()) - self._TAB_RESERVED_W)
+        per = room // max(1, len(tabs))
+        if per >= self._TAB_MIN_W:
+            return tabs, [], max(40, min(self._TAB_MAX_W, per) - self._TAB_CHROME_W)
+        fit = max(1, room // self._TAB_MIN_W - 1)
+        shown = tabs[:fit]
+        active = next((x for x in tabs if x["id"] == self._active_tab_id), None)
+        if active is not None and active not in shown:
+            shown = shown[:-1] + [active] if len(shown) > 1 else [active]
+        hidden = [x for x in tabs if x not in shown]
+        return shown, hidden, self._TAB_MIN_W - self._TAB_CHROME_W
+
+    def _chat_tabs_more_menu(self, anchor, hidden):
+        menu = QMenu(self)
+        for tab in hidden:
+            a = menu.addAction(tab["title"])
+            a.triggered.connect(lambda _=False, tid=tab["id"]: self._switch_chat_tab(tid))
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+
     def _render_chat_tabs(self):
         _pinned_btns = []
         self._pin_buttons = _pinned_btns
@@ -5934,7 +6001,9 @@ enabled = true
             if w:
                 w.hide()
                 w.deleteLater()
-        for tab in self._chat_tabs:
+        _shown, _hidden, _title_w = self._chat_tabs_fit()
+        _fm = QFontMetrics(self.font())
+        for tab in _shown:
             active = tab["id"] == self._active_tab_id
             col = self._chat_tab_color(tab["kind"])
             _c = self._chat_ctxs.get(tab["id"])
@@ -5959,7 +6028,9 @@ enabled = true
             _fl = QHBoxLayout(frame)
             _fl.setContentsMargins(0, 0, 4, 0)
             _fl.setSpacing(0)
-            btn = QPushButton(("⏸ " if waiting else "") + tab["title"] + _mark)
+            _label = ("⏸ " if waiting else "") + tab["title"] + _mark
+            btn = QPushButton(_fm.elidedText(_label, Qt.TextElideMode.ElideRight,
+                                             int(_title_w)))
             btn.setObjectName("tabTitle")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             _tips = [tab["title"]]
@@ -5993,6 +6064,18 @@ enabled = true
             x.clicked.connect(lambda _=False, tid=tab["id"]: self._close_chat_tab(tid))
             _fl.addWidget(x, 0, Qt.AlignmentFlag.AlignVCenter)
             lay.addWidget(frame)
+        if _hidden:
+            more = QPushButton(f"+{len(_hidden)} ▾")
+            more.setObjectName("tabMore")
+            more.setCursor(Qt.CursorShape.PointingHandCursor)
+            more.setToolTip(t("chat.tab_more_tip", n=len(_hidden)))
+            more.setStyleSheet(
+                "QPushButton { background:#1e293b; color:#cbd5e1; border:1px solid "
+                "#334155; border-radius:8px; padding:3px 10px; margin-left:4px; } "
+                "QPushButton:hover { background:#334155; color:#ffffff; }")
+            more.clicked.connect(lambda _=False, b=more, h=list(_hidden):
+                                 self._chat_tabs_more_menu(b, h))
+            lay.addWidget(more, 0, Qt.AlignmentFlag.AlignVCenter)
         plus = QPushButton("+")
         plus.setFixedSize(24, 24)
         plus.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -6211,6 +6294,19 @@ enabled = true
             "QTextBrowser{background:#0b1220; border:1px solid #1f2937; "
             "border-radius:10px; padding:10px; color:#e6edf7;}")
         outer.addWidget(self.council_view, 1)
+        self.council_web = None
+        try:
+            from council_widget import CouncilWidget, labels as _council_labels
+            self.council_web = CouncilWidget()
+            self.council_web.set_labels(_council_labels(t))
+            self.council_web.bench_changed.connect(self._council_web_bench_changed)
+            outer.addWidget(self.council_web, 1)
+            self.council_view.setVisible(False)
+            for _w in (glyph, _title, _sub, bench):
+                _w.setVisible(False)
+            outer.setContentsMargins(0, 0, 0, 8)
+        except Exception as e:
+            print(f"[council] drawn agora unavailable: {e}", file=sys.stderr)
 
         self._council_gate_bar = QWidget()
         self._council_gate_bar.setStyleSheet(
@@ -6245,8 +6341,18 @@ enabled = true
         self._council_welcome()
 
     def _council_pool_names(self):
-        return sorted(n for n, m in self._model_pool().items()
-                      if m.get("council", True)) + ["base"]
+        pool = self._model_pool()
+        names = sorted(n for n, m in pool.items() if m.get("council", True))
+        try:
+            _bu, _, _bm = self._chat_base_endpoint()
+        except Exception:
+            _bu, _bm = "", ""
+        _key = ((_bu or "").rstrip("/").lower(), (_bm or "").strip())
+        if not any(((m.get("base_url") or "").rstrip("/").lower(),
+                    (m.get("model") or "").strip()) == _key
+                   for n, m in pool.items() if n in names):
+            names.append("base")
+        return names
 
     def _council_build_bench(self, ctx):
         from PyQt6.QtWidgets import QCheckBox, QRadioButton
@@ -6389,6 +6495,9 @@ enabled = true
                     self.council_view.setHtml(ctx.council_html)
                 else:
                     self._council_welcome()
+                if self.council_web is not None:
+                    self.council_web.set_bench(self._council_web_bench(ctx))
+                    self.council_web.load(ctx.council_events)
                 self._council_show_gate(ctx.council_ack)
             self._chat_stack.setCurrentIndex(idx)
         _on = self._chat_stack.currentIndex() == idx
@@ -6437,6 +6546,7 @@ enabled = true
             f"margin-top:3px;'>{_body}</div></div>")
 
     def _on_council_event(self, tab_id, ev):
+        self._council_record(tab_id, ev)
         et = ev.get("type")
         if et == "convene":
             members = ev.get("members") or []
@@ -6550,6 +6660,58 @@ enabled = true
                 ctx.council_html = ""
             if tab_id == self._active_tab_id:
                 self._council_welcome()
+
+    def _council_web_bench(self, ctx):
+        pool = self._model_pool()
+        seats = []
+        for n, chk, _rad in self._council_rows:
+            _m = pool.get(n) or {}
+            if n == "base":
+                _url, _, _model = self._chat_base_endpoint()
+                _label = t("council.seat_base") + " · " + (_model or "")
+            else:
+                _url, _model, _label = (_m.get("base_url") or ""), (_m.get("model") or ""), ""
+            seats.append({"name": n, "model": _model, "label": _label,
+                          "url": _url, "seated": chk.isChecked()})
+        _members, first = self._council_bench()
+        return {"seats": seats, "first": first,
+                "context": bool(ctx.council_context)}
+
+    def _council_web_bench_changed(self, b):
+        ctx = self._chat_ctxs.get(self._active_tab_id)
+        if ctx is None:
+            return
+        ctx.council_members = [str(m) for m in (b.get("members") or [])]
+        ctx.council_first = str(b.get("first") or "")
+        ctx.council_context = bool(b.get("context", True))
+        self._council_building = True
+        try:
+            self._council_build_bench(ctx)
+        finally:
+            self._council_building = False
+
+    def _council_record(self, tab_id, ev):
+        ctx = self._chat_ctxs.get(tab_id)
+        if ctx is None:
+            return
+        ev = dict(ev)
+        ev.setdefault("_t", time.time())
+        if ev.get("type") == "note" and ev.get("key"):
+            ev["text"] = t(ev["key"], **(ev.get("args") or {}))
+        if ev.get("type") in ("clear", "convene"):
+            ctx.council_events = []
+        if ev.get("type") != "clear":
+            ctx.council_events.append(ev)
+        web = getattr(self, "council_web", None)
+        if web is None or tab_id != self._active_tab_id:
+            return
+        idx = getattr(self, "_council_page_idx", None)
+        if idx is None or self._chat_stack.currentIndex() != idx:
+            return
+        if ev.get("type") == "clear":
+            web.load([])
+        else:
+            web.push(ev)
 
     def _on_council_ack(self, box):
         tab = (box or {}).get("tab") or self._active_tab_id
@@ -12186,6 +12348,14 @@ enabled = true
         super().resizeEvent(event)
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, self._apply_rounded_mask)
+        _rt = getattr(self, "_tabs_refit", None)
+        if _rt is None and hasattr(self, "_chat_tab_layout"):
+            _rt = self._tabs_refit = QTimer(self)
+            _rt.setSingleShot(True)
+            _rt.setInterval(120)
+            _rt.timeout.connect(self._render_chat_tabs)
+        if _rt is not None:
+            _rt.start()
 
     def _keep_qa_review(self, ev):
         store = getattr(self, "_qa_reviews", None)
@@ -12552,6 +12722,7 @@ enabled = true
                 extension_configs={"codehilite": {"noclasses": True,
                                                   "pygments_style": _CODE_STYLE}})
             html = _pictures_to_links(md.convert(_fix_lists(text)))
+            html = _style_md_tables(html)
 
             langs, in_fence = [], False
             for ln in text.split("\n"):
@@ -15006,6 +15177,9 @@ enabled = true
                 self.agents_panel.update_state(self._agents_cards_for_active())
             self.signals.intent_changed.emit(self._active_tab_id or "")
             _ctx.council_html = ""
+            _ctx.council_events = []
+            if getattr(self, "council_web", None) is not None:
+                self.council_web.load([])
             _ctx.council_ack = None
             _ctx.sticky = ""
             self._sticky_paint(self._active_tab_id)

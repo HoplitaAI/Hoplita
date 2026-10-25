@@ -3305,11 +3305,31 @@ def init_managers(password):
         def _spill_tool_result(tool_name, text):
             _title = (f"{WORKING_MEMORY}: {tool_name} "
                       f"{datetime.now().strftime('%H:%M:%S')}")
+            try:
+                _taken = {(r_.get("title") or "") for r_ in
+                          (notes_mgr.data.get("categories", {}) or {})
+                          .get(WORKING_MEMORY, []) or []
+                          if not r_.get("deleted")}
+            except Exception:
+                _taken = set()
+            _base, _k = _title, 2
+            while _title in _taken:
+                _title = f"{_base} #{_k}"
+                _k += 1
+            try:
+                _obj = json.loads(text)
+                if isinstance(_obj, (dict, list)):
+                    text = json.dumps(_obj, ensure_ascii=False, indent=1)
+            except Exception:
+                pass
             tool_add_note(WORKING_MEMORY,
                           _title, f"{_wm_tag_line()}\n{text}",
                           _system=True)
-            return (f"read_note(category='{WORKING_MEMORY}', "
-                    f"title='{_title}')")
+            _tq = _title.replace("'", "\\'")
+            return (f"search_working_memory(query='<words, a name, a "
+                    f"figure>', title='{_tq}') for the passages that mention "
+                    f"it; read_note(category='{WORKING_MEMORY}', "
+                    f"title='{_tq}') reads it in order")
         fed_agent.configure_spill(_spill_tool_result)
         fed_tools.set_todo_getter(lambda: todo_mgr)
         fed_tools.set_sql_getter(_get_sql)
@@ -4728,23 +4748,55 @@ def tool_search_notes(search_term, category=None):
                                 "id": note["id"], "score": 1})
         return {"results": results[:20]}
 
-    keywords = [w for w in re.sub(r'[^\w\s]', '', sl).split()
-                if len(w) > 2 and w not in _SEARCH_STOPS]
-    if not keywords:
-        keywords = sl.split()
-
-    kw_results = []
+    from hoplita_search import find_passages, _norm_words as _nw, _same_word
+    ids_now = set(_turn_conv_ids())
+    docs = []
     for cat in cats:
+        if not category and cat in _NO_INDEX_CATEGORIES:
+            continue
         for note in notes_mgr.get_notes(cat):
-            text = (note.get("title", "") + " " + note.get("content", "")).lower()
-            score = sum(1 for k in keywords if k in text)
-            if score > 0:
-                kw_results.append({"category": cat, "title": note["title"],
-                                   "open": _note_open_call(cat, note["title"]),
-                                   "content": note.get("content", "")[:500],
-                                   "id": note["id"], "score": score, "source": "keyword"})
-    kw_results.sort(key=lambda x: x["score"], reverse=True)
-    return {"results": kw_results[:10]}
+            text = note.get("content", "") or ""
+            if cat == WORKING_MEMORY:
+                if not (ids_now and (_wm_sessions_of(note) or set()) & ids_now):
+                    continue
+                text = _wm_text(note)
+            docs.append({"category": cat, "title": note.get("title", ""),
+                         "id": note.get("id", ""), "text": text})
+    found = find_passages(sl, docs, context=1, k=60)
+    rows = {}
+    for p_ in found["passages"]:
+        d = p_["doc"]
+        r = rows.get(id(d))
+        if r is None:
+            r = rows[id(d)] = {"doc": d, "covers": set(), "best": 0.0, "passages": []}
+        r["covers"] |= set(p_["matched"])
+        r["best"] = max(r["best"], p_["score"])
+        if len(r["passages"]) < 2:
+            r["passages"].append({"lines": f"{p_['from']}-{p_['to']}",
+                                  "matched": p_["matched"], "text": p_["text"][:900]})
+    _q = list(dict.fromkeys(_nw(sl)))
+    for d in docs:
+        _tw = _nw(d["title"])
+        _title_hits = {w for w in _q if any(_same_word(w, x) for x in _tw)}
+        if not _title_hits:
+            continue
+        r = rows.get(id(d))
+        if r is None:
+            r = rows[id(d)] = {"doc": d, "covers": set(), "best": 0.0, "passages": []}
+        r["covers"] |= _title_hits
+    out = []
+    for r in rows.values():
+        d = r["doc"]
+        out.append({"category": d["category"], "title": d["title"],
+                    "open": _note_open_call(d["category"], d["title"]),
+                    "content": (r["passages"][0]["text"] if r["passages"]
+                                else d["text"][:500]),
+                    "passages": r["passages"],
+                    "id": d["id"], "matched": sorted(r["covers"]),
+                    "score": round(len(r["covers"]) + r["best"], 3),
+                    "source": "words"})
+    out.sort(key=lambda x: x["score"], reverse=True)
+    return {"results": out[:10]}
 
 
 def _skill_payload(note, cat):
@@ -5779,13 +5831,16 @@ async def _browse_async(task, start_url, headless, max_steps, endpoint=None):
         dont_force_structured_output=_browse_force_schema() is False,
         add_schema_to_system_prompt=_browse_force_schema() is False,
         temperature=0.1,
+        frequency_penalty=None,
+        max_completion_tokens=_llm_max_tokens(),
     )
     try:
         llm = BUChatOpenAI(**_llm_kwargs)
     except TypeError as e:
         print(f"[BROWSE] ⚠ ChatOpenAI kwargs unsupported ({e}) → retrying lean",
               file=sys.stderr)
-        for k in ("dont_force_structured_output", "add_schema_to_system_prompt"):
+        for k in ("dont_force_structured_output", "add_schema_to_system_prompt",
+                  "frequency_penalty", "max_completion_tokens"):
             _llm_kwargs.pop(k, None)
         llm = BUChatOpenAI(**_llm_kwargs)
 
@@ -5801,12 +5856,19 @@ async def _browse_async(task, start_url, headless, max_steps, endpoint=None):
         "wait_between_actions": CONFIG.getfloat("BROWSER", "wait_between_actions", fallback=1.2),
         "wait_for_network_idle_page_load_time": CONFIG.getfloat("BROWSER", "wait_network_idle", fallback=3.0),
         "cookies_file": cookies_path,
+        "args": ["--password-store=basic"],
     }
-    try:
-        browser_session = BrowserSession(**session_kwargs)
-    except TypeError:
-        browser_session = BrowserSession(headless=headless,
-                                         viewport=session_kwargs["viewport"])
+    browser_session = None
+    while browser_session is None:
+        try:
+            browser_session = BrowserSession(**session_kwargs)
+        except TypeError as e:
+            _bad = re.search(r"unexpected keyword argument '(\w+)'", str(e))
+            if not _bad or _bad.group(1) not in session_kwargs:
+                raise
+            print(f"[BROWSE] ⚠ this browser-use does not take "
+                  f"'{_bad.group(1)}': launched without it", file=sys.stderr)
+            session_kwargs.pop(_bad.group(1))
 
     sensitive_data = {}
     _mention_only = []
@@ -5956,12 +6018,30 @@ async def _browse_async(task, start_url, headless, max_steps, endpoint=None):
     emoji = "✅" if is_success else ("⚠" if final else "❌")
     print(f"[BROWSE] {emoji} success={is_success} steps={n_steps}/{max_steps}: {final[:120]}")
 
-    return {
-        "result": final or "Navigation completed with no extracted result",
+    out = {
+        "result": final or "The browser run ended without a result",
         "success": bool(is_success),
         "steps_used": n_steps,
         "max_steps": max_steps,
     }
+    if not is_success:
+        errs = []
+        try:
+            for e in history.errors():
+                e = " ".join(str(e or "").split())[:200]
+                if e and e not in errs:
+                    errs.append(e)
+        except Exception:
+            pass
+        try:
+            last_url = next((u for u in reversed(history.urls()) if u), "")
+        except Exception:
+            last_url = ""
+        if errs:
+            out["errors"] = errs[-4:]
+        if last_url:
+            out["last_url"] = last_url
+    return out
 
 
 def _cred_boards(site, task_low):
@@ -8859,7 +8939,7 @@ def register_tools():
                                                                  "must, or move on."})},
         "edit_fact":              {"desc": "EDIT/correct a saved fact, by its id. Use it when the user wants to correct a badly saved fact. If you don't know the id, first search_facts to find it. You can change 'text' and/or 'tags'.",
                                    "fn": lambda a: {"updated": _update_fact(a["id"], a.get("text"), a.get("tags")) is not None}},
-        "search_notes":           {"desc": "Search the user's technical notes and documentation (config, commands, code) ONLY. Does NOT contain facts, tasks or appointments — to cover every store at once use recall.",
+        "search_notes":           {"desc": "Search the user's technical notes and documentation (config, commands, code) ONLY. Each hit is the PASSAGE where the words are, with a paragraph either side and its lines for read_note — not the note's top. Does NOT contain facts, tasks or appointments — to cover every store at once use recall.",
                                    "fn": lambda a: _with_scope(
                                        tool_search_notes(a["search_term"], a.get("category")),
                                        "results", "notes")},
@@ -9132,6 +9212,8 @@ def register_tools():
                                    "fn": lambda a: tool_project_journal(a["path"], a["entry"], a.get("title", ""))},
         "project_write":          {"desc": "Write one of the open project's notes: 'spec' (a settled truth, SHORT — one annotation, one breath), 'future' (something pending, one line per item) or 'journal' (what happened, dated). Appends; replace=true rewrites the note whole, which is how a grown spec is kept short. These three plus the user's 'rules' are the project's whole memory: add_note refuses any other title in a project folder.",
                                    "fn": lambda a: tool_project_write(a.get("path", ""), a.get("note", ""), a.get("text", ""), bool(a.get("replace", False)))},
+        "search_working_memory":  {"desc": "Search INSIDE the full texts of the large results digested in this conversation (its working memory): the digest you got is an extract, the original is here whole. Words, a name, a figure — whatever you think of — and it returns the passages that mention it with the paragraphs around them and their lines; regex=true is grep. Use it before re-calling a tool for something an earlier result may already hold.",
+                                   "fn": lambda a: tool_search_working_memory(a.get("query", ""), a.get("title", ""), bool(a.get("regex")), a.get("context", 1), a.get("k", 5))},
         "read_note":              {"desc": "One note, by title (forgiving: exact, then unique substring) or id — whole when it fits, else BY LINES like code_read_range: the first window plus 'next', the exact call for the following lines. search_notes previews 500 chars; this is the text itself. A miss answers with the titles that DO exist.",
                                    "fn": lambda a: tool_read_note(a["category"], a.get("title", ""), a.get("note_id", ""), a.get("start_line"), a.get("end_line"))},
         "code_lint":              {"desc": "Real diagnostics: type errors (pyright), unused imports (ruff), static analysis.",
@@ -9578,6 +9660,7 @@ def register_tool_params():
                                                   "title": {"type": "string", "description": "Short header for the entry; default is its first line."}},
                                    "required": ["path", "entry"]},
         "project_write":          {"properties": {"path": {"type": "string", "description": "The open project's directory (or its folder name)."}, "note": {"type": "string", "enum": ["spec", "future", "journal"]}, "text": {"type": "string", "description": "spec: one short truth (≤600 chars). future: one line per pending item. journal: the entry."}, "replace": {"type": "boolean", "description": "Rewrite the whole note instead of appending (default false)."}}, "required": ["path", "note", "text"]},
+        "search_working_memory":  {"properties": {"query": {"type": "string", "description": "Words to look for (ranked by how many of the rarer ones a passage covers), or a pattern with regex=true."}, "title": {"type": "string", "description": "One stored text (its title, or part of it); empty searches all of this conversation's."}, "regex": {"type": "boolean"}, "context": {"type": "integer", "description": "Paragraphs before and after each hit (0-5, default 1)."}, "k": {"type": "integer", "description": "How many passages (default 5)."}}, "required": ["query"]},
         "read_note":              {"properties": {"category": {"type": "string", "description": "The notes folder."},
                                                   "title": {"type": "string", "description": "The note's title (exact or unique substring)."},
                                                   "note_id": {"type": "string", "description": "Exact id, when you have it (wins over title)."},
@@ -10845,7 +10928,43 @@ def spawn_enroll(req: SpawnEnrollReq):
             req.server_url, req.token, req.handle)
     except Exception as e:
         return {"error": f"Enrollment failed: {e}"}
+    if result.get("kit_applied"):
+        reload_config_endpoint()
     return result
+
+
+def _enroll_from_env():
+    tok = os.environ.get("HOPLITA_SPAWN_TOKEN") or ""
+    if tok:
+        _scrub_startup_env("HOPLITA_SPAWN_TOKEN")
+    os.environ.pop("HOPLITA_SPAWN_TOKEN", None)
+    server = os.environ.pop("HOPLITA_SPAWN_SERVER", "")
+    handle = os.environ.pop("HOPLITA_SPAWN_HANDLE", "")
+    if not tok:
+        return
+    import fed_tools
+    if fed_tools._store().has_identity():
+        print("[SPAWN] already enrolled; the token is not needed again")
+        return
+    if not (server and handle):
+        print("[SPAWN] ⚠ HOPLITA_SPAWN_TOKEN needs HOPLITA_SPAWN_SERVER and "
+              "HOPLITA_SPAWN_HANDLE", file=sys.stderr)
+        return
+
+    def _go():
+        for n in range(12):
+            r = fed_tools.tool_fed_enroll_child(server, tok, handle) or {}
+            if r.get("ok"):
+                print(f"[SPAWN] ✓ {r.get('message')}")
+                if r.get("kit_applied"):
+                    reload_config_endpoint()
+                return
+            err = str(r.get("error") or "")
+            print(f"[SPAWN] ⚠ {err}", file=sys.stderr)
+            if "offline" not in err.lower() and "connect" not in err.lower():
+                return
+            time.sleep(10)
+    threading.Thread(target=_go, daemon=True, name="spawn_enroll").start()
 
 
 @app.get("/agent/pending-approvals")
@@ -11055,7 +11174,8 @@ def _save_tool_uses():
 
 
 _ALWAYS_HOT = ("add_fact", "edit_fact", "delete_fact",
-               "plan_and_orchestrate", "call_council")
+               "plan_and_orchestrate", "call_council",
+               "search_working_memory")
 
 
 _STARTER_HOT = ("run_command", "read_file", "list_dir", "search_web",
@@ -11133,7 +11253,7 @@ _SHELF_KEEP_DESC = {
     "browse_web", "scrape_url", "call_api", "screenshot_web",
     "render_html", "canvas_eval", "canvas_see", "dashboard_render",
     "pdf", "pdf_info", "generate_pdf", "alert", "office", "office_info",
-    "propose_memory_change", "working_memory_forget",
+    "propose_memory_change", "working_memory_forget", "search_working_memory",
     "project_journal", "project_write", "get_agentic_config",
     "cron_set_context", "set_cron_context", "fed_ask_agent", "fed_share",
     "fill_credentials", "get_otp",
@@ -11610,6 +11730,65 @@ def _wm_sessions_of(note):
 def _wm_body(note):
     c = (note.get("content") or "")
     return c.split("\n", 1)[1] if c.startswith(_WM_TAG) and "\n" in c else c
+
+
+def _wm_text(note):
+    c = note.get("content") or ""
+    return ("\n" + c.split("\n", 1)[1]) if c.startswith(_WM_TAG) and "\n" in c else c
+
+
+def _passage_rows(found, category_of):
+    return [{"category": category_of(p_["doc"]), "title": p_["doc"]["title"],
+             "lines": f"{p_['from']}-{p_['to']}", "matched": p_["matched"],
+             "text": p_["text"]} for p_ in found["passages"]]
+
+
+def tool_search_working_memory(query, title="", regex=False, context=1, k=5):
+    if notes_mgr is None:
+        return {"error": "notes store not ready"}
+    if not (query or "").strip():
+        return {"error": "query is empty: say what to look for (words, a "
+                         "name, a figure; or a pattern with regex=true)"}
+    try:
+        context = max(0, min(5, int(context)))
+    except Exception:
+        context = 1
+    try:
+        k = max(1, min(20, int(k)))
+    except Exception:
+        k = 5
+    ids_now = set(_turn_conv_ids())
+    notes = [n_ for n_ in (notes_mgr.get_notes(WORKING_MEMORY) or [])
+             if ids_now and (_wm_sessions_of(n_) or set()) & ids_now]
+    if title:
+        _want = title.strip().lower()
+        exact = [n_ for n_ in notes if (n_.get("title") or "").strip().lower() == _want]
+        notes = exact or [n_ for n_ in notes
+                          if _want in (n_.get("title") or "").strip().lower()]
+    if not notes:
+        return {"results": [], "count": 0,
+                "note": ("no full text by that title in this conversation's "
+                         "working memory" if title else
+                         "this conversation's working memory is empty: no "
+                         "large result was digested here")}
+    from hoplita_search import find_passages
+    found = find_passages(query, [{"title": n_.get("title", ""), "text": _wm_text(n_)}
+                                  for n_ in notes],
+                          regex=bool(regex), context=context, k=k,
+                          budget=_note_window_chars() - 400)
+    out = [{k_: v for k_, v in r_.items() if k_ != "category"}
+           for r_ in _passage_rows(found, lambda d: WORKING_MEMORY)]
+    if not out:
+        return {"results": [], "count": 0,
+                "note": "nothing matches in the stored text"
+                        + (" (try other words, or regex=true for a pattern)"
+                           if not regex else " (try words without regex)")}
+    return {"results": out, "count": len(out),
+            **({"more": f"{found['total'] - len(out)} more passage(s): narrow "
+                        f"the query, context=0, or title= one text"}
+               if found["total"] > len(out) else {}),
+            "read_more": "read_note(category='working-memory', title=<title>, "
+                         "start_line, end_line) around a passage's lines"}
 
 
 def wm_forget(session_uuid, orphans=False):
@@ -12344,8 +12523,7 @@ def prepare_turn_messages(messages, pinned_skills=None, emit=None,
     except Exception:
         _spills = []
     if _spills:
-        _sp_lines = [f"  • {_note_open_call(WORKING_MEMORY, n_.get('title', '?'))}"
-                     f" — {len(_wm_body(n_))} chars"
+        _sp_lines = [f"  • '{n_.get('title', '?')}' — {len(_wm_body(n_))} chars"
                      for n_ in _spills[-8:][::-1]]
         _sp_block = _tr("inject.spill_index") + "\n" + "\n".join(_sp_lines)
         out = _inject_block(out, _sp_block, stable=False)
@@ -13261,12 +13439,39 @@ def tool_call_council(topic, members=None, first="", context=""):
     res = _run_council(topic, members, first, context)
     if res.get("error"):
         return res
-    return {"council": True, "placet": bool(res.get("placet")),
+    return {"_verbatim": _council_verdict_line(res),
+            "council": True, "placet": bool(res.get("placet")),
             "members": res.get("members") or [], "first": res.get("first", ""),
             "rounds": len(res.get("rounds") or []),
             "dissent": res.get("dissent") or [],
             "deliberation": hoplita_council.render_record(res),
             "result": hoplita_council.format_result(res)}
+
+
+def _council_verdict_line(res):
+    members = list(res.get("members") or [])
+    first = res.get("first", "")
+    rounds = res.get("rounds") or []
+    others = [m for m in members if m != first]
+    parts = [f"COUNCIL FACTS (exact; report these, do not recount): "
+             f"{len(members)} seats: {', '.join(members)}. "
+             f"{first} answered and reformulated; "
+             f"{', '.join(others) or 'nobody'} examined and voted."]
+    if rounds:
+        last = rounds[-1]
+        votes = ", ".join(f"{v.get('member', '?')} "
+                          f"{v.get('verdict') or 'unreadable'}"
+                          for v in last.get("votes") or [])
+        parts.append(f"Round {last.get('n', len(rounds))} of {len(rounds)}, "
+                     f"votes: {votes or 'none'}.")
+    if res.get("cancelled"):
+        parts.append("The council was stopped before it finished.")
+    elif rounds:
+        parts.append("Unanimous placet." if res.get("placet") else
+                     "No unanimous placet: " + ", ".join(
+                         d.get("member", "?") for d in res.get("dissent") or [])
+                     + " did not agree.")
+    return " ".join(parts)
 
 
 def _strip_think(text):
@@ -14893,6 +15098,18 @@ def _get_vault_password(note=""):
     if env_pwd:
         print("🔐 " + _t("mcp.password_from_env"))
         return env_pwd
+    kp = os.path.join(hoplita_base(), "vault.key")
+    if (os.environ.get("HOPLITA_VAULT") == "open" or os.path.exists(kp)
+            or (os.environ.get("HOPLITA_SPAWN_TOKEN")
+                and not os.path.exists(os.path.join(hoplita_base(), "hoplita.db")))):
+        if not os.path.exists(kp):
+            import secrets as _secrets
+            fd = os.open(kp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(_secrets.token_urlsafe(32))
+        print("🔓 " + _t("mcp.vault_open", path=kp))
+        with open(kp, encoding="utf-8") as fh:
+            return fh.read().strip()
     force_gui = os.environ.get("HOPLITA_GUI_PROMPT") == "1"
     _new = not os.path.exists(os.path.join(hoplita_base(), "hoplita.db"))
     _joins = _new and os.path.exists(os.path.join(hoplita_base(), "fed_identity.json.encrypted"))
@@ -15103,8 +15320,9 @@ if __name__ == "__main__":
             print(f"     Linux/Mac:  fuser -k {args.port}/tcp")
         sys.exit(1)
 
+    from hoplita_paths import hoplita_base as _hb
+    os.makedirs(_hb(), exist_ok=True)
     try:
-        from hoplita_paths import hoplita_base as _hb
         os.remove(os.path.join(_hb(), "hoplita-mcp.gaveup"))
     except OSError:
         pass
@@ -15133,6 +15351,7 @@ if __name__ == "__main__":
         _ensure_venv_in_path()
         _load_external_mcps()
         register_manager_map()
+        _enroll_from_env()
         threading.Thread(target=backfill_message_log, daemon=True).start()
 
         try:

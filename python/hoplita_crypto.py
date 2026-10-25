@@ -67,6 +67,26 @@ def unbox(my_priv_b64, sender_pub_b64, blob_b64):
 
 
 
+def _kit_key(raw_token):
+    import hashlib
+    return hashlib.blake2b(raw_token.encode("utf-8"), digest_size=32,
+                           person=b"hoplita-kit-v1").digest()
+
+
+def seal_kit(raw_token, kit):
+    from nacl.secret import SecretBox
+    box = SecretBox(_kit_key(raw_token))
+    ct = box.encrypt(json.dumps(kit, sort_keys=True).encode("utf-8"))
+    return base64.b64encode(bytes(ct)).decode("ascii")
+
+
+def open_kit(raw_token, blob_b64):
+    from nacl.secret import SecretBox
+    box = SecretBox(_kit_key(raw_token))
+    return json.loads(box.decrypt(base64.b64decode(blob_b64)).decode("utf-8"))
+
+
+
 def fingerprint(pub_b64):
     import hashlib
     raw = base64.b64decode(pub_b64)

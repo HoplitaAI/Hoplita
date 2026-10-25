@@ -198,6 +198,11 @@ def _range_hint(name):
     if "start_line" in props:
         return (f"re-call {name} with the same arguments plus start_line and "
                 f"end_line for the lines you need")
+    if name == "run_command":
+        return ("run it again filtered to the part you need (sed -n 'A,Bp', "
+                "tail, grep), unless running it twice is not safe")
+    if name.startswith("git_"):
+        return f"re-call {name} with narrower arguments (a path, a range)"
     return ("code_read_range(path, start_line, end_line) for the lines you "
             "need, or re-call with narrower arguments")
 
@@ -238,6 +243,17 @@ def _digest_chunks(text, size):
         out.append(text[i:end])
         i = end
     return out
+
+
+def _take_verbatim(result):
+    if '"_verbatim"' not in result:
+        return ""
+    try:
+        v = json.loads(result).get("_verbatim")
+    except Exception:
+        return ""
+    v = str(v or "").strip()
+    return (v[:1200] + "\n\n") if v else ""
 
 
 def _digest_result(name, args, result, messages, chat):
@@ -2130,6 +2146,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                     pass
             if len(result) > _RESULT_CAP:
                 _full_len = len(result)
+                _verbatim = _take_verbatim(result)
                 _dig = ("" if name in _LINE_ORIENTED_TOOLS
                         else _digest_result(name, args, result, messages,
                                             _side_chat or chat))
@@ -2149,14 +2166,17 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                     emit({"event": "tool_progress", "key": "digest.applied",
                           "args": {"tool": name, "total": str(_full_len),
                                    "by": _by or "?"}})
-                    result = (_dig
+                    result = (_verbatim + _dig
                               + f"\n[DIGEST of a {_full_len}-char result."
-                              + (f" FULL text kept — read it WHOLE with: "
-                                 f"{_loc}. search_notes also finds it."
-                                 if _loc else "")
-                              + " Data above was extracted, not invented; "
-                                "if something you need is missing, fetch "
-                                "the full text or re-call the tool.]")
+                              + " Data above was extracted, not invented."
+                              + (f" The FULL text is kept and searchable: "
+                                 f"{_loc}. Something not in this extract may "
+                                 f"well be in the original: search it before "
+                                 f"re-calling the tool, which would return "
+                                 f"the same text." if _loc else
+                                 " If something you need is missing, re-call "
+                                 "the tool, narrower.")
+                              + "]")
                 else:
                     _kept = result[:_RESULT_CAP]
                     _nl = _kept.rfind("\n")
@@ -2173,13 +2193,13 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                     emit({"event": "tool_progress", "key": "digest.cut",
                           "args": {"tool": name, "total": str(_full_len),
                                    "shown": str(_shown), "lines": str(_total)}})
-                    result = (_kept
+                    result = (_verbatim + _kept
                               + f"\n...[CUT: lines 1-{_shown} of {_total} "
                                 f"({len(_kept)} of {_full_len} chars). The "
                                 f"rest EXISTS and is not here."
-                              + (f" FULL text kept — read it WHOLE with: "
+                              + (f" FULL text kept and searchable: "
                                  f"{_loc}." if _loc else "")
-                              + f" To get it: {_range_hint(name)}. "
+                              + f" Or: {_range_hint(name)}. "
                                 "Never fill it in from memory.]")
             dur = round(time.time() - t0, 2)
             _firma = f"{name}:{json.dumps(args, sort_keys=True, default=str)[:600]}"
