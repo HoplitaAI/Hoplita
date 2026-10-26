@@ -510,8 +510,13 @@ There are two kinds of child. The guide explains the difference
 **Create it:**
 
 1. **Contacts** → **+ 🧒 Local child**.
-2. Type a plain name, without `@`, for example `MarketingManager`.
-3. The pack editor opens right away.
+2. Say **what it is for**: what it knows, what it does, what it delivers,
+   which of your notes or projects it works with. The name is optional (no
+   `@`); without one, the model picks it.
+3. **Create**. The model writes its pack: the role, the capabilities it needs,
+   and the folders, projects and pool model it works with, chosen only from
+   the ones that exist.
+4. The pack editor opens with what it wrote, to adjust.
 
 Chat equivalent: «create a local child called MarketingManager» (`child_create`).
 
@@ -557,7 +562,7 @@ server. It boots from a token with nothing typed into it. In a container, see
 
 **On your machine: create the token.**
 
-- **Contacts** → **+ 🐳 Child in a container** → **Token and command only**, or
+- **Contacts** → **+ 👶 Emancipated child** → **Token and commands**, or
 - chat: «create a child called kitchen-pc that thinks with my base model»
   (`fed_spawn_child`).
 
@@ -705,7 +710,7 @@ media work with ffmpeg, «download that tool and figure it out». What it runs,
 installs or breaks stays inside the container. It reaches nothing of yours
 except what you send it.
 
-**Create it.** **Contacts** → **+ 🐳 Child in a container**:
+**Create it.** **Contacts** → **+ 👶 Emancipated child**:
 
 1. **Name**, for example `video`. Its handle on the server is your handle plus
    the name (`alice-video`).
@@ -716,11 +721,12 @@ except what you send it.
 3. **Hand over my web search too**: optional. It needs a `[SEARCH]` provider
    with an `api_key` on this machine.
 4. Pick one:
-   - **Create and start here** builds the `hoplita-child` image if this machine
-     lacks it, then starts the container. The first build takes a few minutes.
-   - **Token and command only** gives you the command to run yourself, here or
-     on another Linux machine with docker or podman, or without a container
-     on any machine with HOPLITA installed (below).
+   - **Start here, in a container** builds the `hoplita-child`
+     image if this machine lacks it, then starts the container. The first
+     build takes a few minutes.
+   - **Token and commands** gives you the commands to run yourself: one for a
+     container, here or on another Linux machine with docker or podman, and
+     one for any machine with HOPLITA installed (7b).
 
 From the chat: «create a container child called video and start it»
 (`fed_spawn_child` with `launch`).

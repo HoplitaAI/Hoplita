@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QLineEdit, QComboBox, QDialog, QGroupBox,
     QMessageBox, QMenu, QDialogButtonBox, QStyledItemDelegate, QStyle,
-    QTabWidget, QTextEdit, QCheckBox, QScrollArea, QInputDialog,
+    QTabWidget, QTextEdit, QPlainTextEdit, QCheckBox, QScrollArea,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QRect, QPointF, QTimer
 from PyQt6.QtGui import (
@@ -31,6 +31,22 @@ class _McpWorker(QThread):
                 self.done.emit({"error": raw})
             else:
                 self.done.emit(json.loads(raw) if isinstance(raw, str) else raw)
+        except Exception as e:
+            self.done.emit({"error": str(e)})
+
+
+class _PostWorker(QThread):
+    done = pyqtSignal(object)
+
+    def __init__(self, url, body, timeout):
+        super().__init__()
+        self.url, self.body, self.timeout = url, body, timeout
+
+    def run(self):
+        try:
+            import requests as _rq
+            r = _rq.post(self.url, json=self.body, timeout=self.timeout)
+            self.done.emit(r.json())
         except Exception as e:
             self.done.emit({"error": str(e)})
 
@@ -406,6 +422,47 @@ class _AddContactDialog(QDialog):
         return self.handle.text().strip(), self.trust.currentText()
 
 
+class _LocalChildDialog(QDialog):
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle(t("child.add_title"))
+        self.setMinimumWidth(520)
+        self.setStyleSheet("QDialog { background:#1e293b; } QLabel { color:#e2e8f0; } "
+                           "QLineEdit, QPlainTextEdit { background:#0f172a; "
+                           "color:#e2e8f0; border:1px solid #334155; "
+                           "border-radius:6px; padding:7px; }")
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+        intro = QLabel(t("child.add_intro"))
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        lay.addWidget(QLabel(t("child.add_desc")))
+        self.desc = QPlainTextEdit()
+        self.desc.setPlaceholderText(t("child.add_desc_hint"))
+        self.desc.setMinimumHeight(140)
+        lay.addWidget(self.desc)
+        lay.addWidget(QLabel(t("child.add_name_opt")))
+        self.name = QLineEdit()
+        lay.addWidget(self.name)
+        bb = QDialogButtonBox()
+        ok = bb.addButton(t("child.add_create"), QDialogButtonBox.ButtonRole.AcceptRole)
+        bb.addButton(QDialogButtonBox.StandardButton.Cancel)
+        ok.clicked.connect(self._done)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def _done(self):
+        if not self.desc.toPlainText().strip():
+            self.desc.setFocus()
+            return
+        self.accept()
+
+    def values(self):
+        return {"description": self.desc.toPlainText().strip(),
+                "name": self.name.text().strip()}
+
+
 class _BoxChildDialog(QDialog):
 
     _FIELD = ("QLineEdit, QComboBox { background:#0f172a; color:#e2e8f0; "
@@ -414,7 +471,7 @@ class _BoxChildDialog(QDialog):
     def __init__(self, parent, models):
         super().__init__(parent)
         self.setWindowTitle(t("child.box_title"))
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(560)
         self.setStyleSheet("QDialog { background:#1e293b; } "
                            "QLabel, QCheckBox { color:#e2e8f0; } " + self._FIELD)
         lay = QVBoxLayout(self)
@@ -628,6 +685,12 @@ class _ContactDelegate(QStyledItemDelegate):
 class FederationWidget(QWidget):
     open_session_requested = pyqtSignal(str)
 
+    @property
+    def _mcp_url(self):
+        win = self.window()
+        url = getattr(win, "_mcp_url", None) if win is not self else None
+        return url or "http://127.0.0.1:9077"
+
     def __init__(self, mcp_call, models_fn=None):
         super().__init__()
         self._mcp_call = mcp_call
@@ -699,7 +762,7 @@ class FederationWidget(QWidget):
         add_child_btn.setStyleSheet(self._btn_css())
         add_child_btn.clicked.connect(self._on_add_child)
         bar.addWidget(add_child_btn)
-        box_child_btn = QPushButton("+ 🐳 " + t("child.box_add"))
+        box_child_btn = QPushButton("+ 👶 " + t("child.box_add"))
         box_child_btn.setStyleSheet(self._btn_css())
         box_child_btn.clicked.connect(self._on_add_box_child)
         bar.addWidget(box_child_btn)
@@ -1091,16 +1154,25 @@ class FederationWidget(QWidget):
         self._run("fed_public_folders", {"handle": handle}, done)
 
     def _on_add_child(self):
-        name, okp = QInputDialog.getText(self, t("child.add"), t("child.add_name"))
-        name = (name or "").strip()
-        if not okp or not name:
+        dlg = _LocalChildDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        res = self._sync("child_create", {"name": name}) or {}
-        if res.get("error"):
-            QMessageBox.warning(self, t("child.add"), res["error"])
+        QMessageBox.information(self, t("child.add_title"),
+                                t("child.add_designing"))
+        w = _PostWorker(f"{self._mcp_url}/child/design", dlg.values(), 300)
+        w.done.connect(self._on_child_designed)
+        w.done.connect(lambda *_: self._workers.remove(w) if w in self._workers else None)
+        self._workers.append(w)
+        w.start()
+
+    def _on_child_designed(self, data):
+        data = data if isinstance(data, dict) else {}
+        if data.get("error") or not data.get("child"):
+            QMessageBox.warning(self, t("child.add_title"),
+                                data.get("error") or json.dumps(data)[:400])
             return
         self.refresh()
-        self.edit_local_child({"handle": name, "local": True})
+        self.edit_local_child({"handle": data["child"]["name"], "local": True})
 
     def _on_add_box_child(self):
         dlg = _BoxChildDialog(self, self._pool_models())

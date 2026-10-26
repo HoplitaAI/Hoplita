@@ -14509,6 +14509,80 @@ def child_tools_for(req: ChildToolsForReq):
         return {"tools": [], "error": str(e)}
 
 
+class ChildDesignReq(BaseModel):
+    description: str
+    name: str = ""
+
+
+_CHILD_DESIGN_SYSTEM = (
+    "You design a LOCAL child of this user: a specialised sub-agent that runs "
+    "on their machine, defined by a pack. From the user's description, write "
+    "the pack as ONE JSON object with these keys:\n"
+    "  name: short, letters/digits/space/._- only, max 48, no '@' (keep the "
+    "user's name if they gave one);\n"
+    "  avatar: one emoji;\n"
+    "  role: the prompt it lives by, in the second person, in the language of "
+    "the description: what it is, what it knows, how it works, what it "
+    "delivers and what it refuses. Concrete, a few paragraphs, no filler;\n"
+    "  capabilities: the fewest of the given capabilities its work needs;\n"
+    "  notes_folders: only folders from the given list that its work touches, "
+    "or [] (an empty list means it sees every folder);\n"
+    "  projects: only projects from the given list it should take care of, or [];\n"
+    "  model: a pool alias from the given list only if the description asks "
+    "for one, else \"\".\n"
+    "Never invent a folder, project, capability or model that is not listed. "
+    "Answer with the JSON object only.")
+
+
+@app.post("/child/design")
+def child_design(req: ChildDesignReq):
+    desc = (req.description or "").strip()
+    if not desc:
+        return {"error": "Say what the child is for."}
+    if req.name.strip() and hoplita_children.find(req.name.strip()) is not None:
+        return {"error": f"You already have a child called '{req.name.strip()}'."}
+
+    def _listed(tool, key):
+        try:
+            r = TOOLS[tool]["fn"]({}) or {}
+            return [str(x) for x in (r.get(key) or []) if x]
+        except Exception:
+            return []
+    folders = _listed("list_categories", "categories")
+    projects = _listed("list_todo_projects", "projects")
+    models = sorted(_model_pool())
+    caps = sorted(hoplita_children.CAPABILITY_TOOLS)
+    prompt = (f"Description: {desc}\n"
+              + (f"Name the user chose: {req.name.strip()}\n" if req.name.strip() else "")
+              + f"Capabilities: {', '.join(caps)}\n"
+              f"Note folders: {', '.join(folders) or '(none)'}\n"
+              f"Projects: {', '.join(projects) or '(none)'}\n"
+              f"Pool models: {', '.join(models) or '(none)'}")
+    pack = _llm_call_json(prompt, system=_CHILD_DESIGN_SYSTEM, timeout=240,
+                          breaker=False, _who="CHILD-DESIGN")
+    if not isinstance(pack, dict) or not str(pack.get("role") or "").strip():
+        return {"error": "The model did not write a pack for that description; "
+                         "try again, or describe it differently."}
+
+    def _keep(v, allowed):
+        v = v if isinstance(v, list) else []
+        return [x for x in (str(i).strip() for i in v) if x in allowed]
+    name = req.name.strip() or str(pack.get("name") or "").strip()
+    if not req.name.strip():
+        base, n = name, 2
+        while name and hoplita_children.find(name) is not None:
+            name, n = f"{base[:44]} {n}", n + 1
+    model = str(pack.get("model") or "").strip()
+    return hoplita_children.tool_child_create({
+        "name": name,
+        "role": str(pack.get("role")).strip(),
+        "avatar": str(pack.get("avatar") or "").strip()[:4],
+        "capabilities": _keep(pack.get("capabilities"), caps),
+        "notes_folders": _keep(pack.get("notes_folders"), folders),
+        "projects": _keep(pack.get("projects"), projects),
+        "model": model if model in models else ""})
+
+
 class AgentStopReq(BaseModel):
     turn_id: str
 
