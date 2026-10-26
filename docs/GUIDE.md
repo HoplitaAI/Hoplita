@@ -815,6 +815,36 @@ with the historical output below the live one.
 - A cron does **not** inherit the `/verify` or `/goal` of your chat tabs: the job's
   instruction is its own contract.
 
+## Workers — a job with a tab of its own
+
+Tick **Its own tab** on a cron job (or ask for it: «watch my inbox every ten
+minutes, in its own tab») and the job becomes a worker:
+
+- every run is a turn of **its** tab, named after the job and marked ⏰, so its
+  work reads as one conversation instead of lines in an execution log;
+- it runs **in parallel** with your other tabs and with other jobs, and it
+  never takes the view from the tab you are in;
+- you can **open it and talk to it** between runs, with everything it has
+  done in view; a run that comes while you are talking to it waits its turn;
+- each run is an ordinary turn, so it has what any tab has: tools, delegating
+  to other models, the council, children;
+- the tab is saved as it works; close it and the next run reopens the same
+  conversation. With **On start** it opens and gets to work when HOPLITA
+  starts.
+
+Jobs run while HOPLITA's window is open: the scheduler lives in it.
+
+## Tabs that show they are working, and ▦ the overview
+
+A tab with a turn running wears a turning ◐ before its title and its
+background breathes, so a tab you are not looking at still tells you it is
+busy; ⏸ in amber is a tab waiting for your OK.
+
+**▦** at the right of the strip (it reads `▦ 2/5` when two of five tabs are
+working) opens every tab on one page: its state and for how long, the job it
+works for and its next run, its goal, the step it is on and the last thing it
+said. A card opens its tab.
+
 ## Timeout doctrine — no total clocks
 
 A timeout measures **one action**, never a job. If an action overruns its time,

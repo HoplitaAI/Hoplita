@@ -417,6 +417,12 @@ class CronScheduler(QThread):
         tgt_label = "" if tgt == "local" else f" → {tgt}"
         self.signals.ensure_cron_tab.emit()
         _CT = "cron"
+        if job.get("own_tab") and tgt == "local":
+            self.signals.message_tab.emit(f"[CRON] {name} → ⏰ {name}", "system", _CT)
+            self.signals.run_job_tab.emit(dict(job))
+            self.cron_manager.log_execution(jid, "ok", "started in its tab")
+            self.signals.refresh_cron.emit()
+            return
         self.signals.message_tab.emit(f"[CRON] Running: {name}{tgt_label}", "system", _CT)
         try:
             result = self.execute_callback(job)
@@ -837,6 +843,7 @@ class WorkerSignals(QObject):
     task_state = pyqtSignal(str, bool)
     queue_changed = pyqtSignal(str)
     ensure_cron_tab = pyqtSignal()
+    run_job_tab = pyqtSignal(dict)
     sticky_changed = pyqtSignal(str)
     token_usage = pyqtSignal(str, int)
     token_first = pyqtSignal(str, int, int)
@@ -1614,6 +1621,10 @@ class ChatCtx:
         self.code_open_path = ""
         self.turn_steps = []
         self.session_uuid = None
+        self.job_id = ""
+        self.job_name = ""
+        self.job_alert = False
+        self.job_session = None
         self.task_running = False
         self.stop_requested = __import__("threading").Event()
         self.compacting = False
@@ -1745,6 +1756,7 @@ class ChatAssistantWindow(QMainWindow):
         self.signals.wb_open.connect(self._wb_show)
         self.signals.message_tab.connect(self._on_thread_message_tab)
         self.signals.ensure_cron_tab.connect(self._ensure_cron_tab)
+        self.signals.run_job_tab.connect(self._run_job_in_tab)
         self.signals.stream_token.connect(self._on_stream_token)
         self.signals.stream_done.connect(self._on_stream_done)
         self.signals.update_rag_status.connect(self._on_update_rag_status)
@@ -2510,6 +2522,7 @@ class ChatAssistantWindow(QMainWindow):
             self._enchant_t0.pop(tid, None)
             if tid == self._active_tab_id:
                 self._set_enchanting(self._busy_now())
+            self._tabs_working_check()
             _q = self._session_queue.get(tid) or []
             if _q and ev.get("event") == "reply":
                 nxt = _q.pop(0)
@@ -6009,6 +6022,14 @@ enabled = true
         _kl.setContentsMargins(0, 8, 0, 0)
         self._setup_council_page(_kl)
         self._council_page_idx = self._chat_stack.addWidget(_council_page)
+        from tabs_overview import TabsOverview
+        self.tabs_overview = TabsOverview()
+        self.tabs_overview.open_tab.connect(self._overview_open)
+        self._overview_page_idx = self._chat_stack.addWidget(self.tabs_overview)
+        self._ovw_timer = QTimer(self)
+        self._ovw_timer.setInterval(1000)
+        self._ovw_timer.timeout.connect(self._overview_tick)
+        self._ovw_jobs = {}
         parent_layout.addWidget(self._chat_stack, 1)
         self._render_chat_tabs()
         self._sticky_paint()
@@ -6042,6 +6063,48 @@ enabled = true
             except RuntimeError:
                 pass
 
+    _SPIN = "◐◓◑◒"
+    _WORK_TICK_MS = 150
+    _WORK_BREATH_S = 1.6
+
+    def _tab_working(self, tab_id):
+        c = self._chat_ctxs.get(tab_id)
+        return bool((c is not None and getattr(c, "task_running", False))
+                    or tab_id in getattr(self, "_session_waiting", ()))
+
+    def _tabs_working_check(self):
+        now = frozenset(x["id"] for x in self._chat_tabs
+                        if self._tab_working(x["id"]))
+        if now != getattr(self, "_working_seen", frozenset()):
+            self._render_chat_tabs()
+
+    def _start_work_pulse(self):
+        tmr = getattr(self, "_work_timer", None)
+        if tmr is None:
+            tmr = QTimer(self)
+            tmr.setInterval(self._WORK_TICK_MS)
+            tmr.timeout.connect(self._work_pulse_tick)
+            self._work_timer = tmr
+        if getattr(self, "_work_tabs", None):
+            if not tmr.isActive():
+                tmr.start()
+        elif tmr.isActive():
+            tmr.stop()
+
+    def _work_pulse_tick(self):
+        import math
+        self._spin_i = (getattr(self, "_spin_i", 0) + 1) % len(self._SPIN)
+        glyph = self._SPIN[self._spin_i] + " "
+        w = 0.5 - 0.5 * math.cos(2 * math.pi * time.time() / self._WORK_BREATH_S)
+        for frame, btn, col, act, rest in list(getattr(self, "_work_tabs", []) or []):
+            try:
+                if rest is not None:
+                    QPushButton.setText(btn, glyph + rest)
+                a = (0.12 + 0.20 * w) if act else (0.04 + 0.20 * w)
+                frame.setStyleSheet(self._chat_tab_css(col, act, self._hex_rgba(col, round(a, 3))))
+            except RuntimeError:
+                pass
+
     def _chat_tab_color(self, kind):
         return {"local": "#3b82f6", "green": "#22c55e", "red": "#ef4444",
                 "cron": "#f59e0b"}.get(kind, "#3b82f6")
@@ -6067,8 +6130,8 @@ enabled = true
                 f"#chatTab QPushButton#tabClose:hover {{ background:#3a1d24; color:#f87171; }} "
                 f"#chatTab QPushButton#tabReset:hover {{ background:#1b2744; color:#93c5fd; }}")
 
-    _TAB_RESERVED_W = 320
-    _TAB_MIN_W = 128
+    _TAB_RESERVED_W = 380
+    _TAB_MIN_W = 124
     _TAB_MAX_W = 300
     _TAB_CHROME_W = 34
 
@@ -6098,6 +6161,10 @@ enabled = true
     def _render_chat_tabs(self):
         _pinned_btns = []
         self._pin_buttons = _pinned_btns
+        _work_tabs = []
+        self._work_tabs = _work_tabs
+        self._working_seen = frozenset(
+            x["id"] for x in self._chat_tabs if self._tab_working(x["id"]))
         lay = self._chat_tab_layout
         lay.setSpacing(1)
         while lay.count():
@@ -6128,19 +6195,29 @@ enabled = true
             if _ended:
                 col = "#64748b"
                 _mark += " ⏹"
+            _job = getattr(_c, "job_name", "") if _c is not None else ""
+            if _job:
+                _mark = " ⏰" + _mark
+            working = (not waiting and not _ended
+                       and self._tab_working(tab["id"]))
             frame = QFrame()
             frame.setObjectName("chatTab")
             _fl = QHBoxLayout(frame)
             _fl.setContentsMargins(0, 0, 4, 0)
             _fl.setSpacing(0)
-            _label = ("⏸ " if waiting else "") + tab["title"] + _mark
-            btn = QPushButton(_fm.elidedText(_label, Qt.TextElideMode.ElideRight,
-                                             int(_title_w)))
+            _spin = self._SPIN[getattr(self, "_spin_i", 0) % len(self._SPIN)] + " "
+            _label = (("⏸ " if waiting else _spin if working else "")
+                      + tab["title"] + _mark)
+            _shown_label = _fm.elidedText(_label, Qt.TextElideMode.ElideRight,
+                                          int(_title_w))
+            btn = QPushButton(_shown_label)
             btn.setObjectName("tabTitle")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             _tips = [tab["title"]]
             if waiting:
                 _tips.append(t("plan.ack_waiting_tip"))
+            elif working:
+                _tips.append(t("chat.tab_working_tip"))
             elif _ended:
                 _tips.append(t("fed.session_ended_tip"))
             elif _pin:
@@ -6148,9 +6225,15 @@ enabled = true
                                id=_pin.get("id", "?")[:8]))
             if _nfw:
                 _tips.append(t("fwtab.tip", n=_nfw))
+            if _job:
+                _tips.append(t("job.tab_tip", name=_job))
             btn.setToolTip("\n".join(_tips))
             frame.setStyleSheet(self._chat_tab_css(col, active))
-            if _pin:
+            if working:
+                _work_tabs.append((frame, btn, col, active,
+                                   _shown_label[len(_spin):]
+                                   if _shown_label.startswith(_spin) else None))
+            elif _pin:
                 frame.setProperty("_pin_col", col)
                 frame.setProperty("_pin_active", active)
                 _pinned_btns.append(frame)
@@ -6208,6 +6291,23 @@ enabled = true
                 "QPushButton:hover { background:#334155; color:#e2e8f0; }")
             b.clicked.connect(slot)
             lay.addWidget(b)
+        if getattr(self, "_overview_page_idx", None) is not None:
+            ocol = "#93c5fd"
+            _n = len(self._chat_tabs)
+            _b = len(getattr(self, "_working_seen", ()) or ())
+            oon = self._chat_stack.currentIndex() == self._overview_page_idx
+            ob = QPushButton(f"▦ {_b}/{_n}" if _b else "▦")
+            ob.setCursor(Qt.CursorShape.PointingHandCursor)
+            ob.setToolTip(t("ovw.toggle_tip"))
+            ob.setStyleSheet(
+                (f"QPushButton {{ background:{self._hex_rgba(ocol, 0.18)}; color:{ocol}; "
+                 f"border:1px solid {ocol}; border-radius:8px; padding:5px 12px; "
+                 f"font-weight:700; }}") if oon else
+                (f"QPushButton {{ background:#1e293b; color:{ocol}; border:1px solid {ocol}; "
+                 f"border-radius:8px; padding:5px 12px; }} "
+                 f"QPushButton:hover {{ background:#334155; }}"))
+            ob.clicked.connect(self._toggle_overview)
+            lay.addWidget(ob)
         if getattr(self, "agents_panel", None) is not None:
             n = len(self._agents_cards_for_active())
             showing = (getattr(self, "_chat_stack", None) is not None
@@ -6272,6 +6372,7 @@ enabled = true
             kb.clicked.connect(self._toggle_council_view)
             lay.addWidget(kb)
         self._start_pin_pulse()
+        self._start_work_pulse()
 
     def _agents_cards_for_active(self):
         act = self._tab_by_id(self._active_tab_id) or {}
@@ -6581,6 +6682,115 @@ enabled = true
         else:
             self._code_view_placeholder(idx == getattr(self, "_code_page_idx",
                                                        None))
+
+    def _toggle_overview(self):
+        idx = getattr(self, "_overview_page_idx", None)
+        if getattr(self, "_chat_stack", None) is None or idx is None:
+            return
+        if self._chat_stack.currentIndex() == idx:
+            self._chat_stack.setCurrentIndex(0)
+            self._ovw_timer.stop()
+        else:
+            self._chat_stack.setCurrentIndex(idx)
+            self._ovw_fetch_jobs()
+            self._overview_tick()
+            self._ovw_timer.start()
+        self._render_chat_tabs()
+
+    def _overview_open(self, tab_id):
+        self._chat_stack.setCurrentIndex(0)
+        self._ovw_timer.stop()
+        if tab_id != self._active_tab_id:
+            self._switch_chat_tab(tab_id)
+        self._render_chat_tabs()
+
+    def _overview_tick(self):
+        if self._chat_stack.currentIndex() != getattr(self, "_overview_page_idx", -1):
+            self._ovw_timer.stop()
+            return
+        self._ovw_n = getattr(self, "_ovw_n", 0) + 1
+        if self._ovw_n % 15 == 0:
+            self._ovw_fetch_jobs()
+        self.tabs_overview.update_rows(self._tabs_overview_rows())
+
+    def _ovw_fetch_jobs(self):
+        def work():
+            return self._mcp_call_json("list_cron", {}, timeout=10)
+
+        def done(res):
+            jobs = (res or {}).get("jobs") if isinstance(res, dict) else None
+            if isinstance(jobs, list):
+                self._ovw_jobs = {j.get("id"): j for j in jobs if isinstance(j, dict)}
+        self._bg(work, done)
+
+    @staticmethod
+    def _ovw_when(iso):
+        try:
+            d = datetime.fromisoformat(iso)
+        except Exception:
+            return ""
+        return d.strftime("%H:%M") if d.date() == datetime.now().date() \
+            else d.strftime("%d/%m %H:%M")
+
+    def _tabs_overview_rows(self):
+        now = time.time()
+        rows = []
+        for tab in self._chat_tabs:
+            tid = tab["id"]
+            c = self._chat_ctxs.get(tid)
+            ended = bool(tab.get("ended"))
+            waiting = getattr(c, "pending_ack", None) is not None
+            working = self._tab_working(tid)
+            state = ("ended" if ended else "waiting" if waiting
+                     else "working" if working else "idle")
+            if working:
+                since = now - self._enchant_t0[tid] if tid in self._enchant_t0 else None
+            else:
+                la = getattr(c, "last_active", 0) or 0
+                since = now - la if la else None
+            doing = ""
+            if working and c is not None:
+                cur = next((i for i in getattr(c, "intent", []) or []
+                            if str(i.get("status", "")).lower() == "doing"), None)
+                if cur:
+                    doing = str(cur.get("goal", ""))
+                elif getattr(c, "turn_steps", None):
+                    doing = str(c.turn_steps[-1].get("action", ""))
+                else:
+                    doing = t("ovw.thinking")
+            last = ""
+            if c is not None:
+                last = next((m.get("content") for m in reversed(c.history or [])
+                             if m.get("role") == "assistant"
+                             and isinstance(m.get("content"), str)
+                             and m["content"].strip()), "") or ""
+            jid = getattr(c, "job_id", "") if c is not None else ""
+            job = self._ovw_jobs.get(jid) or {}
+            foot = []
+            if c is not None:
+                if getattr(c, "model_override", ""):
+                    foot.append("🧠 " + c.model_override)
+                if getattr(c, "agents", None):
+                    foot.append(t("ovw.agents", n=len(c.agents)))
+                if getattr(c, "msg_queue", None):
+                    foot.append(t("ovw.queued", n=len(c.msg_queue)))
+                _pin = getattr(c, "pinned_device", None)
+                if _pin:
+                    foot.append("📍" + str(_pin.get("name", "?")))
+                if getattr(c, "local_only", False):
+                    foot.append("🔒")
+                if getattr(c, "blocked_tools", None):
+                    foot.append("🛡")
+            rows.append({
+                "id": tid, "title": tab.get("title", ""),
+                "color": self._chat_tab_color(tab.get("kind", "local")),
+                "active": tid == self._active_tab_id, "state": state,
+                "since": since,
+                "job": getattr(c, "job_name", "") if c is not None else "",
+                "next_run": self._ovw_when(job.get("next") or "") if job else "",
+                "goal": getattr(c, "goal", "") if c is not None else "",
+                "doing": doing, "last": last, "foot": foot})
+        return rows
 
     def _toggle_council_view(self):
         idx = getattr(self, "_council_page_idx", None)
@@ -7113,6 +7323,8 @@ enabled = true
             "sync_id": getattr(ctx, "sync_id", "") or "",
             "verify_cmd": getattr(ctx, "verify_cmd", "") or "",
             "goal": getattr(ctx, "goal", "") or "",
+            "job_id": getattr(ctx, "job_id", "") or "",
+            "job_name": getattr(ctx, "job_name", "") or "",
             "no_log": bool(getattr(ctx, "no_log", False)),
             "local_only": bool(getattr(ctx, "local_only", False)),
             "qa_override": getattr(ctx, "qa_override", "") or "",
@@ -7133,6 +7345,8 @@ enabled = true
             name = ctx.title
             if self._title_is_glued(name):
                 name = ""
+        if not name and getattr(ctx, "job_name", ""):
+            name = ctx.title
         name = name or self._session_default_name(ctx) or t("chat.tab_local")
         sess = self._session_payload(tab_id, name)
         if sess is None:
@@ -7147,6 +7361,7 @@ enabled = true
         def done(res):
             if isinstance(res, dict) and res.get("ok"):
                 ctx.session_uuid = res.get("uuid")
+                self._job_link_session(tab_id)
                 try:
                     self._populate_cron_sessions()
                 except Exception:
@@ -7411,9 +7626,11 @@ enabled = true
 
         self._bg(work, done)
 
-    def _restore_session(self, uuid, quiet=False, pin=None):
+    def _restore_session(self, uuid, quiet=False, pin=None, then=None):
         _open = self._tab_by_session_uuid(uuid)
         if _open is not None:
+            if then is not None:
+                return then(_open)
             self._switch_chat_tab(_open)
             return
 
@@ -7431,6 +7648,8 @@ enabled = true
             getattr(self, "_pinned_waiting", set()).discard(uuid)
             sess = (res or {}).get("session") if isinstance(res, dict) else None
             if not sess:
+                if then is not None:
+                    return then(None)
                 self.add_message(t("sess.load_fail"), "error")
                 return
             if sess.get("kind") == "cron":
@@ -7467,6 +7686,9 @@ enabled = true
             ctx.qa_override = sess.get("qa_override") or ""
             ctx.blocked_tools = set(sess.get("blocked_tools") or [])
             ctx.session_uuid = sess.get("uuid")
+            ctx.job_id = sess.get("job_id") or ""
+            ctx.job_name = sess.get("job_name") or ""
+            ctx.job_session = ctx.session_uuid if ctx.job_id else None
             self._chat_ctxs[tid] = ctx
             self._chat_tabs.append({"id": tid, "kind": "local", "peer": None,
                                     "title": title, "html": sess.get("html", "") or "",
@@ -7478,6 +7700,8 @@ enabled = true
                     self._detect_ctx_async(f"{_b}|{_m}", _b, _k)
             except Exception:
                 pass
+            if then is not None:
+                return then(tid)
             if not quiet:
                 self._switch_chat_tab(tid)
                 self.add_message(t("sess.restored", title=title), "system")
@@ -7698,15 +7922,84 @@ enabled = true
         return tid
 
     def _new_local_tab(self):
+        self._make_local_tab()
+
+    def _make_local_tab(self, title=None, switch=True):
         self._local_tab_seq += 1
         n = self._local_tab_seq
         tid = f"local:{n}"
-        title = t("chat.tab_local_n", n=n + 1)
+        title = title or t("chat.tab_local_n", n=n + 1)
         self._chat_ctxs[tid] = ChatCtx(tid, title)
         self._chat_tabs.append({"id": tid, "kind": "local", "peer": None,
                                 "title": title, "html": "", "history_ref": True})
         self._render_chat_tabs()
-        self._switch_chat_tab(tid)
+        if switch:
+            self._switch_chat_tab(tid)
+        return tid
+
+    _ALERT_MARK = "__ALERT_ON_COMPLETE__\n"
+
+    def _run_job_in_tab(self, job):
+        jid = job.get("id") or ""
+        tid = next((k for k, c in self._chat_ctxs.items()
+                    if jid and getattr(c, "job_id", "") == jid
+                    and self._tab_by_id(k) is not None), None)
+        if tid is not None:
+            return self._job_feed(tid, job)
+        uuid = ((job.get("context") or {}).get("session") or "").strip()
+        if uuid:
+            self._restore_session(uuid, quiet=True,
+                                  then=lambda t_: self._job_feed(t_, job))
+            return
+        self._job_feed(None, job)
+
+    def _job_feed(self, tid, job):
+        name = job.get("name") or "job"
+        if tid is None or self._chat_ctxs.get(tid) is None:
+            tid = self._make_local_tab(name, switch=False)
+        ctx = self._chat_ctxs[tid]
+        ctx.job_id = job.get("id") or ""
+        ctx.job_name = name
+        instr = job.get("instruction") or ""
+        if instr.startswith(self._ALERT_MARK):
+            instr = instr[len(self._ALERT_MARK):]
+            ctx.job_alert = True
+        msg = t("job.run_msg", name=name) + "\n\n" + instr
+        ctx.msg_queue.append((msg, []))
+        self._render_chat_tabs()
+        if tid == self._active_tab_id:
+            self._update_queue_label()
+        self._drain_tab_queue(tid)
+        return tid
+
+    def _job_after_turn(self, tab_id):
+        ctx = self._chat_ctxs.get(tab_id)
+        if ctx is None or not getattr(ctx, "job_id", ""):
+            return
+        if getattr(ctx, "job_alert", False):
+            ctx.job_alert = False
+            last = next((m.get("content") for m in reversed(ctx.history or [])
+                         if m.get("role") == "assistant"
+                         and isinstance(m.get("content"), str)), "")
+            if last:
+                self.signals.show_alert.emit(f"⏰ {ctx.job_name}", last[:500])
+        self._job_link_session(tab_id)
+
+    def _job_link_session(self, tab_id):
+        ctx = self._chat_ctxs.get(tab_id)
+        if ctx is None or not getattr(ctx, "job_id", ""):
+            return
+        uuid = getattr(ctx, "session_uuid", None)
+        if uuid and uuid != getattr(ctx, "job_session", None):
+            ctx.job_session = uuid
+            jid, title = ctx.job_id, ctx.title
+
+            def work():
+                return self.cron_manager.update_job(jid, context={
+                    "session": uuid, "title": title,
+                    "dated": datetime.now().isoformat(timespec="seconds"),
+                    "source": "tab", "text": "", "live": True})
+            self._bg(work, lambda _r: None)
 
     def _ensure_cron_ctx(self):
         c = self._chat_ctxs.get(CRON_TAB_ID)
@@ -14411,6 +14704,7 @@ enabled = true
         ctx = self._chat_ctxs.get(tab_id)
         if ctx is not None:
             ctx.task_running = running
+            ctx.last_active = time.time()
         if running:
             self._enchant_t0[tab_id] = time.time()
         else:
@@ -14419,9 +14713,11 @@ enabled = true
             self.stop_btn.setVisible(running)
             self.send_btn.setEnabled(True)
             self._set_enchanting(self._busy_now())
+        self._tabs_working_check()
         if not running:
             self._rescue_injected(tab_id)
             self._autosave_tab(tab_id)
+            self._job_after_turn(tab_id)
             self._drain_tab_queue(tab_id)
 
     def _on_queue_changed(self, tab_id):
@@ -14495,6 +14791,7 @@ enabled = true
         self._enchant_t0[tab_id] = time.time()
         if tab_id == self._active_tab_id:
             self._set_enchanting(True)
+        self._tabs_working_check()
         self._append_html_to_tab(tab_id, self._chat_frag(
             msg, "#38bdf8", "👤 " + t("label.user")))
         if direction == "out":
@@ -14828,6 +15125,7 @@ enabled = true
             self._enchant_t0[active["id"]] = time.time()
             if active["id"] == self._active_tab_id:
                 self._set_enchanting(True)
+            self._tabs_working_check()
             if active.get("kind") == "green":
                 self._on_session_send(active["peer"], msg)
             else:
@@ -17945,6 +18243,9 @@ enabled = true
 
         self.cron_alert_check = QCheckBox(t("cron.alert_done")); self.cron_alert_check.setChecked(True)
         fl.addWidget(self.cron_alert_check)
+        self.cron_own_tab_check = QCheckBox(t("cron.own_tab"))
+        self.cron_own_tab_check.setToolTip(t("cron.own_tab_tip"))
+        fl.addWidget(self.cron_own_tab_check)
 
         tgt_row = QHBoxLayout()
         tgt_row.addWidget(QLabel(t("cron.target")))
@@ -18104,6 +18405,8 @@ enabled = true
         fields = dict(name=name, instr=instr, stype=stype, interval=interval,
                       fixed_dt=fixed_dt, daily_times=daily_times,
                       weekdays=weekdays, tgt=tgt, model=model,
+                      own_tab=(tgt == "local"
+                               and self.cron_own_tab_check.isChecked()),
                       editing=self._editing_cron_job_id)
 
         combo = getattr(self, "cron_ctx_combo", None)
@@ -18155,12 +18458,14 @@ enabled = true
                 name=name, instruction=instr, schedule_type=stype,
                 interval_minutes=interval, fixed_datetime=fixed_dt,
                 daily_times=daily_times, weekdays=weekdays, target=tgt,
-                model=f.get("model", ""), context=cctx)
+                model=f.get("model", ""), context=cctx,
+                own_tab=bool(f.get("own_tab")))
             self.add_message(t("cron.job_updated", name=name), "system")
         else:
             self.cron_manager.add_job(name, instr, stype, interval, fixed_dt,
                                       daily_times, weekdays, target=tgt,
-                                      model=f.get("model", ""), context=cctx)
+                                      model=f.get("model", ""), context=cctx,
+                                      own_tab=bool(f.get("own_tab")))
             self.add_message(t("cron.job_created", name=name, type=stype), "system")
         if cctx:
             self.add_message(t("cron.ctx_attached", name=name,
@@ -18181,6 +18486,7 @@ enabled = true
         self.cron_interval_spin.setValue(30)
         self.cron_type_combo.setCurrentIndex(max(0, self.cron_type_combo.findData("interval")))
         self.cron_alert_check.setChecked(True)
+        self.cron_own_tab_check.setChecked(False)
         self._populate_cron_targets()
         if getattr(self, "cron_target_combo", None):
             self.cron_target_combo.setCurrentIndex(0)
@@ -18201,6 +18507,7 @@ enabled = true
         if has_alert:
             instr = instr[len("__ALERT_ON_COMPLETE__\n"):]
         self.cron_alert_check.setChecked(has_alert)
+        self.cron_own_tab_check.setChecked(bool(job.get("own_tab")))
         self.cron_instruction_text.setPlainText(instr)
         self.cron_type_combo.setCurrentIndex(
             max(0, self.cron_type_combo.findData(job.get("schedule_type", "interval"))))
@@ -18272,6 +18579,8 @@ enabled = true
             tmark = "" if tgt == "local" else f" 🌐{tgt.split(':', 1)[-1]}"
             _cx = (job.get("context") or {}).get("title") or ""
             cmark = f" 🧠{_cx}" if _cx else ""
+            if job.get("own_tab"):
+                cmark = " " + t("cron.own_tab_mark") + cmark
             item = QListWidgetItem(f"{en} {st} {job['name']}{tmark}{cmark} [{info}] {nr} (x{job.get('run_count',0)})")
             item.setData(Qt.ItemDataRole.UserRole, job)
             self.cron_jobs_list.addItem(item)

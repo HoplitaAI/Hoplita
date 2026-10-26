@@ -165,7 +165,7 @@ A code project's memory is a notes folder with exactly four notes, `rules` (the 
 
 | Tool | Args | What it does |
 |---|---|---|
-| `add_cron` | `name` `instruction` `schedule_type` `interval_minutes?` `fixed_datetime?` `daily_times?` `target?` `context_current?` `context_session?` `context_live?` `model?` | Schedules an agentic task. `schedule_type`: `interval`, `daily`, `weekly`, `fixed` (once) or `startup` (each time HOPLITA starts). `target`: `local`, `child:<handle>` or `friend:<handle>` (runs on that machine). `context_current` / `context_session` attach a conversation the job inherits (`context_live` continues it on each run). `model`: empty = the router decides per run, `base` = the `[API]` model, or a pool alias. |
+| `add_cron` | `name` `instruction` `schedule_type` `interval_minutes?` `fixed_datetime?` `daily_times?` `target?` `context_current?` `context_session?` `context_live?` `model?` `own_tab?` | Schedules an agentic task. `schedule_type`: `interval`, `daily`, `weekly`, `fixed` (once) or `startup` (each time HOPLITA starts). `target`: `local`, `child:<handle>` or `friend:<handle>` (runs on that machine). `context_current` / `context_session` attach a conversation the job inherits (`context_live` continues it on each run). `model`: empty = the router decides per run, `base` = the `[API]` model, or a pool alias. `own_tab`: the job gets a tab of its own, where each run is a turn you can follow and talk to (local jobs only). |
 | `list_cron` | — | Lists the scheduled jobs. |
 | `delete_cron` | `job_id` | Deletes a job by id. |
 | `toggle_cron` | `job_id` `enabled` | Enables or pauses a job. |

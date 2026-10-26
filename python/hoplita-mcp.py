@@ -1331,7 +1331,7 @@ class CronManager(EncryptedStorageManager):
     def add_job(self, name, instruction, schedule_type,
                 interval_minutes=0, fixed_datetime="", daily_times=None,
                 weekdays=None, enabled=True, target="local", context=None,
-                model=""):
+                model="", own_tab=False):
         job = {
             "id": datetime.now().isoformat(), "name": name,
             "instruction": instruction, "schedule_type": schedule_type,
@@ -1343,6 +1343,7 @@ class CronManager(EncryptedStorageManager):
             "model": (model or "").strip(),
             "target": target or "local",
             "context": context or None,
+            "own_tab": bool(own_tab),
             "created_at": datetime.now().isoformat(),
             "last_run": None,
             "next_run": self._calc_next(schedule_type, interval_minutes, fixed_datetime, daily_times, None, weekdays),
@@ -1403,7 +1404,7 @@ class CronManager(EncryptedStorageManager):
         for job in self.data["jobs"]:
             if job["id"] == job_id:
                 for k, v in kwargs.items():
-                    if (k in job or k == "context") \
+                    if (k in job or k in ("context", "own_tab")) \
                             and k not in ("id", "created_at", "log"):
                         job[k] = v
                 if any(k in kwargs for k in ("schedule_type", "interval_minutes",
@@ -5197,7 +5198,8 @@ def tool_list_cron():
         {"id": j["id"], "name": j["name"], "type": j["schedule_type"],
          "enabled": j.get("enabled", True), "next": j.get("next_run"),
          "runs": j.get("run_count", 0),
-         "context": ((j.get("context") or {}).get("title") or None)}
+         "context": ((j.get("context") or {}).get("title") or None),
+         "own_tab": bool(j.get("own_tab"))}
         for j in cron_mgr.get_jobs()]}
 
 
@@ -5371,7 +5373,7 @@ def _cron_context_from_session(ref, live=False):
 
 def tool_add_cron(name, instruction, stype, interval=0, fixed_dt="", daily_times=None,
                   target="local", context_session="", model="",
-                  context_live=None, context_current=None):
+                  context_live=None, context_current=None, own_tab=False):
     ctx = None
     if context_current is True and not (context_session or "").strip() \
             and not _turn_session():
@@ -5390,9 +5392,14 @@ def tool_add_cron(name, instruction, stype, interval=0, fixed_dt="", daily_times
         ctx, err = _cron_context_from_session(context_session, context_live)
         if err:
             return {"error": f"context session: {err}"}
+    if own_tab and (target or "local") != "local":
+        return {"error": "own_tab is for a job that runs here: a job for a "
+                         "child or a friend runs on their machine, in their tabs"}
     j = cron_mgr.add_job(name, instruction, stype, interval, fixed_dt, daily_times,
-                         target=target, context=ctx, model=model)
-    out = {"added": True, "id": j["id"], "target": j.get("target", "local")}
+                         target=target, context=ctx, model=model,
+                         own_tab=bool(own_tab))
+    out = {"added": True, "id": j["id"], "target": j.get("target", "local"),
+           "own_tab": j.get("own_tab", False)}
     if ctx:
         out["context"] = {"title": ctx["title"], "dated": ctx["dated"],
                           "source": ctx["source"],
@@ -9019,14 +9026,20 @@ def register_tools():
                                     "'child:<handle>' (a child of mine) or 'friend:<handle>' (a "
                                     "friend). With a remote target, the scheduled task runs "
                                     "on the child's/friend's machine — local cron morphs into "
-                                    "children's/friends' cron.",
+                                    "children's/friends' cron. own_tab=true gives a local job "
+                                    "a tab of its own (a worker: a mail watcher, a review "
+                                    "bot): every run is a turn in that tab, the person can "
+                                    "open it and talk to it between runs, and it runs in "
+                                    "parallel with other tabs. With 'startup' it opens and "
+                                    "starts working when HOPLITA starts.",
                                    "fn": lambda a: tool_add_cron(a["name"], a["instruction"], a["schedule_type"],
                                                                   a.get("interval_minutes", 0), a.get("fixed_datetime", ""),
                                                                   a.get("daily_times"), a.get("target", "local"),
                                                                   a.get("context_session", ""),
                                                                   a.get("model", ""),
                                                                   a.get("context_live", True),
-                                                                  a.get("context_current", False))},
+                                                                  a.get("context_current", False),
+                                                                  a.get("own_tab", False))},
         "load_tools":             {"desc": "Get the full schema (parameters) of tools you can see "
                                     "listed by name but not yet expanded. Pass the exact names. "
                                     "Call this the moment you know which tool you need — the list "
@@ -9542,7 +9555,7 @@ def register_tool_params():
         "add_todo_project":       {"properties": {"name": {"type": "string"}}, "required": ["name"]},
         "delete_todo_project":    {"properties": {"name": {"type": "string"}}, "required": ["name"]},
         "list_cron":              {"properties": {}},
-        "add_cron":               {"properties": {"name": {"type": "string"}, "instruction": {"type": "string"}, "schedule_type": {"type": "string"}, "interval_minutes": {"type": "integer"}, "fixed_datetime": {"type": "string"}, "daily_times": {"type": "array", "items": {"type": "string"}}, "target": {"type": "string", "description": "local | child:<handle> | friend:<handle>. A LOCAL child (child_list) is written the same way and is the most reliable target there is: a remote peer only runs the job when it happens to be online, a local child always does."}, "context_current": {"type": "boolean", "description": "true = attach THE CONVERSATION YOU ARE IN RIGHT NOW. This is the normal case: the user says «set up a cron with this conversation and follow it up yourself» and means the one you are both in. You do not need its title — you do not have it. Pair it with context_live=true when they ask you to keep working on it."}, "context_session": {"type": "string", "description": "ANOTHER conversation, by title or uuid, when they mean a different one than this. Leave empty and use context_current for the current one. Title or uuid of a saved conversation this job CONTINUES: each run loads the whole chat, follows the instruction as its next turn and writes its findings back into it."}, "context_live": {"type": "boolean", "description": "Default true: the job CONTINUES the attached conversation — every run reads the whole chat (compacted when it outgrows the window, like a tab), works, and appends its findings to it, so reopening the tab shows the whole watch. false = remember only a frozen summary taken at attach time, for a job that must never touch the conversation."}, "model": {"type": "string", "description": "The job's own model: empty = the router decides per run, 'base' = the [API] model pinned, or a pool alias."}}, "required": ["name", "instruction", "schedule_type"]},
+        "add_cron":               {"properties": {"name": {"type": "string"}, "instruction": {"type": "string"}, "schedule_type": {"type": "string"}, "interval_minutes": {"type": "integer"}, "fixed_datetime": {"type": "string"}, "daily_times": {"type": "array", "items": {"type": "string"}}, "target": {"type": "string", "description": "local | child:<handle> | friend:<handle>. A LOCAL child (child_list) is written the same way and is the most reliable target there is: a remote peer only runs the job when it happens to be online, a local child always does."}, "context_current": {"type": "boolean", "description": "true = attach THE CONVERSATION YOU ARE IN RIGHT NOW. This is the normal case: the user says «set up a cron with this conversation and follow it up yourself» and means the one you are both in. You do not need its title — you do not have it. Pair it with context_live=true when they ask you to keep working on it."}, "context_session": {"type": "string", "description": "ANOTHER conversation, by title or uuid, when they mean a different one than this. Leave empty and use context_current for the current one. Title or uuid of a saved conversation this job CONTINUES: each run loads the whole chat, follows the instruction as its next turn and writes its findings back into it."}, "context_live": {"type": "boolean", "description": "Default true: the job CONTINUES the attached conversation — every run reads the whole chat (compacted when it outgrows the window, like a tab), works, and appends its findings to it, so reopening the tab shows the whole watch. false = remember only a frozen summary taken at attach time, for a job that must never touch the conversation."}, "model": {"type": "string", "description": "The job's own model: empty = the router decides per run, 'base' = the [API] model pinned, or a pool alias."}, "own_tab": {"type": "boolean", "description": "true = the job gets a tab of its own: each run is a turn there, the person can talk to it between runs, and it runs in parallel. For standing workers (watch my mail, review PRs)."}}, "required": ["name", "instruction", "schedule_type"]},
         "load_tools":             {"properties": {"names": {"type": "array", "items": {"type": "string"}, "description": "Exact tool names from the catalogue."}}, "required": ["names"]},
         "pdf_info":               {"properties": {"source": {"type": "string", "description": "Path to the PDF."},
                                                   "password": {"type": "string", "description": "To open an encrypted source."},
