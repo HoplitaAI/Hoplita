@@ -2155,8 +2155,10 @@ class ChatAssistantWindow(QMainWindow):
         self._bg(work, done)
 
     def _show_plan_banner(self, summ):
+        self._plan_summ = summ
         if summ is None:
             self.plan_banner.setVisible(False)
+            self._plan_closed(False)
             return
         html, level, tier, full = summ
         self._plan_state = (tier, level)
@@ -2168,30 +2170,46 @@ class ChatAssistantWindow(QMainWindow):
         d_tier, _, d_level = _d.partition("|")
         if d_tier == tier and d_level.isdigit() and level <= int(d_level):
             self.plan_banner.setVisible(False)
+            self._plan_closed(True)
             return
         c, bg = [("#c4b5fd", "#1f1b3d"), ("#fde68a", "#3a2c07"),
                  ("#fecaca", "#450a0a")][level]
         self.plan_banner.setStyleSheet(
             f"#plan_banner {{ background:{bg}; border-bottom:1px solid {c}; }} "
             f"#plan_banner QLabel {{ color:{c}; background:transparent; "
-            f"font-size:11px; }} "
+            f"font-size:13px; }} "
             f"#plan_banner QPushButton {{ color:{c}; background:transparent; "
-            f"border:none; font-size:11px; padding:0; }}")
+            f"border:none; font-size:13px; padding:0; }}")
         if self._plan_text.text() != html:
             self._plan_text.setText(html)
         self.plan_banner.setToolTip(f"{full}<br><br>{t('fed.plan_tip')}")
         self.plan_banner.setVisible(True)
+        self._plan_closed(False)
+
+    def _plan_closed(self, closed):
+        btn = getattr(self, "plan_btn", None)
+        if btn is not None:
+            btn.setVisible(closed)
 
     def _dismiss_plan(self):
         self.plan_banner.setVisible(False)
         if not self._plan_state:
             return
+        self._plan_closed(True)
         try:
             from PyQt6.QtCore import QSettings
             QSettings("hoplita", "hoplita").setValue(
                 "plan_dismissed", f"{self._plan_state[0]}|{self._plan_state[1]}")
         except Exception:
             pass
+
+    def _undismiss_plan(self):
+        try:
+            from PyQt6.QtCore import QSettings
+            QSettings("hoplita", "hoplita").remove("plan_dismissed")
+        except Exception:
+            pass
+        self._show_plan_banner(getattr(self, "_plan_summ", None))
 
     def _dismiss_motd(self):
         self.motd_banner.setVisible(False)
@@ -5788,6 +5806,14 @@ enabled = true
         self.stats_btn.clicked.connect(self._open_usage_dialog)
         hl.add(self.stats_btn, drop=6)
 
+        self.plan_btn = QPushButton("☁ Plan")
+        self.plan_btn.setObjectName("plan_btn")
+        self.plan_btn.setToolTip(t("plan.show"))
+        self.plan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.plan_btn.clicked.connect(self._undismiss_plan)
+        self.plan_btn.setVisible(False)
+        hl.row().addWidget(self.plan_btn)
+
 
 
         self.browser_headless = self.config.getboolean("BROWSER", "headless", fallback=False)
@@ -5834,7 +5860,7 @@ enabled = true
         self.plan_banner = QWidget()
         self.plan_banner.setObjectName("plan_banner")
         _pb = QHBoxLayout(self.plan_banner)
-        _pb.setContentsMargins(12, 2, 4, 2)
+        _pb.setContentsMargins(12, 4, 6, 4)
         _pb.setSpacing(8)
         self._plan_who = QLabel("☁")
         self._plan_who.setObjectName("plan_who")
@@ -5842,7 +5868,7 @@ enabled = true
         self._plan_text = QLabel("")
         _pb.addWidget(self._plan_text, 1)
         _close = QPushButton("✕")
-        _close.setFixedSize(20, 18)
+        _close.setFixedSize(24, 22)
         _close.setCursor(Qt.CursorShape.PointingHandCursor)
         _close.setToolTip(t("plan.dismiss"))
         _close.clicked.connect(self._dismiss_plan)
@@ -5850,6 +5876,7 @@ enabled = true
         self.plan_banner.setVisible(False)
         parent_layout.addWidget(self.plan_banner)
         self._plan_state = None
+        self._plan_summ = None
         self._plan_timer = QTimer(self)
         self._plan_timer.timeout.connect(self._refresh_plan)
         self._plan_timer.start(60000)

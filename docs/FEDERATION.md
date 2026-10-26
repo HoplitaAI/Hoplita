@@ -147,8 +147,8 @@ whole breakdown.
 
 The line turns amber when any count reaches 80 % and red when one is full; at
 that point the server refuses what does not fit. The server's operator sets
-the plan. **✕** hides it until your plan changes or your usage reaches a worse
-level. From the chat: «what is my quota?» (`fed_quota`).
+the plan. **✕** hides it; **☁ Plan** in the header brings it back, and so
+does a change of plan or a usage that reaches a worse level. From the chat: «what is my quota?» (`fed_quota`).
 
 ## 3. Keep your own machines in sync
 
