@@ -1238,6 +1238,8 @@
   "motd.dismiss": "Hide this notice (it comes back when the operator sends another)",
   "motd.from_server": "📢 FROM THE SERVER",
   "motd.read_all": "Read it all",
+  "plan.from_server": "☁ YOUR PLAN",
+  "plan.dismiss": "Hide it (it comes back if your plan changes or your usage reaches the next level)",
   "msg.bad_format_results": "❌ Unexpected format in results",
   "msg.cant_extract": "❌ Couldn't extract content from {name}",
   "msg.canvas_eval": "⚡ Canvas ← live JS ({n} chars)",

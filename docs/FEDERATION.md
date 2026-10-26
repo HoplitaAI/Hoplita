@@ -135,6 +135,18 @@ identity.
 To move to another server, leave, then register again on the new one (step
 2). Your contacts must add you again there.
 
+### Your plan
+
+A band over the chat, **☁ YOUR PLAN**, shows what the server allows your
+identity and how much of it you use: the plan's name, your synced copy, mail
+in flight (what you sent that nobody has collected yet), your mailbox, your
+contacts and your children. `∞` is no limit. The band turns amber when any of
+them reaches 80 % and red when one is full; at that point the server refuses
+what does not fit. The server's operator sets the plan.
+
+**✕** hides the band. It comes back when your plan changes or when your usage
+reaches a worse level. From the chat: «what is my quota?» (`fed_quota`).
+
 ## 3. Keep your own machines in sync
 
 Your machines share one identity, and with it one sealed snapshot on the
@@ -802,7 +814,7 @@ refuses on such a server, because the container would have no model.
 | *⚠️ Your last automatic upload didn't go through…* (at start) | A background upload of the last session failed, for the reason that follows | Press **⇈ Push** |
 | *🔑 Sync: couldn't decrypt the server snapshot…* | This machine has a different identity from the one that pushed | Use the same identity file on both machines (step 2) |
 | *⚠ Sync: the server refused the upload twice…* | Two machines pushed at the same moment | Press **⇊ Pull**, then **⇈ Push** |
-| *🚫 Quota exceeded (…)* | Your tier's limit on the server | Prune heavy stores (`fed_sync_breakdown`), or ask the server's operator |
+| *🚫 Quota exceeded (…)* | Your plan's limit on the server: the **☁ YOUR PLAN** band shows which one, in red | Prune heavy stores (`fed_sync_breakdown`), or ask the server's operator |
 | *⚠️ Your last upload on close didn't go through…* | The push on close failed | Press **⇈ Push** |
 | *The folder '…' is marked LOCAL-ONLY…* | The folder is locked (5.7) | Lift the lock first, if you really want to share it |
 | *Appointment rejected — You don't have permission…* | The recipient's **Appointments** permission for you is **no** or not set | Ask them to set it to auto-accept or review |

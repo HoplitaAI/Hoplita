@@ -1238,6 +1238,8 @@
   "motd.dismiss": "Ocultar este aviso (vuelve a salir si el operador manda otro)",
   "motd.from_server": "📢 DEL SERVIDOR",
   "motd.read_all": "Leer entero",
+  "plan.from_server": "☁ TU PLAN",
+  "plan.dismiss": "Ocultarla (vuelve si cambia tu plan o el uso sube de nivel)",
   "msg.bad_format_results": "❌ Formato inesperado en resultados",
   "msg.cant_extract": "❌ No se pudo extraer contenido de {name}",
   "msg.canvas_eval": "⚡ Canvas ← JS en vivo ({n} chars)",

@@ -2140,6 +2140,59 @@ class ChatAssistantWindow(QMainWindow):
         self._motd_more.setVisible(len(_one) > 220 or "\n" in _txt)
         self.motd_banner.setVisible(True)
 
+    def _refresh_plan(self):
+        def work():
+            return self._mcp_call_json("fed_quota", {}, timeout=20)
+
+        def done(res):
+            try:
+                from federation_widget import plan_summary
+                summ = plan_summary(res if isinstance(res, dict) else {})
+            except Exception:
+                summ = None
+            self._show_plan_banner(summ)
+
+        self._bg(work, done)
+
+    def _show_plan_banner(self, summ):
+        if summ is None:
+            self.plan_banner.setVisible(False)
+            return
+        html, level, tier = summ
+        self._plan_state = (tier, level)
+        try:
+            from PyQt6.QtCore import QSettings
+            _d = str(QSettings("hoplita", "hoplita").value("plan_dismissed") or "")
+        except Exception:
+            _d = ""
+        d_tier, _, d_level = _d.partition("|")
+        if d_tier == tier and d_level.isdigit() and level <= int(d_level):
+            self.plan_banner.setVisible(False)
+            return
+        c, bg = [("#c4b5fd", "#1f1b3d"), ("#fde68a", "#3a2c07"),
+                 ("#fecaca", "#450a0a")][level]
+        self.plan_banner.setStyleSheet(
+            f"#plan_banner {{ background:{bg}; border-bottom:2px solid {c}; }} "
+            f"#plan_banner QLabel {{ color:{c}; background:transparent; "
+            f"font-size:13px; }} "
+            f"#plan_who {{ font-weight:800; letter-spacing:1px; font-size:11px; }} "
+            f"#plan_banner QPushButton {{ color:{c}; background:transparent; "
+            f"border:none; font-weight:700; }}")
+        if self._plan_text.text() != html:
+            self._plan_text.setText(html)
+        self.plan_banner.setVisible(True)
+
+    def _dismiss_plan(self):
+        self.plan_banner.setVisible(False)
+        if not self._plan_state:
+            return
+        try:
+            from PyQt6.QtCore import QSettings
+            QSettings("hoplita", "hoplita").setValue(
+                "plan_dismissed", f"{self._plan_state[0]}|{self._plan_state[1]}")
+        except Exception:
+            pass
+
     def _dismiss_motd(self):
         self.motd_banner.setVisible(False)
         try:
@@ -5812,6 +5865,32 @@ enabled = true
         _mb.addWidget(self._motd_close)
         self.motd_banner.setVisible(False)
         parent_layout.addWidget(self.motd_banner)
+
+        self.plan_banner = QWidget()
+        self.plan_banner.setObjectName("plan_banner")
+        _pb = QHBoxLayout(self.plan_banner)
+        _pb.setContentsMargins(12, 6, 8, 6)
+        _pb.setSpacing(10)
+        self._plan_who = QLabel(t("plan.from_server"))
+        self._plan_who.setObjectName("plan_who")
+        _pb.addWidget(self._plan_who)
+        self._plan_text = QLabel("")
+        self._plan_text.setWordWrap(True)
+        self._plan_text.setToolTip(t("fed.plan_tip"))
+        _pb.addWidget(self._plan_text, 1)
+        _close = QPushButton("✕")
+        _close.setFixedWidth(26)
+        _close.setCursor(Qt.CursorShape.PointingHandCursor)
+        _close.setToolTip(t("plan.dismiss"))
+        _close.clicked.connect(self._dismiss_plan)
+        _pb.addWidget(_close)
+        self.plan_banner.setVisible(False)
+        parent_layout.addWidget(self.plan_banner)
+        self._plan_state = None
+        self._plan_timer = QTimer(self)
+        self._plan_timer.timeout.connect(self._refresh_plan)
+        self._plan_timer.start(60000)
+        QTimer.singleShot(4000, self._refresh_plan)
 
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)

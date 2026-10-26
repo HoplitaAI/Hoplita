@@ -35,6 +35,39 @@ class _McpWorker(QThread):
             self.done.emit({"error": str(e)})
 
 
+def _size(n):
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1000 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}".replace(".0 ", " ")
+        n /= 1000
+
+
+def plan_summary(data):
+    lim = (data or {}).get("limits") or {}
+    use = (data or {}).get("usage") or {}
+    if (data or {}).get("error") or not (lim or use):
+        return None
+    rows = [("fed.plan_sync", use.get("sync_bytes"), lim.get("max_sync_bytes"), True),
+            ("fed.plan_outbox", use.get("outbox_bytes"), lim.get("max_inbox_bytes"), True),
+            ("fed.plan_inbox", use.get("inbox_envelopes"), lim.get("max_inbox_envelopes"), False),
+            ("fed.plan_contacts", use.get("contacts"), lim.get("max_contacts"), False),
+            ("fed.plan_children", use.get("children"), lim.get("max_children"), False)]
+    parts, level = [], 0
+    for key, u, l, size in rows:
+        u = int(u or 0)
+        l = int(l or 0)
+        frac = (u / float(l)) if l else 0.0
+        lv = 2 if frac >= 1 else 1 if frac >= 0.8 else 0
+        level = max(level, lv)
+        cap = (_size(l) if size else str(l)) if l else "∞"
+        val = f"{_size(u) if size else u} / {cap}"
+        parts.append(f"{t(key)} <b>{val}</b>" if lv else f"{t(key)} {val}")
+    tier = data.get("tier") or "?"
+    return (f"{t('fed.plan_tier', tier=tier)}  ·  " + "  ·  ".join(parts),
+            level, tier)
+
+
 class _PostWorker(QThread):
     done = pyqtSignal(object)
 
@@ -722,14 +755,6 @@ class FederationWidget(QWidget):
             "QLabel { background:#0f172a; color:#e2e8f0; padding:12px 14px; "
             "border-radius:8px; font-size:13px; }")
         root.addWidget(self.header)
-        self.plan = QLabel("")
-        self.plan.setWordWrap(True)
-        self.plan.setVisible(False)
-        self.plan.setStyleSheet(
-            "QLabel { background:#0f172a; color:#cbd5e1; padding:10px 14px; "
-            "border-radius:8px; font-size:13px; }")
-        root.addWidget(self.plan)
-        self._quota_at = 0.0
 
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(
@@ -882,10 +907,6 @@ class FederationWidget(QWidget):
         if not self.header.text() or getattr(self, "_never_loaded", True):
             self.header.setText(t("fed.loading_identity"))
         self._run("fed_status", {}, self._on_status)
-        import time as _time
-        if _time.time() - self._quota_at >= 60:
-            self._quota_at = _time.time()
-            self._run("fed_quota", {}, self._on_quota)
         self._run("fed_list_contacts", {}, self._on_contacts)
         self._run("fed_list_appointment_bounces", {}, self._on_bounces)
         self._run("fed_activity", {"limit": 200}, self._on_activity)
@@ -976,41 +997,6 @@ class FederationWidget(QWidget):
             f"<b>{data.get('handle')}</b>  ·  {sess_txt}<br>"
             f"<span style='color:#64748b'>{t('fed.fingerprint')} "
             f"{data.get('fingerprint')} · {data.get('server_url')}</span>")
-
-    @staticmethod
-    def _size(n):
-        n = float(n or 0)
-        for unit in ("B", "KB", "MB", "GB"):
-            if n < 1000 or unit == "GB":
-                return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}".replace(".0 ", " ")
-            n /= 1000
-
-    def _on_quota(self, data):
-        lim = (data or {}).get("limits") or {}
-        use = (data or {}).get("usage") or {}
-        if (data or {}).get("error") or not (lim or use):
-            self.plan.setVisible(False)
-            return
-        rows = [("fed.plan_sync", use.get("sync_bytes"), lim.get("max_sync_bytes"), True),
-                ("fed.plan_outbox", use.get("outbox_bytes"), lim.get("max_inbox_bytes"), True),
-                ("fed.plan_inbox", use.get("inbox_envelopes"), lim.get("max_inbox_envelopes"), False),
-                ("fed.plan_contacts", use.get("contacts"), lim.get("max_contacts"), False),
-                ("fed.plan_children", use.get("children"), lim.get("max_children"), False)]
-        parts = []
-        for key, u, l, size in rows:
-            u = int(u or 0)
-            l = int(l or 0)
-            frac = (u / float(l)) if l else 0.0
-            col = "#ef4444" if frac >= 1 else "#f59e0b" if frac >= 0.8 else "#cbd5e1"
-            cap = (self._size(l) if size else str(l)) if l else "∞"
-            val = f"{self._size(u) if size else u} / {cap}"
-            parts.append(f"{t(key)} <span style='color:{col}'>{val}</span>")
-        html = (f"{t('fed.plan_tier', tier=data.get('tier') or '?')}  ·  "
-                + "  ·  ".join(parts))
-        if self.plan.text() != html:
-            self.plan.setText(html)
-        self.plan.setToolTip(t("fed.plan_tip"))
-        self.plan.setVisible(True)
 
     def _on_contacts(self, data):
         self._contacts = data.get("contacts", [])
