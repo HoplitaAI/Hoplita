@@ -825,7 +825,14 @@ minutes, in its own tab») and the job becomes a worker:
 - it runs **in parallel** with your other tabs and with other jobs, and it
   never takes the view from the tab you are in;
 - you can **open it and talk to it** between runs, with everything it has
-  done in view; a run that comes while you are talking to it waits its turn;
+  done in view; a run that comes while you are talking to it waits its turn,
+  and a run that falls due while another still waits is not queued twice;
+- every run gives it its task again, as it stands, and tells it to go on
+  from the conversation, so what you told it in between counts («you missed
+  the invoices, keep going»);
+- tell it in its tab to change what it does or how often («from now on also
+  file the receipts, every 7 minutes») and it changes its own job
+  (`update_cron`); the next run follows the new task;
 - each run is an ordinary turn, so it has what any tab has: tools, delegating
   to other models, the council, children;
 - the tab is saved as it works; close it and the next run reopens the same
@@ -843,7 +850,10 @@ busy; ⏸ in amber is a tab waiting for your OK.
 **▦** at the right of the strip (it reads `▦ 2/5` when two of five tabs are
 working) opens every tab on one page: its state and for how long, the job it
 works for and its next run, its goal, the step it is on and the last thing it
-said. A card opens its tab.
+said. A tab with sub-agents at work carries them on its card as the agents
+board draws them: a light per agent (amber and pulsing while it works, green
+done, red failed), where it runs, its role and model, and the rail of its own
+steps with the one it is on. A card opens its tab.
 
 ## Timeout doctrine — no total clocks
 

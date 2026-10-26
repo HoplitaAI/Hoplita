@@ -169,8 +169,9 @@ A code project's memory is a notes folder with exactly four notes, `rules` (the 
 | `list_cron` | — | Lists the scheduled jobs. |
 | `delete_cron` | `job_id` | Deletes a job by id. |
 | `toggle_cron` | `job_id` `enabled` | Enables or pauses a job. |
+| `update_cron` | `job_id?` `instruction?` `name?` `schedule_type?` `interval_minutes?` `daily_times?` `weekdays?` `fixed_datetime?` `model?` `enabled?` | Changes an existing job; only the fields given change, and a new `instruction` replaces the old one whole. In a job's own tab `job_id` may be left out: it is that tab's job, so a worker told «from now on do X, every 7 minutes» changes its own job. |
 | `cron_set_context` | `job_id` `session?` | Attaches a saved conversation to an existing job as inherited context, or detaches it when no session is given. |
-| `delete_current_cron_job` | — | The job running right now deletes itself; only for a one-shot task or on an explicit request. |
+| `delete_current_cron_job` | — | The job running right now (or the job whose own tab this is) deletes itself; only for a one-shot task or on an explicit request. |
 | `disable_current_cron_job` | — | The job running right now pauses itself; only when the task says it must not run again. |
 | `set_cron_context` | `job_id` | Sets which job is running (internal: it is what makes the two above possible). |
 

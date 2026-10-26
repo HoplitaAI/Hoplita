@@ -137,18 +137,20 @@ To move to another server, leave, then register again on the new one (step
 
 ### Your plan
 
-A thin line over the chat tabs, **☁**, shows what the server allows your
-identity and how much of it you use: the plan's name, your synced copy, your
-contacts and your children. `∞` is no limit. Two more counts join it only when
-they near their limit: **sent, not collected** (what you sent your contacts,
+A line over the chat tabs, **☁**, is always there. Without an identity it says
+**not federated**. With one it shows who you are and through which server,
+your plan's name, and a meter for what the server allows your identity and
+how much of it you use: your synced copy, your contacts and your children.
+`∞` is no limit. Two more meters join it only when they near their limit: **sent, not collected** (what you sent your contacts,
 messages, shares and session turns, that they have not picked up yet) and
 **to collect** (what waits on the server for you). Hover over the line for the
 whole breakdown.
 
-The line turns amber when any count reaches 80 % and red when one is full; at
-that point the server refuses what does not fit. The server's operator sets
-the plan. **✕** hides it; **☁ Plan** in the header brings it back, and so
-does a change of plan or a usage that reaches a worse level. From the chat: «what is my quota?» (`fed_quota`).
+A meter, and the line's edge, turn amber when a count reaches 80 % and red
+when one is full; at that point the server refuses what does not fit. The
+server's operator sets the plan. If the server does not answer, the line says
+so. A click on it opens Contacts. From the chat: «what is my quota?»
+(`fed_quota`).
 
 ## 3. Keep your own machines in sync
 

@@ -1404,7 +1404,7 @@ class CronManager(EncryptedStorageManager):
         for job in self.data["jobs"]:
             if job["id"] == job_id:
                 for k, v in kwargs.items():
-                    if (k in job or k in ("context", "own_tab")) \
+                    if (k in job or k in ("context", "own_tab", "model", "weekdays")) \
                             and k not in ("id", "created_at", "log"):
                         job[k] = v
                 if any(k in kwargs for k in ("schedule_type", "interval_minutes",
@@ -5199,8 +5199,13 @@ def tool_list_cron():
          "enabled": j.get("enabled", True), "next": j.get("next_run"),
          "runs": j.get("run_count", 0),
          "context": ((j.get("context") or {}).get("title") or None),
-         "own_tab": bool(j.get("own_tab"))}
+         "own_tab": bool(j.get("own_tab")),
+         "this_tab": bool(_turn_job()) and j["id"] == _turn_job()}
         for j in cron_mgr.get_jobs()]}
+
+
+def _turn_job():
+    return getattr(_TURN_SESSION, "job", "") or ""
 
 
 import threading as _thr_sess
@@ -5210,8 +5215,10 @@ _THIS_SESSION = ("this", "this one", "current", "esta", "esta conversacion",
                  "self", "@this")
 
 
-def _set_turn_session(uuid_, code_project="", conv="", rag_docs=0, images=None):
+def _set_turn_session(uuid_, code_project="", conv="", rag_docs=0, images=None,
+                      job=""):
     _TURN_SESSION.uuid = (uuid_ or "").strip()
+    _TURN_SESSION.job = (job or "").strip()
     _TURN_SESSION.project = (code_project or "").strip()
     _TURN_SESSION.rag_docs = int(rag_docs or 0)
     _TURN_SESSION.images = list(images or [])
@@ -5220,7 +5227,8 @@ def _set_turn_session(uuid_, code_project="", conv="", rag_docs=0, images=None):
 
 
 _TURN_SNAPSHOTS = {}
-_TURN_SNAPSHOT_FIELDS = ("uuid", "project", "rag_docs", "images", "conv", "tab")
+_TURN_SNAPSHOT_FIELDS = ("uuid", "project", "rag_docs", "images", "conv", "tab",
+                         "job")
 
 
 def _turn_snapshot_file(turn_id):
@@ -5423,6 +5431,55 @@ def tool_cron_set_context(job_id, session="", live=True):
                                          "live": ctx["live"]}}
 
 
+_CRON_EDITABLE = ("name", "instruction", "schedule_type", "interval_minutes",
+                  "fixed_datetime", "daily_times", "weekdays", "model", "enabled")
+
+
+def tool_update_cron(a):
+    jid = (a.get("job_id") or "").strip() or _turn_job()
+    if not jid:
+        return {"error": "no job_id, and this tab does not work for a job: "
+                         "name the job (list_cron gives the ids)"}
+    old = next((j for j in cron_mgr.get_jobs() if j["id"] == jid), None)
+    if old is None:
+        return {"error": f"no job with id {jid}"}
+    ch = {k: a[k] for k in _CRON_EDITABLE if k in a and a[k] is not None}
+    if not ch:
+        return {"error": "nothing to change: give instruction, name, "
+                         "schedule_type, interval_minutes, daily_times, "
+                         "weekdays, fixed_datetime, model or enabled"}
+    st = ch.get("schedule_type", old.get("schedule_type"))
+    if st not in ("interval", "daily", "weekly", "fixed", "startup"):
+        return {"error": f"schedule_type {st!r}: interval, daily, weekly, "
+                         "fixed or startup"}
+    if "interval_minutes" in ch:
+        try:
+            ch["interval_minutes"] = int(ch["interval_minutes"])
+        except (TypeError, ValueError):
+            return {"error": "interval_minutes must be a whole number"}
+    if st == "interval" and int(ch.get("interval_minutes",
+                                       old.get("interval_minutes") or 0)) < 1:
+        return {"error": "an interval job needs interval_minutes of 1 or more"}
+    if "instruction" in ch and (old.get("instruction") or "").startswith(
+            "__ALERT_ON_COMPLETE__\n") \
+            and not ch["instruction"].startswith("__ALERT_ON_COMPLETE__\n"):
+        ch["instruction"] = "__ALERT_ON_COMPLETE__\n" + ch["instruction"]
+    j = cron_mgr.update_job(jid, **ch)
+    if not j:
+        return {"error": f"no job with id {jid}"}
+    try:
+        import fed_agent
+        fed_agent.tool_progress("cron.updated", job=jid,
+                                fields=",".join(sorted(ch)))
+    except Exception:
+        pass
+    return {"updated": True, "id": jid, "changed": sorted(ch),
+            "name": j.get("name"), "schedule_type": j.get("schedule_type"),
+            "interval_minutes": j.get("interval_minutes"),
+            "daily_times": j.get("daily_times"), "enabled": j.get("enabled", True),
+            "next": j.get("next_run")}
+
+
 def tool_delete_cron(job_id):
     cron_mgr.delete_job(job_id)
     return {"deleted": True}
@@ -5444,11 +5501,12 @@ def tool_set_cron_context(job_id):
 
 def tool_delete_current_cron():
     global _current_cron_job_id
-    if not _current_cron_job_id:
+    jid = _turn_job() or _current_cron_job_id
+    if not jid:
         return {"error": "No active CRON"}
-    cron_mgr.delete_job(_current_cron_job_id)
-    jid = _current_cron_job_id
-    _current_cron_job_id = None
+    cron_mgr.delete_job(jid)
+    if jid == _current_cron_job_id:
+        _current_cron_job_id = None
     try:
         import fed_agent
         fed_agent.tool_progress("cron.self_deleted", job=jid)
@@ -5458,17 +5516,16 @@ def tool_delete_current_cron():
 
 
 def tool_disable_current_cron():
-    global _current_cron_job_id
-    if not _current_cron_job_id:
+    jid = _turn_job() or _current_cron_job_id
+    if not jid:
         return {"error": "No active CRON"}
-    cron_mgr.update_job(_current_cron_job_id, enabled=False)
+    cron_mgr.update_job(jid, enabled=False)
     try:
         import fed_agent
-        fed_agent.tool_progress("cron.self_disabled",
-                                job=_current_cron_job_id)
+        fed_agent.tool_progress("cron.self_disabled", job=jid)
     except Exception:
         pass
-    return {"disabled": True, "job_id": _current_cron_job_id}
+    return {"disabled": True, "job_id": jid}
 
 
 def tool_alert(title, message):
@@ -9103,6 +9160,12 @@ def register_tools():
                                    "fn": lambda a: tool_session_recall(a)},
         "delete_cron":            {"desc": "Delete a CRON job.",
                                    "fn": lambda a: tool_delete_cron(a["job_id"])},
+        "update_cron":            {"desc": "Change an existing CRON job: its task (instruction), name, "
+                                    "schedule or model, or pause/resume it. Only the fields given "
+                                    "change. In a job's own tab, job_id may be left out: it is that "
+                                    "tab's job — when the person tells the worker to change what it "
+                                    "does or how often, this is how.",
+                                   "fn": lambda a: tool_update_cron(a)},
         "toggle_cron":            {"desc": "Enable/pause a CRON job.",
                                    "fn": lambda a: tool_toggle_cron(a["job_id"], a["enabled"])},
         "delete_current_cron_job":{"desc": "Delete the CRON job that is running now — ONLY when the "
@@ -9614,6 +9677,7 @@ def register_tool_params():
         "session_recall":         {"properties": {"session": {"type": "string"}, "query": {"type": "string"}, "k": {"type": "integer"}}, "required": ["session"]},
         "delete_cron":            {"properties": {"job_id": {"type": "string"}}, "required": ["job_id"]},
         "toggle_cron":            {"properties": {"job_id": {"type": "string"}, "enabled": {"type": "boolean"}}, "required": ["job_id", "enabled"]},
+        "update_cron":            {"properties": {"job_id": {"type": "string", "description": "Empty in a job's own tab = that tab's job."}, "instruction": {"type": "string", "description": "The new task, whole: it replaces the old one."}, "name": {"type": "string"}, "schedule_type": {"type": "string", "description": "interval | daily | weekly | fixed | startup"}, "interval_minutes": {"type": "integer"}, "daily_times": {"type": "array", "items": {"type": "string"}}, "weekdays": {"type": "array", "items": {"type": "integer"}}, "fixed_datetime": {"type": "string"}, "model": {"type": "string"}, "enabled": {"type": "boolean"}}},
         "delete_current_cron_job":{"properties": {}},
         "set_cron_context":       {"properties": {"job_id": {"type": "string"}}, "required": ["job_id"]},
         "disable_current_cron_job":{"properties": {}},
@@ -13521,6 +13585,7 @@ class AgentTurnReq(BaseModel):
     turn_id: Optional[str] = None
     session: Optional[str] = ""
     session_uuid: Optional[str] = ""
+    job_id: Optional[str] = ""
     log: bool = True
     endpoint: Optional[Dict[str, Any]] = None
     compact: bool = False
@@ -13702,7 +13767,8 @@ def _agent_turn_events(req):
     def _worker():
         _set_turn_session(req.session_uuid or "", req.code_project or "",
                           conv=req.session or "", rag_docs=req.rag_docs,
-                          images=_attached_images_of(req.messages))
+                          images=_attached_images_of(req.messages),
+                          job=req.job_id or "")
         _turn_snapshot_file(turn_id)
         try:
             with _orchestration_ctx(orch_ctx):

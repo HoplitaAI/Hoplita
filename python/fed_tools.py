@@ -12,6 +12,7 @@ import fed_adapters as fa
 import hoplita_children
 import hoplita_storage as hs
 import uuid as _uuid
+from urllib.parse import urlparse as _urlparse
 
 
 _get_store = None
@@ -6233,11 +6234,17 @@ def tool_fed_notices():
 
 
 def tool_fed_quota():
+    if not _store().has_identity():
+        return {"registered": False,
+                "error": "No identity. Register with fed_register first."}
     try:
-        _, server_url, token = _require_session()
+        store, server_url, token = _require_session()
     except Exception as e:
         return {"error": str(e)}
+    who = {"handle": store.data.get("handle") or "",
+           "server": _urlparse(server_url).hostname or server_url}
     try:
-        return fed.server_quota(server_url, token)
+        out = fed.server_quota(server_url, token)
     except fed.FedServerError as e:
-        return {"error": f"Quota fetch failed: {e}"}
+        return dict(who, error=f"Quota fetch failed: {e}")
+    return dict(out, **who) if isinstance(out, dict) else out

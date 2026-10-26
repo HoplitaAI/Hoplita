@@ -2154,74 +2154,21 @@ class ChatAssistantWindow(QMainWindow):
 
     def _refresh_plan(self):
         def work():
-            return self._mcp_call_json("fed_quota", {}, timeout=20)
+            ok, data, err = self._mcp_try("fed_quota", {}, timeout=20)
+            data = dict(data or {})
+            if not ok:
+                data.setdefault("error", err or "?")
+            return data
 
         def done(res):
-            try:
-                from federation_widget import plan_summary
-                summ = plan_summary(res if isinstance(res, dict) else {})
-            except Exception:
-                summ = None
-            self._show_plan_banner(summ)
+            self.fed_status.set_quota(res)
 
         self._bg(work, done)
 
-    def _show_plan_banner(self, summ):
-        self._plan_summ = summ
-        if summ is None:
-            self.plan_banner.setVisible(False)
-            self._plan_closed(False)
-            return
-        html, level, tier, full = summ
-        self._plan_state = (tier, level)
-        try:
-            from PyQt6.QtCore import QSettings
-            _d = str(QSettings("hoplita", "hoplita").value("plan_dismissed") or "")
-        except Exception:
-            _d = ""
-        d_tier, _, d_level = _d.partition("|")
-        if d_tier == tier and d_level.isdigit() and level <= int(d_level):
-            self.plan_banner.setVisible(False)
-            self._plan_closed(True)
-            return
-        c, bg = [("#c4b5fd", "#1f1b3d"), ("#fde68a", "#3a2c07"),
-                 ("#fecaca", "#450a0a")][level]
-        self.plan_banner.setStyleSheet(
-            f"#plan_banner {{ background:{bg}; border-bottom:1px solid {c}; }} "
-            f"#plan_banner QLabel {{ color:{c}; background:transparent; "
-            f"font-size:13px; }} "
-            f"#plan_banner QPushButton {{ color:{c}; background:transparent; "
-            f"border:none; font-size:13px; padding:0; }}")
-        if self._plan_text.text() != html:
-            self._plan_text.setText(html)
-        self.plan_banner.setToolTip(f"{full}<br><br>{t('fed.plan_tip')}")
-        self.plan_banner.setVisible(True)
-        self._plan_closed(False)
-
-    def _plan_closed(self, closed):
-        btn = getattr(self, "plan_btn", None)
-        if btn is not None:
-            btn.setVisible(closed)
-
-    def _dismiss_plan(self):
-        self.plan_banner.setVisible(False)
-        if not self._plan_state:
-            return
-        self._plan_closed(True)
-        try:
-            from PyQt6.QtCore import QSettings
-            QSettings("hoplita", "hoplita").setValue(
-                "plan_dismissed", f"{self._plan_state[0]}|{self._plan_state[1]}")
-        except Exception:
-            pass
-
-    def _undismiss_plan(self):
-        try:
-            from PyQt6.QtCore import QSettings
-            QSettings("hoplita", "hoplita").remove("plan_dismissed")
-        except Exception:
-            pass
-        self._show_plan_banner(getattr(self, "_plan_summ", None))
+    def _open_federation_tab(self):
+        panel = getattr(self, "federation_panel", None)
+        if panel is not None:
+            self.tabs.setCurrentWidget(panel)
 
     def _dismiss_motd(self):
         self.motd_banner.setVisible(False)
@@ -5819,14 +5766,6 @@ enabled = true
         self.stats_btn.clicked.connect(self._open_usage_dialog)
         hl.add(self.stats_btn, drop=6)
 
-        self.plan_btn = QPushButton("☁ Plan")
-        self.plan_btn.setObjectName("plan_btn")
-        self.plan_btn.setToolTip(t("plan.show"))
-        self.plan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.plan_btn.clicked.connect(self._undismiss_plan)
-        self.plan_btn.setVisible(False)
-        hl.row().addWidget(self.plan_btn)
-
 
 
         self.browser_headless = self.config.getboolean("BROWSER", "headless", fallback=False)
@@ -5870,26 +5809,10 @@ enabled = true
             "title": t("chat.tab_local"), "html": "", "history_ref": True,
         }]
         self._active_tab_id = "local"
-        self.plan_banner = QWidget()
-        self.plan_banner.setObjectName("plan_banner")
-        _pb = QHBoxLayout(self.plan_banner)
-        _pb.setContentsMargins(12, 4, 6, 4)
-        _pb.setSpacing(8)
-        self._plan_who = QLabel("☁")
-        self._plan_who.setObjectName("plan_who")
-        _pb.addWidget(self._plan_who)
-        self._plan_text = QLabel("")
-        _pb.addWidget(self._plan_text, 1)
-        _close = QPushButton("✕")
-        _close.setFixedSize(24, 22)
-        _close.setCursor(Qt.CursorShape.PointingHandCursor)
-        _close.setToolTip(t("plan.dismiss"))
-        _close.clicked.connect(self._dismiss_plan)
-        _pb.addWidget(_close)
-        self.plan_banner.setVisible(False)
-        parent_layout.addWidget(self.plan_banner)
-        self._plan_state = None
-        self._plan_summ = None
+        from fed_status_line import FedStatusLine
+        self.fed_status = FedStatusLine()
+        self.fed_status.clicked.connect(self._open_federation_tab)
+        parent_layout.addWidget(self.fed_status)
         self._plan_timer = QTimer(self)
         self._plan_timer.timeout.connect(self._refresh_plan)
         self._plan_timer.start(60000)
@@ -6375,10 +6298,12 @@ enabled = true
         self._start_work_pulse()
 
     def _agents_cards_for_active(self):
-        act = self._tab_by_id(self._active_tab_id) or {}
+        return self._agents_cards_for(self._tab_by_id(self._active_tab_id) or {})
+
+    def _agents_cards_for(self, act):
         kind = act.get("kind")
         if kind in ("local", "cron"):
-            ctx = self._chat_ctxs.get(self._active_tab_id)
+            ctx = self._chat_ctxs.get(act.get("id"))
             return list(getattr(ctx, "agents", None) or [])
         if kind in ("green", "red") and act.get("peer"):
             card = (getattr(self, "_session_cards", {}) or {}).get(act["peer"])
@@ -6770,8 +6695,6 @@ enabled = true
             if c is not None:
                 if getattr(c, "model_override", ""):
                     foot.append("🧠 " + c.model_override)
-                if getattr(c, "agents", None):
-                    foot.append(t("ovw.agents", n=len(c.agents)))
                 if getattr(c, "msg_queue", None):
                     foot.append(t("ovw.queued", n=len(c.msg_queue)))
                 _pin = getattr(c, "pinned_device", None)
@@ -6789,7 +6712,8 @@ enabled = true
                 "job": getattr(c, "job_name", "") if c is not None else "",
                 "next_run": self._ovw_when(job.get("next") or "") if job else "",
                 "goal": getattr(c, "goal", "") if c is not None else "",
-                "doing": doing, "last": last, "foot": foot})
+                "doing": doing, "last": last, "foot": foot,
+                "agents": self._agents_cards_for(tab)})
         return rows
 
     def _toggle_council_view(self):
@@ -7958,13 +7882,20 @@ enabled = true
         if tid is None or self._chat_ctxs.get(tid) is None:
             tid = self._make_local_tab(name, switch=False)
         ctx = self._chat_ctxs[tid]
+        _tab = self._tab_by_id(tid)
+        if _tab is not None and getattr(ctx, "job_name", "") \
+                and _tab.get("title") == ctx.job_name and name != ctx.job_name:
+            _tab["title"] = ctx.title = name
         ctx.job_id = job.get("id") or ""
         ctx.job_name = name
         instr = job.get("instruction") or ""
         if instr.startswith(self._ALERT_MARK):
             instr = instr[len(self._ALERT_MARK):]
             ctx.job_alert = True
-        msg = t("job.run_msg", name=name) + "\n\n" + instr
+        head = t("job.run_msg", name=name, id=ctx.job_id)
+        if any(str(m[0]).startswith(head) for m in ctx.msg_queue):
+            return tid
+        msg = head + "\n\n" + instr
         ctx.msg_queue.append((msg, []))
         self._render_chat_tabs()
         if tid == self._active_tab_id:
@@ -16394,7 +16325,7 @@ enabled = true
                         result = json.dumps(data, ensure_ascii=False)
             except Exception as e:
                 print(f"[RAG] Merge error: {e}")
-        if tool_name in ("delete_current_cron_job", "disable_current_cron_job", "delete_cron", "toggle_cron", "add_cron"):
+        if tool_name in ("delete_current_cron_job", "disable_current_cron_job", "delete_cron", "toggle_cron", "add_cron", "update_cron"):
             self.signals.refresh_cron.emit()
         if tool_name == "add_note":
             self.signals.refresh_notes.emit()
@@ -17168,6 +17099,7 @@ enabled = true
             "inject": True,
             "pinned_skills": [dict(sk) for sk in self._pinned_skills],
             "code_project": getattr(self._turn_ctx(), "code_project", "") or "",
+            "job_id": getattr(self._turn_ctx(), "job_id", "") or "",
             "rag_docs": self._rag_docs_count(),
             "endpoint": endpoint,
         }, max_iterations=max_iterations, model=model)
