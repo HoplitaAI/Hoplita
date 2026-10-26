@@ -97,39 +97,42 @@ def make_shortcuts(prefix, venv_dir):
     return []
 
 
+_LINUX_DESKTOP = "HOPLITA.desktop"
+_LINUX_OLD = ("HOPLITA-MCP.desktop", "HOPLITA-GUI.desktop")
+
+
 def _make_linux_desktop(desk, prefix, py, pyw, mcp, gui, icon):
     created = []
-    log = os.path.join(prefix, "mcp.log")
-    mcp_exec = (f'sh -c \'cd "{prefix}" && HOPLITA_GUI_PROMPT=1 "{py}" hoplita-mcp.py '
-                f'>> "{log}" 2>&1\'')
-    entries = [
-        ("HOPLITA-MCP.desktop", "HOPLITA MCP Server", mcp_exec,
-         icon if os.path.exists(icon) else "utilities-terminal"),
-        ("HOPLITA-GUI.desktop", "HOPLITA",
-         f'"{py}" "{gui}"', icon if os.path.exists(icon) else "applications-chat"),
-    ]
-    for fname, name, exec_cmd, ic in entries:
-        path = os.path.join(desk, fname)
-        content = (
-            "[Desktop Entry]\n"
-            "Version=1.0\nType=Application\n"
-            f"Name={name}\n"
-            f"Exec={exec_cmd}\n"
-            f"Icon={ic}\n"
-            f"Path={prefix}\n"
-            "Terminal=false\nCategories=Utility;\n")
+    path = os.path.join(desk, _LINUX_DESKTOP)
+    launcher = os.path.join(prefix, "hoplita_launch.py")
+    content = (
+        "[Desktop Entry]\n"
+        "Version=1.0\nType=Application\n"
+        "Name=HOPLITA\n"
+        f'Exec="{py}" "{launcher}"\n'
+        f"Icon={icon if os.path.exists(icon) else 'applications-chat'}\n"
+        f"Path={prefix}\n"
+        "Terminal=false\nCategories=Utility;\n")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.chmod(path, 0o755)
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-            os.chmod(path, 0o755)
+            subprocess.run(["gio", "set", path, "metadata::trusted", "true"],
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
+        created.append(path)
+    except Exception as e:
+        warn(f"could not create {_LINUX_DESKTOP}: {e}")
+        return created
+    for old in _LINUX_OLD:
+        p = os.path.join(desk, old)
+        if os.path.exists(p) and _shortcut_is_ours(p, prefix):
             try:
-                subprocess.run(["gio", "set", path, "metadata::trusted", "true"],
-                               capture_output=True, timeout=5)
+                os.remove(p)
             except Exception:
                 pass
-            created.append(path)
-        except Exception as e:
-            warn(f"could not create {fname}: {e}")
     return created
 
 
@@ -369,13 +372,13 @@ def _prune_stale(prefix, shipped):
 
 
 _OURS_DIRS = ("venv", "lang", "icons", "cli", "docs", "bin", "wb_canvas",
-              "wb_instructions", "__pycache__")
-_OURS_FILES = ("config.ini.example", "README.md", MANIFEST)
+              "wb_instructions", "council_view", "__pycache__")
+_OURS_FILES = ("config.ini.example", "README.md", "requirements.txt", MANIFEST)
 
 
 def _shortcut_paths():
     desk = desktop_dir()
-    names = {"Linux": ("HOPLITA-MCP.desktop", "HOPLITA-GUI.desktop"),
+    names = {"Linux": (_LINUX_DESKTOP,) + _LINUX_OLD,
              "Darwin": (_MAC_APP,) + _MAC_OLD,
              "Windows": ("HOPLITA.lnk",)}.get(platform.system(), ())
     out = [os.path.join(desk, n) for n in names]
@@ -757,7 +760,7 @@ def copy_payload(prefix):
         if f.endswith(".py"):
             shutil.copy(os.path.join(SRC_DIR, "python", f), prefix)
             shipped.append(f)
-    for d in ("wb_canvas", "wb_instructions"):
+    for d in ("wb_canvas", "wb_instructions", "council_view"):
         src = os.path.join(SRC_DIR, "python", d)
         if os.path.isdir(src):
             shutil.copytree(src, os.path.join(prefix, d), dirs_exist_ok=True)
@@ -958,7 +961,7 @@ def main():
         if args.diffr:
             install_diffr(prefix)
         _report_new_settings(prefix)
-        if IS_MAC and not args.no_shortcuts:
+        if (IS_MAC or IS_LINUX) and not args.no_shortcuts:
             make_shortcuts(prefix, os.path.join(prefix, "venv"))
         step("Clearing bytecode caches")
         n = 0
@@ -1099,13 +1102,9 @@ def main():
         print("\nOpen HOPLITA: double-click HOPLITA on the desktop, or ⌘ Space → HOPLITA.")
         print("It asks for the vault password in a window (the first time you choose it),")
         print("then opens. No terminal is needed.")
-    elif shortcuts and IS_WINDOWS:
+    elif shortcuts:
         print("\nOpen HOPLITA with the HOPLITA shortcut on the desktop: it asks for the")
         print("vault password in a window (the first time you choose it), then opens.")
-    elif shortcuts:
-        print("\nYou have 2 desktop shortcuts:")
-        print("  • HOPLITA MCP Server  → start it FIRST (asks for the vault password)")
-        print("  • HOPLITA             → the GUI (start it afterwards)")
     else:
         homehint = ""
         if args.prefix and prefix != default_prefix():

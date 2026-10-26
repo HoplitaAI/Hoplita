@@ -137,15 +137,18 @@ To move to another server, leave, then register again on the new one (step
 
 ### Your plan
 
-A band over the chat, **☁ YOUR PLAN**, shows what the server allows your
-identity and how much of it you use: the plan's name, your synced copy, mail
-in flight (what you sent that nobody has collected yet), your mailbox, your
-contacts and your children. `∞` is no limit. The band turns amber when any of
-them reaches 80 % and red when one is full; at that point the server refuses
-what does not fit. The server's operator sets the plan.
+A thin line over the chat tabs, **☁**, shows what the server allows your
+identity and how much of it you use: the plan's name, your synced copy, your
+contacts and your children. `∞` is no limit. Two more counts join it only when
+they near their limit: **sent, not collected** (what you sent your contacts,
+messages, shares and session turns, that they have not picked up yet) and
+**to collect** (what waits on the server for you). Hover over the line for the
+whole breakdown.
 
-**✕** hides the band. It comes back when your plan changes or when your usage
-reaches a worse level. From the chat: «what is my quota?» (`fed_quota`).
+The line turns amber when any count reaches 80 % and red when one is full; at
+that point the server refuses what does not fit. The server's operator sets
+the plan. **✕** hides it until your plan changes or your usage reaches a worse
+level. From the chat: «what is my quota?» (`fed_quota`).
 
 ## 3. Keep your own machines in sync
 
@@ -814,7 +817,7 @@ refuses on such a server, because the container would have no model.
 | *⚠️ Your last automatic upload didn't go through…* (at start) | A background upload of the last session failed, for the reason that follows | Press **⇈ Push** |
 | *🔑 Sync: couldn't decrypt the server snapshot…* | This machine has a different identity from the one that pushed | Use the same identity file on both machines (step 2) |
 | *⚠ Sync: the server refused the upload twice…* | Two machines pushed at the same moment | Press **⇊ Pull**, then **⇈ Push** |
-| *🚫 Quota exceeded (…)* | Your plan's limit on the server: the **☁ YOUR PLAN** band shows which one, in red | Prune heavy stores (`fed_sync_breakdown`), or ask the server's operator |
+| *🚫 Quota exceeded (…)* | Your plan's limit on the server: the **☁** line over the chat shows which one, in red | Prune heavy stores (`fed_sync_breakdown`), or ask the server's operator |
 | *⚠️ Your last upload on close didn't go through…* | The push on close failed | Press **⇈ Push** |
 | *The folder '…' is marked LOCAL-ONLY…* | The folder is locked (5.7) | Lift the lock first, if you really want to share it |
 | *Appointment rejected — You don't have permission…* | The recipient's **Appointments** permission for you is **no** or not set | Ask them to set it to auto-accept or review |

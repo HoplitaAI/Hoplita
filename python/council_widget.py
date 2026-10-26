@@ -60,6 +60,8 @@ class CouncilWidget(QWidget):
     bench_changed = pyqtSignal(dict)
 
     def __init__(self, parent=None):
+        if not os.path.isfile(_PAGE):
+            raise FileNotFoundError(_PAGE)
         super().__init__(parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)

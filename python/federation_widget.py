@@ -49,11 +49,11 @@ def plan_summary(data):
     if (data or {}).get("error") or not (lim or use):
         return None
     rows = [("fed.plan_sync", use.get("sync_bytes"), lim.get("max_sync_bytes"), True),
-            ("fed.plan_outbox", use.get("outbox_bytes"), lim.get("max_inbox_bytes"), True),
-            ("fed.plan_inbox", use.get("inbox_envelopes"), lim.get("max_inbox_envelopes"), False),
             ("fed.plan_contacts", use.get("contacts"), lim.get("max_contacts"), False),
-            ("fed.plan_children", use.get("children"), lim.get("max_children"), False)]
-    parts, level = [], 0
+            ("fed.plan_children", use.get("children"), lim.get("max_children"), False),
+            ("fed.plan_outbox", use.get("outbox_bytes"), lim.get("max_inbox_bytes"), True),
+            ("fed.plan_inbox", use.get("inbox_envelopes"), lim.get("max_inbox_envelopes"), False)]
+    parts, line, level = [], [], 0
     for key, u, l, size in rows:
         u = int(u or 0)
         l = int(l or 0)
@@ -62,10 +62,14 @@ def plan_summary(data):
         level = max(level, lv)
         cap = (_size(l) if size else str(l)) if l else "∞"
         val = f"{_size(u) if size else u} / {cap}"
-        parts.append(f"{t(key)} <b>{val}</b>" if lv else f"{t(key)} {val}")
+        part = f"{t(key)} <b>{val}</b>" if lv else f"{t(key)} {val}"
+        parts.append(part)
+        if lv or key not in ("fed.plan_outbox", "fed.plan_inbox"):
+            line.append(part)
     tier = data.get("tier") or "?"
-    return (f"{t('fed.plan_tier', tier=tier)}  ·  " + "  ·  ".join(parts),
-            level, tier)
+    head = t("fed.plan_tier", tier=tier)
+    return (f"{head}  ·  " + "  ·  ".join(line), level, tier,
+            f"{head}<br>" + "<br>".join(parts))
 
 
 class _PostWorker(QThread):

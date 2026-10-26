@@ -64,8 +64,8 @@ an error saying the key is missing.
 
 ## 3. The vault password
 
-The first time the server starts (the **HOPLITA MCP Server** launcher, or the
-single **HOPLITA** shortcut on Windows) it asks for a password. That first
+The first time the server starts (the **HOPLITA** shortcut on the desktop) it
+asks for a password. That first
 password creates the encrypted database where notes, tasks, credentials,
 memory and settings live; every later start asks for it again. **Keep it
 safe**: the data is encrypted with it.

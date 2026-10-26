@@ -43,9 +43,9 @@ cd Hoplita
 python3 install.py
 ```
 
-The installer puts two launchers on the desktop: **HOPLITA MCP Server** (start
-it first; it asks for the vault password in a small window) and **HOPLITA**,
-the window.
+The installer puts one launcher on the desktop, **HOPLITA**: it starts the
+server (it asks for the vault password in a small window) and then the window.
+If the server is already running, it opens only the window.
 
 If the canvas stays blank or the tray icon does not show, the system is missing
 the libraries Qt's web engine uses. `python3 install.py --system-libs`

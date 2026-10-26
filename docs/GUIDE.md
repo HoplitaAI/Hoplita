@@ -147,11 +147,12 @@ go build -o dist/hoplita-cli .
 
 ### Shortcuts
 
-The installer creates desktop shortcuts. On Linux (`.desktop`) there are two:
-**HOPLITA MCP Server** — start it first; it asks for the vault password in a dialog —
-and **HOPLITA**, the GUI. On macOS (`HOPLITA.app`) and Windows (`HOPLITA.lnk`) there is
-one: it runs `hoplita_launch.py` with no terminal, which starts the MCP (the vault
-password is asked in a dialog) and then the GUI. On macOS the app goes to
+The installer creates one desktop shortcut, **HOPLITA** (`HOPLITA.desktop` on
+Linux, `HOPLITA.app` on macOS, `HOPLITA.lnk` on Windows). It runs
+`hoplita_launch.py` with no terminal, which starts the MCP (the vault password is
+asked in a dialog) and then the GUI; an MCP that already answers is used as it is,
+and only the GUI opens. On Linux the MCP's log is `mcp.log` in the install folder,
+and an update replaces the two shortcuts an earlier install made (MCP and GUI). On macOS the app goes to
 `~/Applications` — Spotlight (⌘ Space → HOPLITA) and Launchpad find it — with a link on
 the desktop; drag it to the Dock to keep it there. An older install's `.command` files
 are replaced by it.
