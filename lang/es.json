@@ -2136,5 +2136,6 @@
   "ovw.attempt": "intento {n}",
   "ovw.remote": "remoto",
   "ovw.queued": "{n} en cola",
-  "ovw.empty": "aún no ha dicho nada"
+  "ovw.empty": "aún no ha dicho nada",
+  "canvas.new_from": "Novedad en el lienzo, de «{tab}». Ábrelo cuando puedas."
 }

@@ -855,6 +855,13 @@ board draws them: a light per agent (amber and pulsing while it works, green
 done, red failed), where it runs, its role and model, and the rail of its own
 steps with the one it is on. A card opens its tab.
 
+Work in one tab never takes the screen from you. The canvas comes to the
+front only for a canvas you open, or for what the tab you are in draws while
+nothing is half-typed in its box; anything else (another tab drawing, a
+remote session's canvas) leaves you where you are and makes the Canvas tab's
+icon glow amber, its tooltip naming the tab that drew, until you open it.
+A task finishing in another tab does not move your view either.
+
 ## Timeout doctrine — no total clocks
 
 A timeout measures **one action**, never a job. If an action overruns its time,

@@ -827,7 +827,8 @@ class ShrinkRow(QWidget):
 
 class WorkerSignals(QObject):
     message = pyqtSignal(str, str)
-    wb_open = pyqtSignal(str)
+    wb_open = pyqtSignal(str, str)
+    canvas_painted = pyqtSignal(str)
     message_tab = pyqtSignal(str, str, str)
     stream_token = pyqtSignal(str, str)
     stream_done = pyqtSignal(str)
@@ -837,9 +838,9 @@ class WorkerSignals(QObject):
     refresh_notes = pyqtSignal()
     curate_done = pyqtSignal(dict)
     show_alert = pyqtSignal(str, str)
-    switch_to_agents = pyqtSignal()
+    switch_to_agents = pyqtSignal(str)
     plan_ack_close = pyqtSignal(object)
-    switch_to_chat = pyqtSignal()
+    switch_to_chat = pyqtSignal(str)
     task_state = pyqtSignal(str, bool)
     queue_changed = pyqtSignal(str)
     ensure_cron_tab = pyqtSignal()
@@ -1753,7 +1754,8 @@ class ChatAssistantWindow(QMainWindow):
 
         self.signals = WorkerSignals()
         self.signals.message.connect(self._on_thread_message)
-        self.signals.wb_open.connect(self._wb_show)
+        self.signals.wb_open.connect(self._on_wb_open)
+        self.signals.canvas_painted.connect(self._on_canvas_painted)
         self.signals.message_tab.connect(self._on_thread_message_tab)
         self.signals.ensure_cron_tab.connect(self._ensure_cron_tab)
         self.signals.run_job_tab.connect(self._run_job_in_tab)
@@ -2524,7 +2526,7 @@ class ChatAssistantWindow(QMainWindow):
                 _canvas_html = ev.get("html", "")
                 if ev.get("append") and getattr(self, "_last_canvas_html", ""):
                     _canvas_html = self._last_canvas_html + _canvas_html
-                self._render_canvas_html(_canvas_html)
+                self._render_canvas_html(_canvas_html, origin=tid)
                 self._append_html_to_tab(tid, self._chat_frag(
                     t("fed.session_canvas_rendered"), "#94a3b8", agent_label))
             elif et in ("error", "cancelled"):
@@ -2655,7 +2657,7 @@ class ChatAssistantWindow(QMainWindow):
             return
         self.add_message(t("canvas.exported", n=len(saved), path=saved[-1]), "system")
 
-    def _render_canvas_html(self, html):
+    def _render_canvas_html(self, html, origin=None):
         if self.dashboard is None or not (html or "").strip():
             return
         _prev = getattr(self, "_last_canvas_html", "")
@@ -2668,9 +2670,80 @@ class ChatAssistantWindow(QMainWindow):
         except Exception:
             pass
         self.dashboard.render_html(html)
-        idx = self.tabs.indexOf(getattr(self, "_dashboard_tab", None) or self.dashboard)
-        if idx >= 0:
+        if origin is None:
+            origin = getattr(self._tls, "tab_id", None) or ""
+        self.signals.canvas_painted.emit(origin)
+
+    def _canvas_tab_index(self):
+        return self.tabs.indexOf(getattr(self, "_dashboard_tab", None) or self.dashboard)
+
+    def _emitting_tab(self):
+        return getattr(self._tls, "tab_id", None) or self._active_tab_id
+
+    def _may_take_view(self, tab_id):
+        if not tab_id or tab_id != self._active_tab_id:
+            return False
+        if self.tabs.currentIndex() not in (0, self._canvas_tab_index()):
+            return False
+        entry = getattr(self, "entry", None)
+        try:
+            return not (entry is not None and entry.toPlainText().strip())
+        except RuntimeError:
+            return True
+
+    def _on_canvas_painted(self, origin):
+        idx = self._canvas_tab_index()
+        if idx < 0 or self.tabs.currentIndex() == idx:
+            return
+        if not origin or self._may_take_view(origin):
             self.tabs.setCurrentIndex(idx)
+            return
+        tab = self._tab_by_id(origin) or {}
+        self.tabs.setTabToolTip(idx, t("canvas.new_from",
+                                       tab=tab.get("title") or origin))
+        self._canvas_glow_on = True
+        tmr = getattr(self, "_canvas_glow_timer", None)
+        if tmr is None:
+            tmr = QTimer(self)
+            tmr.setInterval(90)
+            tmr.timeout.connect(self._canvas_glow_tick)
+            self._canvas_glow_timer = tmr
+        if not tmr.isActive():
+            tmr.start()
+
+    _CANVAS_GLOW_FRAMES = 12
+    _CANVAS_GLOW_S = 1.6
+
+    def _canvas_glow_tick(self):
+        import math
+        idx = self._canvas_tab_index()
+        if idx < 0 or not getattr(self, "_canvas_glow_on", False):
+            self._canvas_glow_stop()
+            return
+        icons = getattr(self, "_canvas_glow_icons", None)
+        if icons is None:
+            n = self._CANVAS_GLOW_FRAMES
+            a, b = QColor("#94a3b8"), QColor("#f5b800")
+            icons = []
+            for i in range(n):
+                f = i / float(n - 1)
+                c = QColor(round(a.red() + (b.red() - a.red()) * f),
+                           round(a.green() + (b.green() - a.green()) * f),
+                           round(a.blue() + (b.blue() - a.blue()) * f))
+                icons.append(self._svg_icon("tab_canvas", c.name(), 18))
+            self._canvas_glow_icons = icons
+        w = 0.5 - 0.5 * math.cos(2 * math.pi * time.time() / self._CANVAS_GLOW_S)
+        self.tabs.setTabIcon(idx, icons[round(w * (len(icons) - 1))])
+
+    def _canvas_glow_stop(self):
+        self._canvas_glow_on = False
+        tmr = getattr(self, "_canvas_glow_timer", None)
+        if tmr is not None:
+            tmr.stop()
+        idx = self._canvas_tab_index()
+        if idx >= 0:
+            self.tabs.setTabIcon(idx, self._svg_icon("tab_canvas", "#94a3b8", 18))
+            self.tabs.setTabToolTip(idx, "")
 
     def _is_local_child(self, peer):
         cache = getattr(self, "_fed_cache", {}) or {}
@@ -3380,9 +3453,12 @@ class ChatAssistantWindow(QMainWindow):
         try: self.refresh_notes_lists()
         except: pass
 
-    def _on_switch_to_agents(self):
+    def _on_switch_to_agents(self, tab_id=""):
         if getattr(self, "agents_panel", None) is None \
                 or getattr(self, "_chat_stack", None) is None:
+            return
+        if tab_id and tab_id != self._active_tab_id:
+            self._render_chat_tabs()
             return
         _ctx = self._chat_ctxs.get(self._active_tab_id)
         if getattr(_ctx, "pending_ack", None) is None \
@@ -3972,6 +4048,10 @@ class ChatAssistantWindow(QMainWindow):
         self._code_activity(7, force=True)
         self._code_wb_draw("changes")
 
+    def _on_wb_open(self, wid, tab_id):
+        if self._may_take_view(tab_id):
+            self._wb_show(wid)
+
     def _wb_show(self, wid=""):
         wb = getattr(self, "whiteboard", None)
         if wb is None:
@@ -4058,7 +4138,15 @@ class ChatAssistantWindow(QMainWindow):
             cur.setPosition(bb.position() + max(0, bb.length() - 1), cur.MoveMode.KeepAnchor)
             self.code_editor.setTextCursor(cur)
 
-    def _on_switch_to_chat(self):
+    def _on_switch_to_chat(self, tab_id=""):
+        if tab_id:
+            if tab_id != self._active_tab_id:
+                return
+            if getattr(self, "_chat_stack", None) is not None:
+                self._chat_stack.setCurrentIndex(0)
+                self._sync_input_placeholder()
+                self._render_chat_tabs()
+            return
         if getattr(self, "_chat_stack", None) is not None:
             self._chat_stack.setCurrentIndex(0)
             self._sync_input_placeholder()
@@ -5142,6 +5230,9 @@ enabled = true
 
     def _on_tab_changed(self, index):
         self._maybe_refresh_memory(index)
+        if index >= 0 and index == self._canvas_tab_index() \
+                and getattr(self, "_canvas_glow_on", False):
+            self._canvas_glow_stop()
 
     def _on_tab_clicked(self, index):
         self._maybe_refresh_memory(index)
@@ -7050,7 +7141,7 @@ enabled = true
                 {"role": "assistant",
                  "content": (final or "") + (("\n\n" + _rec) if _rec else "")})
             self.thread_msg(final, "assistant")
-            self.signals.switch_to_chat.emit()
+            self.signals.switch_to_chat.emit(self._emitting_tab())
         except Exception as e:
             self.thread_msg(t("council.error", e=e), "error")
             print(f"[COUNCIL] error: {e}", file=sys.stderr)
@@ -7810,7 +7901,7 @@ enabled = true
                 self.add_message(t("canvas.load_fail"), "error")
                 return
             self._canvas_uuid = c.get("uuid")
-            self._render_canvas_html(c["html"])
+            self._render_canvas_html(c["html"], origin="")
             self.add_message(t("canvas.restored", title=c.get("title", "")), "system")
 
         self._bg(work, done)
@@ -16451,7 +16542,7 @@ enabled = true
                 self.thread_msg(f"   \u2022 [{st.get('id')}] {str(st.get('goal',''))[:50]} "
                                 f"({st.get('role','')}){mdl}{deps}", "system")
             if getattr(self, "agents_panel", None):
-                self.signals.switch_to_agents.emit()
+                self.signals.switch_to_agents.emit(self._emitting_tab())
         elif et == "subtask_start":
             mdl = f" \U0001f9e0{ev['model']}" if ev.get("model") else " \U0001f9e0base"
             self.thread_msg(f"\u25b6 [{ev.get('id')}] {str(ev.get('goal',''))[:50]} "
@@ -16475,7 +16566,7 @@ enabled = true
         elif et == "synthesis_done":
             self.thread_msg(t("msg.synthesizing_final"), "system")
         elif et in ("complete", "cancelled"):
-            self.signals.switch_to_chat.emit()
+            self.signals.switch_to_chat.emit(self._emitting_tab())
 
     def _remote_target_names(self):
         cache = getattr(self, "_fed_cache", {}) or {}
@@ -17063,7 +17154,7 @@ enabled = true
                 self.conversation_history.append(
                     {"role": "assistant", "content": _hist or final})
                 self.thread_msg(final, "assistant")
-            self.signals.switch_to_chat.emit()
+            self.signals.switch_to_chat.emit(self._emitting_tab())
         except Exception as e:
             self.thread_msg(t("msg.multi_error", e=e), "error")
             print(f"[MULTI] error: {e}", file=sys.stderr)
@@ -17342,7 +17433,7 @@ enabled = true
                                           **(ev.get("args") or {})), "system")
                         if ev.get("key") == "wb.open":
                             self.signals.wb_open.emit(
-                                str((ev.get("args") or {}).get("id") or ""))
+                                str((ev.get("args") or {}).get("id") or ""), tab)
                         if ev.get("key") == "office.view":
                             self._office_view_to_canvas(ev.get("args") or {})
                         if ev.get("key") == "image.generated":

@@ -2136,5 +2136,6 @@
   "ovw.attempt": "attempt {n}",
   "ovw.remote": "remote",
   "ovw.queued": "{n} queued",
-  "ovw.empty": "nothing said yet"
+  "ovw.empty": "nothing said yet",
+  "canvas.new_from": "New on the canvas, from \"{tab}\". Open it when you can."
 }
