@@ -1223,12 +1223,12 @@ class CredentialManager(EncryptedStorageManager):
 
     def add_credential(self, site, username="", password="", url="", notes="",
                        totp_secret="", kind="web", secret="", number="",
-                       expiry="", cvv="", holder=""):
+                       expiry="", cvv="", holder="", smtp=""):
         kind = kind if kind in self.KINDS else "web"
         campos = {"username": username, "password": password, "url": url,
                   "notes": notes, "totp_secret": totp_secret, "kind": kind,
                   "secret": secret, "number": number, "expiry": expiry,
-                  "cvv": cvv, "holder": holder,
+                  "cvv": cvv, "holder": holder, "smtp": smtp,
                   "updated_at": datetime.now().isoformat()}
         for cred in self.data["credentials"]:
             if cred["site"].lower() == site.lower():
@@ -1283,7 +1283,9 @@ class CredentialManager(EncryptedStorageManager):
         elif kind == "mail":
             out["username"] = cred.get("username", "")
             out["has_password"] = bool(cred.get("password"))
-            out["hint"] = f"mail_list / mail_read / mail_move with account='{cred['site']}'"
+            out["smtp"] = cred.get("smtp", "")
+            out["hint"] = (f"mail_list / mail_read / mail_move / mail_send with "
+                           f"account='{cred['site']}'")
         elif kind == "card":
             num = (cred.get("number") or "").replace(" ", "")
             out["last4"] = num[-4:] if len(num) >= 4 else ""
@@ -5046,6 +5048,12 @@ def tool_mail(op, a):
         if op == "move":
             return _hm.move_messages(cred, a.get("uids"), a.get("to"),
                                      a.get("folder") or "INBOX")
+        if op == "send":
+            return _hm.send_message(cred, a.get("to"), a.get("subject") or "",
+                                    a.get("body") or "", a.get("cc"), a.get("bcc"),
+                                    a.get("html"), a.get("attachments"),
+                                    a.get("reply_to_uid"), a.get("folder") or "INBOX",
+                                    a.get("from_name"), a.get("save_sent", True) is not False)
     except _hm.MailError as e:
         return {"error": str(e), "account": cred.get("site")}
     return {"error": f"unknown mail operation '{op}'"}
@@ -9228,6 +9236,12 @@ def register_tools():
                                     "Report what you moved, sender and subject, so the user can ask for "
                                     "it back.",
                                    "fn": lambda a: tool_mail("move", a)},
+        "mail_send":              {"desc": "Send an email from the mailbox's address, now: to/cc/bcc, a subject and a "
+                                    "plain-text body (html optional), files on disk attached by path. To answer a "
+                                    "message give reply_to_uid (and its folder): it is threaded, 'Re:' and the "
+                                    "recipient are taken from it unless given. A copy is kept in Sent. There is no "
+                                    "draft and no undo: send what the user or your task asks you to send.",
+                                   "fn": lambda a: tool_mail("send", a)},
         "office_info":            {"desc": "Read a Word, Excel or PowerPoint file (.docx/.xlsx/.pptx and their macro "
                                     "twins): a document's blocks by index (paragraphs with their style, tables), a "
                                     "workbook's sheets and a cell range with values AND formulas, a deck's slides with "
@@ -9734,6 +9748,19 @@ def register_tool_params():
                                                   "to": {"type": "string", "description": "Destination: a folder name or a role (junk, trash, inbox, archive)."},
                                                   "folder": {"type": "string", "description": "Where the uids are now. Default INBOX."}},
                                    "required": ["uids", "to"]},
+        "mail_send":              {"properties": {"account": {"type": "string", "description": "Credential name of kind 'mail'; optional with one mailbox."},
+                                                  "to": {"type": "array", "items": {"type": "string"}, "description": "Recipients ('a@b.c' or 'Name <a@b.c>'). Optional with reply_to_uid."},
+                                                  "subject": {"type": "string", "description": "One line. Optional with reply_to_uid ('Re: ' + the original)."},
+                                                  "body": {"type": "string", "description": "The message, plain text."},
+                                                  "cc": {"type": "array", "items": {"type": "string"}},
+                                                  "bcc": {"type": "array", "items": {"type": "string"}},
+                                                  "html": {"type": "string", "description": "An HTML version of the body, optional."},
+                                                  "attachments": {"type": "array", "items": {"type": "string"}, "description": "Paths of files to attach."},
+                                                  "reply_to_uid": {"type": "integer", "description": "uid (from mail_list) of the message this answers."},
+                                                  "folder": {"type": "string", "description": "Folder of reply_to_uid. Default INBOX."},
+                                                  "from_name": {"type": "string", "description": "Display name for the sender."},
+                                                  "save_sent": {"type": "boolean", "description": "Keep a copy in Sent. Default true."}},
+                                   "required": ["body"]},
         "get_otp":                {"properties": {"site": {"type": "string"}}, "required": ["site"]},
         "list_credentials":       {"properties": {}},
         "fill_credentials":       {"properties": {"site": {"type": "string"}}, "required": ["site"]},
@@ -11435,7 +11462,7 @@ _FAMILY_BLURB = {
     "system": "shell, files on disk, PDFs and alerts — and yourself: your own config.ini (read, and change with the person's yes) and your own manual",
     "code": "read/edit/search code in the open project, and git",
     "web": "search and browse the internet",
-    "mail": "the user's mailboxes over IMAP: folders, list, read, move to junk/trash and back (no permanent delete)",
+    "mail": "the user's mailboxes: folders, list, read, move to junk/trash and back (no permanent delete), send",
     "desktop": "the person's screen: windows, elements, clicks, keys, captures",
     "notes": "the user's saved notes and skills",
     "memory": "the user's facts, lessons, experience and recall",

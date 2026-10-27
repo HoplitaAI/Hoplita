@@ -432,8 +432,9 @@ Adding and deleting credentials is manual, from the GUI's credentials dialog (th
 | `mail_list` | The newest messages of a folder, searched by date, sender, subject or text, with a snippet each |
 | `mail_read` | One message whole: its text and its attachments |
 | `mail_move` | Messages to another folder or to junk / trash; there is no permanent delete, and a move is undone by moving them back |
+| `mail_send` | Send from the mailbox: to/cc/bcc, files attached, or a threaded reply to a message; a copy kept in Sent |
 
-A mailbox is a credential of kind **Mailbox (IMAP)**: address, password and IMAP server (left empty, it is taken from the address). Gmail needs an app password (2-Step Verification, then myaccount.google.com/apppasswords); Outlook and Hotmail require OAuth over IMAP and are not supported. With a CRON job in its own tab ("every 5 minutes, move the spam out of my inbox") the mailbox gets a worker you can talk to: tell it in its tab that a sender is not spam, and it changes its own job and puts the messages back.
+A mailbox is a credential of kind **Mailbox (IMAP)**: address, password, IMAP and SMTP server (left empty, they are taken from the address). Gmail needs an app password (2-Step Verification, then myaccount.google.com/apppasswords); Outlook and Hotmail require OAuth over IMAP and are not supported. With a CRON job in its own tab ("every 5 minutes, move the spam out of my inbox") the mailbox gets a worker you can talk to: tell it in its tab that a sender is not spam, and it changes its own job and puts the messages back; tell it to answer one, and it sends the reply. Sending asks no confirmation: whether a tab may send is decided in the tool firewall, where `mail_send` can be turned off globally or per tab.
 
 ### ⏰ CRON
 

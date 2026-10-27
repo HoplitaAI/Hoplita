@@ -14,7 +14,8 @@ except Exception:
 
 _SYSTEM = {"run_command", "edit_file", "code_write_file", "code_apply_patch",
            "call_api", "screenshot_web", "browse_web",
-           "hands_click", "hands_type", "hands_key", "edit_my_config"}
+           "hands_click", "hands_type", "hands_key", "edit_my_config",
+           "mail_send"}
 
 from tool_families import (_EXACT, _PREFIX, _FED_ACCOUNT, _FED_CONTACTS,
                            _FED_INBOX, _SUBJECT, OTHER, _ORDER,

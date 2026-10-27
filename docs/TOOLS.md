@@ -82,7 +82,7 @@ Reference for the **237 built-in tools** the LLM can call. The list is extracted
 
 ## ✉ Mail
 
-A mailbox over IMAP. `account` is the name of a credential of kind `mail` (address, password, IMAP server), added in the credential manager; with one mailbox stored it can be left out. The model names the mailbox and never sees its password. TLS always: `imaps` on 993 by default, or `imap://host` with STARTTLS required, and the certificate is verified. Gmail takes an app password (2-Step Verification on, then myaccount.google.com/apppasswords); Microsoft accounts require OAuth over IMAP and are not supported.
+A mailbox: IMAP to look, read and move, SMTP to send. `account` is the name of a credential of kind `mail` (address, password, IMAP server, SMTP server; a server left empty is taken from the address), added in the credential manager; with one mailbox stored it can be left out. The model names the mailbox and never sees its password. TLS always: `imaps` on 993 and SMTP on 465 by default, or `imap://host` / `smtp://host:587` with STARTTLS required, and the certificate is verified. Gmail takes an app password (2-Step Verification on, then myaccount.google.com/apppasswords); Microsoft accounts require OAuth over IMAP and are not supported.
 
 | Tool | Args | What it does |
 |---|---|---|
@@ -90,6 +90,8 @@ A mailbox over IMAP. `account` is the name of a credential of kind `mail` (addre
 | `mail_list` | `account?` `folder?` `limit?` `unseen?` `since?` `before?` `from?` `to?` `subject?` `text?` | The newest messages of a folder (default INBOX, at most 100), each with `uid`, sender, subject, date, `seen` and a snippet of its text, optionally searched. Dates are `YYYY-MM-DD`. A uid belongs to its folder. |
 | `mail_read` | `uid` `account?` `folder?` `max_chars?` | One message whole: headers, its text (an HTML-only message turned to text), its attachments by name, type and size. |
 | `mail_move` | `uids` `to` `account?` `folder?` | Moves messages to a folder or a role (`junk` `trash` `inbox` `archive`), and returns their `new_uids` there. It is the only way mail leaves a folder: there is no permanent delete, so taking spam out is a move, and moving the `new_uids` back to `inbox` undoes it. On Gmail a move to `trash` is a real delete (Gmail empties it after 30 days); removing a message from INBOX any other way only archives it. |
+
+| `mail_send` | `body` `to?` `subject?` `cc?` `bcc?` `html?` `attachments?` `reply_to_uid?` `folder?` `from_name?` `save_sent?` | Sends from the mailbox's address, now: recipients, a plain-text body (an HTML version optional), files on disk attached by path (25 MB in all). With `reply_to_uid` it answers that message: threaded (In-Reply-To, References), `Re:` and the recipient taken from it unless given. A copy goes to the Sent folder (Gmail keeps its own). There is no confirmation step: whether a tab may send is the firewall's decision, and the tool carries the firewall's system badge. |
 
 Reading never marks a message read: folders are opened read-only and bodies fetched with `BODY.PEEK`.
 

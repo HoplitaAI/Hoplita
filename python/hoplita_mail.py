@@ -3,10 +3,14 @@ import email.policy
 import email.utils
 import html as _h
 import imaplib
+import mimetypes
+import os
 import re
+import smtplib
 import socket
 import ssl
 from datetime import datetime
+from email.message import EmailMessage
 from html.parser import HTMLParser
 
 TIMEOUT = 30
@@ -596,4 +600,206 @@ def move_messages(cred, uids, to, folder="INBOX"):
         out["new_uids"] = [mapping[u] for u in present if u in mapping]
     if missing:
         out["not_found"] = missing
+    return out
+
+
+
+SEND_MAX_BYTES = 25 * 1024 * 1024
+
+_SMTP_HOSTS = {
+    "gmail.com": ("smtp.gmail.com", 465), "googlemail.com": ("smtp.gmail.com", 465),
+    "yahoo.com": ("smtp.mail.yahoo.com", 465), "yahoo.es": ("smtp.mail.yahoo.com", 465),
+    "icloud.com": ("smtp.mail.me.com", 587), "me.com": ("smtp.mail.me.com", 587),
+    "mac.com": ("smtp.mail.me.com", 587),
+    "outlook.com": ("smtp.office365.com", 587), "hotmail.com": ("smtp.office365.com", 587),
+    "live.com": ("smtp.office365.com", 587),
+}
+
+
+def smtp_of(cred):
+    url = (cred.get("smtp") or "").strip()
+    addr = (cred.get("username") or "").strip()
+    if url:
+        m = re.match(r"^(smtps?)://", url, re.I)
+        starttls = bool(m) and m.group(1).lower() == "smtp"
+        if m:
+            url = url[m.end():]
+        elif "://" in url:
+            raise MailError(f"the SMTP server '{cred.get('smtp')}' is not smtp:// or "
+                            f"smtps://; give the host, e.g. smtp.gmail.com")
+        host, _, port = url.strip("/").partition(":")
+        if port and not port.isdigit():
+            raise MailError(f"bad port in '{cred.get('smtp')}'")
+        port = int(port) if port else (587 if starttls else 465)
+        return host, port, starttls or (not m and port == 587)
+    if "@" not in addr:
+        raise MailError("the credential has no SMTP server and its user is not "
+                        "an address to derive one from")
+    dom = addr.rsplit("@", 1)[1].lower()
+    host, port = _SMTP_HOSTS.get(dom, (f"smtp.{dom}", 465))
+    return host, port, port == 587
+
+
+def _addrs(v, field):
+    if not v:
+        return []
+    items = v if isinstance(v, (list, tuple)) else [v]
+    out = []
+    for item in items:
+        for name, addr in email.utils.getaddresses([str(item)]):
+            if not addr:
+                continue
+            if "@" not in addr or re.search(r"[\s<>\r\n]", addr):
+                raise MailError(f"'{addr}' in {field} is not an address")
+            out.append(email.utils.formataddr((name, addr)) if name else addr)
+    return out
+
+
+def _bare(a):
+    return email.utils.parseaddr(a)[1]
+
+
+def _original(cred, uid, folder):
+    with Mailbox(cred) as mb:
+        name = mb.resolve(folder or "INBOX")
+        mb.select(name, readonly=True)
+        dat = mb.ok(mb.m.uid("FETCH", str(int(uid)),
+                             "(UID BODY.PEEK[HEADER.FIELDS (FROM REPLY-TO TO CC SUBJECT "
+                             "MESSAGE-ID REFERENCES)])"), "FETCH")
+        g = [x for x in _fetch_groups(dat) if _meta(x["meta"])["uid"] == int(uid)]
+        if not g:
+            raise MailError(f"no message with uid {uid} in '{name}' to reply to "
+                            f"(it may have been moved: list the folder again)")
+        hdr = next(iter(g[0]["parts"].values()), b"")
+    return email.message_from_bytes(hdr, policy=email.policy.default)
+
+
+def send_message(cred, to=None, subject="", body="", cc=None, bcc=None, html=None,
+                 attachments=None, reply_to_uid=None, folder="INBOX",
+                 from_name=None, save_sent=True):
+    sender = (cred.get("username") or "").strip()
+    if "@" not in sender:
+        raise MailError("the mailbox's user is not an address to send from")
+    to_l, cc_l, bcc_l = _addrs(to, "to"), _addrs(cc, "cc"), _addrs(bcc, "bcc")
+    subject = str(subject or "")
+    if "\n" in subject or "\r" in subject:
+        raise MailError("the subject is one line")
+    msg = EmailMessage()
+    if reply_to_uid is not None:
+        try:
+            reply_to_uid = int(reply_to_uid)
+        except (TypeError, ValueError):
+            raise MailError(f"reply_to_uid must be the uid mail_list gives; got "
+                            f"'{reply_to_uid}'")
+        orig = _original(cred, reply_to_uid, folder)
+        if not to_l:
+            to_l = _addrs(str(orig.get("Reply-To") or orig.get("From") or ""), "to")
+        osub = str(orig.get("Subject") or "")
+        if not subject:
+            subject = osub if re.match(r"^\s*re:", osub, re.I) else f"Re: {osub}"
+        mid = str(orig.get("Message-ID") or "").strip()
+        if mid:
+            msg["In-Reply-To"] = mid
+            msg["References"] = (str(orig.get("References") or "").strip() + " " + mid).strip()
+    if not (to_l or cc_l or bcc_l):
+        raise MailError("no recipient: give 'to' (or reply_to_uid to answer a message)")
+    if not subject.strip():
+        raise MailError("no subject")
+    if not str(body or "").strip() and not html:
+        raise MailError("no body")
+    msg["From"] = email.utils.formataddr((from_name, sender)) if from_name else sender
+    if to_l:
+        msg["To"] = ", ".join(to_l)
+    if cc_l:
+        msg["Cc"] = ", ".join(cc_l)
+    msg["Subject"] = subject
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid(domain=sender.rsplit("@", 1)[1])
+    msg.set_content(str(body or html_text(html or "")))
+    if html:
+        msg.add_alternative(str(html), subtype="html")
+    names, total = [], 0
+    for path in ([attachments] if isinstance(attachments, str) else attachments or []):
+        path = os.path.expanduser(str(path))
+        if not os.path.isfile(path):
+            raise MailError(f"attachment '{path}' is not a file")
+        total += os.path.getsize(path)
+        if total > SEND_MAX_BYTES:
+            raise MailError(f"attachments over {SEND_MAX_BYTES // (1024 * 1024)} MB: "
+                            f"most servers refuse that")
+        ctype, enc = mimetypes.guess_type(path)
+        if not ctype or enc:
+            ctype = "application/octet-stream"
+        main, sub = ctype.split("/", 1)
+        with open(path, "rb") as fh:
+            msg.add_attachment(fh.read(), maintype=main, subtype=sub,
+                               filename=os.path.basename(path))
+        names.append(os.path.basename(path))
+
+    host, port, starttls = smtp_of(cred)
+    ctx = ssl.create_default_context()
+    rcpts = [_bare(a) for a in to_l + cc_l + bcc_l]
+    try:
+        if starttls:
+            srv = smtplib.SMTP(host, port, timeout=TIMEOUT)
+            srv.ehlo()
+            if not srv.has_extn("starttls"):
+                srv.close()
+                raise MailError(f"{host}:{port} offers no STARTTLS; refusing to send "
+                                f"the password in clear")
+            srv.starttls(context=ctx)
+            srv.ehlo()
+        else:
+            srv = smtplib.SMTP_SSL(host, port, context=ctx, timeout=TIMEOUT)
+    except ssl.SSLCertVerificationError as e:
+        raise MailError(f"{host}: the server's certificate does not verify "
+                        f"({e.verify_message})")
+    except (OSError, smtplib.SMTPException) as e:
+        if isinstance(e, MailError):
+            raise
+        raise MailError(f"cannot reach {host}:{port}: {e}")
+    try:
+        try:
+            srv.login(sender, cred.get("password", ""))
+        except smtplib.SMTPAuthenticationError as e:
+            raise MailError(_auth_hint(host, _s(e.smtp_error)))
+        except smtplib.SMTPNotSupportedError:
+            raise MailError(f"{host} offers no login on port {port}")
+        try:
+            refused = srv.send_message(msg, from_addr=sender, to_addrs=rcpts)
+        except smtplib.SMTPRecipientsRefused as e:
+            raise MailError("every recipient was refused: " + "; ".join(
+                f"{a}: {_s(r[1])}" for a, r in e.recipients.items()))
+        except smtplib.SMTPException as e:
+            raise MailError(f"{host} refused the message: {e}")
+    finally:
+        try:
+            srv.quit()
+        except Exception:
+            pass
+    out = {"sent": True, "account": cred.get("site"), "from": msg["From"],
+           "subject": subject, "message_id": msg["Message-ID"]}
+    for k, v in (("to", to_l), ("cc", cc_l), ("bcc", bcc_l)):
+        if v:
+            out[k] = v
+    if names:
+        out["attachments"] = names
+    if msg.get("In-Reply-To"):
+        out["in_reply_to"] = msg["In-Reply-To"]
+    if refused:
+        out["refused"] = {a: _s(r[1]) for a, r in refused.items()}
+    if not save_sent:
+        return out
+    if "gmail" in host:
+        out["saved_to"] = "Gmail keeps its own copy in Sent"
+        return out
+    try:
+        with Mailbox(cred) as mb:
+            sent = mb.resolve("sent")
+            typ, dat = mb.m.append(_quote(sent), "(\\Seen)", None, msg.as_bytes())
+            if typ != "OK":
+                raise MailError(_s(dat[0]) if dat else typ)
+        out["saved_to"] = sent
+    except MailError as e:
+        out["not_saved"] = f"sent, but no copy in Sent: {e}"
     return out

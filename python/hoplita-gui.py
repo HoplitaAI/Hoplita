@@ -18912,7 +18912,7 @@ enabled = true
     def _show_credentials_dialog(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("🔐 " + t("gui.cred_manager_title"))
-        dlg.setMinimumSize(600, 400)
+        dlg.setMinimumSize(640, 560)
         lay = QVBoxLayout(dlg)
 
         from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
@@ -18968,7 +18968,10 @@ enabled = true
         mail_user_e = QLineEdit(); mail_user_e.setPlaceholderText("ana@gmail.com")
         mail_pass_e = QLineEdit(); mail_pass_e.setPlaceholderText(t("cred.mail_password_ph"))
         mail_pass_e.setEchoMode(QLineEdit.EchoMode.Password)
+        mail_smtp_e = QLineEdit(); mail_smtp_e.setPlaceholderText(t("cred.mail_smtp_ph"))
         mail_hint = QLabel(t("cred.mail_hint")); mail_hint.setWordWrap(True)
+        from PyQt6.QtWidgets import QSizePolicy as _QSP
+        mail_hint.setSizePolicy(_QSP.Policy.Preferred, _QSP.Policy.Minimum)
         fl.addRow(t("cred.kind"), kind_c)
         fl.addRow(t("cred.site"), site_e)
         fl.addRow(t("cred.url"), url_e)
@@ -18979,7 +18982,8 @@ enabled = true
             "card": [(t("cred.number"), num_e), (t("cred.expiry"), exp_e),
                      (t("cred.cvv"), cvv_e), (t("cred.holder"), hold_e)],
             "mail": [(t("cred.mail_address"), mail_user_e),
-                     (t("cred.mail_password"), mail_pass_e), ("", mail_hint)],
+                     (t("cred.mail_password"), mail_pass_e),
+                     (t("cred.mail_smtp"), mail_smtp_e), ("", mail_hint)],
         }
         for _pares in _rows.values():
             for _lbl, _w in _pares:
@@ -19052,6 +19056,7 @@ enabled = true
                     pass_e.setText("" if _mail else c.get("password", ""))
                     mail_user_e.setText(c.get("username", "") if _mail else "")
                     mail_pass_e.setText(c.get("password", "") if _mail else "")
+                    mail_smtp_e.setText(c.get("smtp", "") if _mail else "")
                     url_e.setText(c.get("url", ""))
                     otp_e.setText(c.get("totp_secret", ""))
                     key_e.setText(c.get("secret", ""))
@@ -19082,10 +19087,12 @@ enabled = true
                 url_e.text().strip(), notes_e.text().strip(),
                 otp_e.text().strip(), kind=kind, secret=key_e.text().strip(),
                 number=num_e.text().strip(), expiry=exp_e.text().strip(),
-                cvv=cvv_e.text().strip(), holder=hold_e.text().strip())
+                cvv=cvv_e.text().strip(), holder=hold_e.text().strip(),
+                smtp=mail_smtp_e.text().strip() if kind == "mail" else "")
             refresh_table()
             for _w in (site_e, user_e, pass_e, url_e, otp_e, notes_e, key_e,
-                       num_e, exp_e, cvv_e, hold_e, mail_user_e, mail_pass_e):
+                       num_e, exp_e, cvv_e, hold_e, mail_user_e, mail_pass_e,
+                       mail_smtp_e):
                 _w.clear()
             otp_display.setText("")
             self.add_message(t("cred.saved", site=site), "system")
