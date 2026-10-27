@@ -1219,7 +1219,7 @@ class CredentialManager(EncryptedStorageManager):
     SQL_LABEL = "cred"
     SQL_STORES = ("credentials",)
 
-    KINDS = ("web", "apikey", "card")
+    KINDS = ("web", "apikey", "card", "mail")
 
     def add_credential(self, site, username="", password="", url="", notes="",
                        totp_secret="", kind="web", secret="", number="",
@@ -1280,6 +1280,10 @@ class CredentialManager(EncryptedStorageManager):
         if kind == "apikey":
             out["has_key"] = bool(cred.get("secret"))
             out["hint"] = "get_api_key to use it"
+        elif kind == "mail":
+            out["username"] = cred.get("username", "")
+            out["has_password"] = bool(cred.get("password"))
+            out["hint"] = f"mail_list / mail_read / mail_move with account='{cred['site']}'"
         elif kind == "card":
             num = (cred.get("number") or "").replace(" ", "")
             out["last4"] = num[-4:] if len(num) >= 4 else ""
@@ -4998,6 +5002,53 @@ def tool_get_api_key(site):
                          f"'apikey'. There is no API key here.",
                 "kind": c.get("kind")}
     return {"error": f"No credential stored for '{site}'."}
+
+
+def _mail_cred(account):
+    boxes = [c for c in cred_mgr.get_all() if (c.get("kind") or "web") == "mail"]
+    if not account:
+        if len(boxes) == 1:
+            return boxes[0], None
+        if not boxes:
+            return None, {"error": "No mailbox stored. The user adds one in the "
+                                   "credential manager (kind 'mail': address, "
+                                   "password, IMAP server)."}
+        return None, {"error": "Several mailboxes are stored: name one with "
+                               "'account'.", "accounts": [c["site"] for c in boxes]}
+    c = cred_mgr.get_credential(account)
+    if not c:
+        return None, {"error": f"No credential stored for '{account}'.",
+                      "accounts": [b["site"] for b in boxes]}
+    if (c.get("kind") or "web") != "mail":
+        return None, {"error": f"'{c['site']}' is stored as kind '{c.get('kind') or 'web'}', "
+                               f"not 'mail'.", "accounts": [b["site"] for b in boxes]}
+    return c, None
+
+
+def tool_mail(op, a):
+    import hoplita_mail as _hm
+    cred, err = _mail_cred(a.get("account"))
+    if err:
+        return err
+    try:
+        if op == "folders":
+            return _hm.folders(cred)
+        if op == "list":
+            return _hm.list_messages(cred, a.get("folder") or "INBOX", a.get("limit", 25),
+                                     bool(a.get("unseen")), a.get("since"), a.get("before"),
+                                     a.get("from"), a.get("subject"), a.get("text"),
+                                     a.get("to"))
+        if op == "read":
+            if a.get("uid") is None:
+                return {"error": "Missing uid (mail_list gives it)."}
+            return _hm.read_message(cred, a["uid"], a.get("folder") or "INBOX",
+                                    a.get("max_chars", 20000))
+        if op == "move":
+            return _hm.move_messages(cred, a.get("uids"), a.get("to"),
+                                     a.get("folder") or "INBOX")
+    except _hm.MailError as e:
+        return {"error": str(e), "account": cred.get("site")}
+    return {"error": f"unknown mail operation '{op}'"}
 
 
 def tool_get_otp(site):
@@ -9080,7 +9131,7 @@ def register_tools():
         "get_otp":                {"desc": "Current OTP/2FA code.",
                                    "fn": lambda a: tool_get_otp(a["site"])},
         "list_credentials":       {"desc": "List saved sites with their kind (web / apikey / "
-                                    "card), so you can tell what is available before asking "
+                                    "card / mail), so you can tell what is available before asking "
                                     "the user for something they already gave you.",
                                    "fn": lambda a: {"sites": cred_mgr.list_sites()}},
         "fill_credentials":       {"desc": "Autofill creds in the active browser (use inside browse_web).",
@@ -9157,6 +9208,26 @@ def register_tools():
                                     "whole recipe; the result narrates every step and every auto "
                                     "decision. Use pdf_info first when unsure of the layout.",
                                    "fn": lambda a: _hoplita_pdf().tool_pdf(a)},
+        "mail_folders":           {"desc": "A mailbox's folders, each with its role (inbox, junk, trash, sent, "
+                                    "archive, all, drafts) and its message and unread counts. 'account' is "
+                                    "the name of a credential of kind 'mail' (list_credentials); with one "
+                                    "mailbox stored it can be left out.",
+                                   "fn": lambda a: tool_mail("folders", a)},
+        "mail_list":              {"desc": "The newest messages of a mailbox folder (default INBOX), each with "
+                                    "uid, from, subject, date, seen and a snippet of its text; searched by "
+                                    "unseen, since/before (YYYY-MM-DD), from, to, subject, text. Reading "
+                                    "never marks a message read. The uid belongs to that folder.",
+                                   "fn": lambda a: tool_mail("list", a)},
+        "mail_read":              {"desc": "One message whole: headers, its text (HTML turned to text), its "
+                                    "attachments by name and size. Does not mark it read.",
+                                   "fn": lambda a: tool_mail("read", a)},
+        "mail_move":              {"desc": "Move messages (uids from mail_list, of 'folder', default INBOX) to "
+                                    "another folder or to a role: 'junk', 'trash', 'inbox', 'archive'. "
+                                    "This is how mail is taken out: there is no permanent delete, and a "
+                                    "move is undone by moving the new_uids it returns back to 'inbox'. "
+                                    "Report what you moved, sender and subject, so the user can ask for "
+                                    "it back.",
+                                   "fn": lambda a: tool_mail("move", a)},
         "office_info":            {"desc": "Read a Word, Excel or PowerPoint file (.docx/.xlsx/.pptx and their macro "
                                     "twins): a document's blocks by index (paragraphs with their style, tables), a "
                                     "workbook's sheets and a cell range with values AND formulas, a deck's slides with "
@@ -9640,6 +9711,29 @@ def register_tool_params():
         "get_credential":         {"properties": {"site": {"type": "string"}}, "required": ["site"]},
         "get_card":               {"properties": {"site": {"type": "string"}}, "required": ["site"]},
         "get_api_key":            {"properties": {"site": {"type": "string"}}, "required": ["site"]},
+        "mail_folders":           {"properties": {"account": {"type": "string", "description": "Credential name of kind 'mail'; optional with one mailbox."}},
+                                   "required": []},
+        "mail_list":              {"properties": {"account": {"type": "string", "description": "Credential name of kind 'mail'; optional with one mailbox."},
+                                                  "folder": {"type": "string", "description": "Folder name or role (inbox, junk, trash, sent, archive). Default INBOX."},
+                                                  "limit": {"type": "integer", "description": "How many, newest first (max 100). Default 25."},
+                                                  "unseen": {"type": "boolean", "description": "Only unread messages."},
+                                                  "since": {"type": "string", "description": "YYYY-MM-DD, on or after."},
+                                                  "before": {"type": "string", "description": "YYYY-MM-DD, before."},
+                                                  "from": {"type": "string", "description": "Sender contains."},
+                                                  "to": {"type": "string", "description": "Recipient contains."},
+                                                  "subject": {"type": "string", "description": "Subject contains."},
+                                                  "text": {"type": "string", "description": "Headers or body contain."}},
+                                   "required": []},
+        "mail_read":              {"properties": {"account": {"type": "string", "description": "Credential name of kind 'mail'; optional with one mailbox."},
+                                                  "uid": {"type": "integer", "description": "The uid mail_list gives."},
+                                                  "folder": {"type": "string", "description": "The folder the uid belongs to. Default INBOX."},
+                                                  "max_chars": {"type": "integer", "description": "Text cap. Default 20000."}},
+                                   "required": ["uid"]},
+        "mail_move":              {"properties": {"account": {"type": "string", "description": "Credential name of kind 'mail'; optional with one mailbox."},
+                                                  "uids": {"type": "array", "items": {"type": "integer"}, "description": "uids from mail_list, of 'folder'."},
+                                                  "to": {"type": "string", "description": "Destination: a folder name or a role (junk, trash, inbox, archive)."},
+                                                  "folder": {"type": "string", "description": "Where the uids are now. Default INBOX."}},
+                                   "required": ["uids", "to"]},
         "get_otp":                {"properties": {"site": {"type": "string"}}, "required": ["site"]},
         "list_credentials":       {"properties": {}},
         "fill_credentials":       {"properties": {"site": {"type": "string"}}, "required": ["site"]},
@@ -11341,6 +11435,7 @@ _FAMILY_BLURB = {
     "system": "shell, files on disk, PDFs and alerts — and yourself: your own config.ini (read, and change with the person's yes) and your own manual",
     "code": "read/edit/search code in the open project, and git",
     "web": "search and browse the internet",
+    "mail": "the user's mailboxes over IMAP: folders, list, read, move to junk/trash and back (no permanent delete)",
     "desktop": "the person's screen: windows, elements, clicks, keys, captures",
     "notes": "the user's saved notes and skills",
     "memory": "the user's facts, lessons, experience and recall",

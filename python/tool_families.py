@@ -43,6 +43,7 @@ _PREFIX = (
     ("child_", "agents"),
     ("pdf", "system"),
     ("office", "system"),
+    ("mail_", "mail"),
 )
 
 _FED_ACCOUNT = {"fed_register", "fed_verify", "fed_login", "fed_status",
@@ -89,7 +90,7 @@ def tool_category(name):
     return OTHER
 
 
-_ORDER = ("system", "code", "web", "desktop", "notes", "memory", "tasks", "calendar",
+_ORDER = ("system", "code", "web", "mail", "desktop", "notes", "memory", "tasks", "calendar",
           "cron", "chat", "canvas", "whiteboard", "creds", "agents", "device",
           "fedaccount", "fedcontacts", "fedshare", "fedcode", "fedsync")
 

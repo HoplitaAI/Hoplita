@@ -18943,7 +18943,8 @@ enabled = true
         kind_c = QComboBox()
         for _k, _lbl in (("web", t("cred.kind_web")),
                          ("apikey", t("cred.kind_apikey")),
-                         ("card", t("cred.kind_card"))):
+                         ("card", t("cred.kind_card")),
+                         ("mail", t("cred.kind_mail"))):
             kind_c.addItem(_lbl, _k)
         site_e = QLineEdit()
         site_e.setPlaceholderText(t("cred.site_ph"))
@@ -18964,6 +18965,10 @@ enabled = true
         cvv_e = QLineEdit(); cvv_e.setPlaceholderText("CVV")
         cvv_e.setEchoMode(QLineEdit.EchoMode.Password)
         hold_e = QLineEdit(); hold_e.setPlaceholderText(t("cred.holder_ph"))
+        mail_user_e = QLineEdit(); mail_user_e.setPlaceholderText("ana@gmail.com")
+        mail_pass_e = QLineEdit(); mail_pass_e.setPlaceholderText(t("cred.mail_password_ph"))
+        mail_pass_e.setEchoMode(QLineEdit.EchoMode.Password)
+        mail_hint = QLabel(t("cred.mail_hint")); mail_hint.setWordWrap(True)
         fl.addRow(t("cred.kind"), kind_c)
         fl.addRow(t("cred.site"), site_e)
         fl.addRow(t("cred.url"), url_e)
@@ -18973,6 +18978,8 @@ enabled = true
             "apikey": [(t("cred.key"), key_e)],
             "card": [(t("cred.number"), num_e), (t("cred.expiry"), exp_e),
                      (t("cred.cvv"), cvv_e), (t("cred.holder"), hold_e)],
+            "mail": [(t("cred.mail_address"), mail_user_e),
+                     (t("cred.mail_password"), mail_pass_e), ("", mail_hint)],
         }
         for _pares in _rows.values():
             for _lbl, _w in _pares:
@@ -18989,6 +18996,11 @@ enabled = true
                     _l = fl.labelForField(_w)
                     if _l is not None:
                         _l.setVisible(vis)
+            url_e.setPlaceholderText(t("cred.mail_server_ph") if k == "mail"
+                                     else t("cred.url_ph"))
+            _ul = fl.labelForField(url_e)
+            if _ul is not None:
+                _ul.setText(t("cred.mail_server") if k == "mail" else t("cred.url"))
 
         kind_c.currentIndexChanged.connect(lambda _i: _apply_kind())
         _apply_kind()
@@ -19035,8 +19047,11 @@ enabled = true
                     _i = kind_c.findData(_k)
                     kind_c.setCurrentIndex(_i if _i >= 0 else 0)
                     _apply_kind()
-                    user_e.setText(c.get("username", ""))
-                    pass_e.setText(c.get("password", ""))
+                    _mail = _k == "mail"
+                    user_e.setText("" if _mail else c.get("username", ""))
+                    pass_e.setText("" if _mail else c.get("password", ""))
+                    mail_user_e.setText(c.get("username", "") if _mail else "")
+                    mail_pass_e.setText(c.get("password", "") if _mail else "")
                     url_e.setText(c.get("url", ""))
                     otp_e.setText(c.get("totp_secret", ""))
                     key_e.setText(c.get("secret", ""))
@@ -19058,15 +19073,19 @@ enabled = true
                 QMessageBox.warning(dlg, t("dlg.error"), t("cred.key_required")); return
             if kind == "card" and not num_e.text().strip():
                 QMessageBox.warning(dlg, t("dlg.error"), t("cred.number_required")); return
+            if kind == "mail" and not (mail_user_e.text().strip() and mail_pass_e.text()):
+                QMessageBox.warning(dlg, t("dlg.error"), t("cred.mail_required")); return
+            _user, _pw = ((mail_user_e.text().strip(), mail_pass_e.text())
+                          if kind == "mail" else (user_e.text().strip(), pass_e.text()))
             self.cred_manager.add_credential(
-                site, user_e.text().strip(), pass_e.text(),
+                site, _user, _pw,
                 url_e.text().strip(), notes_e.text().strip(),
                 otp_e.text().strip(), kind=kind, secret=key_e.text().strip(),
                 number=num_e.text().strip(), expiry=exp_e.text().strip(),
                 cvv=cvv_e.text().strip(), holder=hold_e.text().strip())
             refresh_table()
             for _w in (site_e, user_e, pass_e, url_e, otp_e, notes_e, key_e,
-                       num_e, exp_e, cvv_e, hold_e):
+                       num_e, exp_e, cvv_e, hold_e, mail_user_e, mail_pass_e):
                 _w.clear()
             otp_display.setText("")
             self.add_message(t("cred.saved", site=site), "system")
@@ -19084,9 +19103,11 @@ enabled = true
         def on_show_pwd():
             if pass_e.echoMode() == QLineEdit.EchoMode.Password:
                 pass_e.setEchoMode(QLineEdit.EchoMode.Normal)
+                mail_pass_e.setEchoMode(QLineEdit.EchoMode.Normal)
                 show_btn.setText("🔒 Hide")
             else:
                 pass_e.setEchoMode(QLineEdit.EchoMode.Password)
+                mail_pass_e.setEchoMode(QLineEdit.EchoMode.Password)
                 show_btn.setText("👁 View Password")
 
         table.itemSelectionChanged.connect(on_select)

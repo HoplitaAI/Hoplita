@@ -20,7 +20,7 @@ from tool_families import (_EXACT, _PREFIX, _FED_ACCOUNT, _FED_CONTACTS,
                            _FED_INBOX, _SUBJECT, OTHER, _ORDER,
                            tool_category, group_tools)
 
-_ICON = {"system": "📂", "code": "💻", "web": "🌐", "desktop": "🖱", "notes": "📝",
+_ICON = {"system": "📂", "code": "💻", "web": "🌐", "mail": "✉", "desktop": "🖱", "notes": "📝",
          "memory": "🧠", "tasks": "✅", "calendar": "📅", "cron": "⏰",
          "chat": "💬", "canvas": "🎨", "whiteboard": "🧭", "creds": "🔐", "agents": "🤖",
          "device": "🖥", "fedaccount": "🪪", "fedcontacts": "👥",

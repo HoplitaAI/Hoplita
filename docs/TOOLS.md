@@ -80,6 +80,19 @@ Reference for the **237 built-in tools** the LLM can call. The list is extracted
 | `call_api` | `url` `auth_from?` `method?` `headers?` `body?` `auth_type?` `auth_token?` `auth_key_name?` `auth_key_value?` `query_params?` `timeout?` `save_response?` | Calls any REST API (bearer, api_key header or query, basic auth). With `auth_from` the key is taken from the vault entry of a site saved as kind `apikey`, so a skill names the key instead of carrying it. |
 
 
+## ✉ Mail
+
+A mailbox over IMAP. `account` is the name of a credential of kind `mail` (address, password, IMAP server), added in the credential manager; with one mailbox stored it can be left out. The model names the mailbox and never sees its password. TLS always: `imaps` on 993 by default, or `imap://host` with STARTTLS required, and the certificate is verified. Gmail takes an app password (2-Step Verification on, then myaccount.google.com/apppasswords); Microsoft accounts require OAuth over IMAP and are not supported.
+
+| Tool | Args | What it does |
+|---|---|---|
+| `mail_folders` | `account?` | The folders, each with its role (`inbox` `junk` `trash` `sent` `archive` `all` `drafts`, read from the server's SPECIAL-USE flags, so Gmail's localized names resolve) and its message and unread counts. |
+| `mail_list` | `account?` `folder?` `limit?` `unseen?` `since?` `before?` `from?` `to?` `subject?` `text?` | The newest messages of a folder (default INBOX, at most 100), each with `uid`, sender, subject, date, `seen` and a snippet of its text, optionally searched. Dates are `YYYY-MM-DD`. A uid belongs to its folder. |
+| `mail_read` | `uid` `account?` `folder?` `max_chars?` | One message whole: headers, its text (an HTML-only message turned to text), its attachments by name, type and size. |
+| `mail_move` | `uids` `to` `account?` `folder?` | Moves messages to a folder or a role (`junk` `trash` `inbox` `archive`), and returns their `new_uids` there. It is the only way mail leaves a folder: there is no permanent delete, so taking spam out is a move, and moving the `new_uids` back to `inbox` undoes it. On Gmail a move to `trash` is a real delete (Gmail empties it after 30 days); removing a message from INBOX any other way only archives it. |
+
+Reading never marks a message read: folders are opened read-only and bodies fetched with `BODY.PEEK`.
+
 ## 🖱 Desktop hands
 
 The model working on the user's own screen. Two layers under one contract: the **element layer** (accessibility: windows, their widget trees, pressing a button by its own action, setting a field through its editable interface) and the **pixel layer** (capture and raw pointer/keyboard input), which is what *verifies*: after each action a capture is compared with the one before, so a press that did nothing is reported as one. On Linux the element layer is AT-SPI; the pixel layer is chosen from the session (an X display: pointer library and grabber; Wayland: the compositor's screenshot tool, and an input-injection helper when installed). On Windows the element layer is UI Automation (the `pywinauto` binding); macOS reports what it has and which permission is missing rather than pretend. One turn holds the hands per machine; a second is told who has them. The app's own windows are never listed. Every call is gated on where the turn's model runs (`[HANDS] remote_model`). The GUI retires to the tray on `hands_begin` and shows the HUD, a small hoplite: one click stops the turn.
@@ -264,7 +277,7 @@ In the tab: a source link opens a side peek of the aligned code; a sequence step
 
 | Tool | Args | What it does |
 |---|---|---|
-| `get_credential` | `site` | What is stored for a site, **without** the secret: its kind (`web`, `apikey`, `card`), username and whether a password/OTP/key exists. |
+| `get_credential` | `site` | What is stored for a site, **without** the secret: its kind (`web`, `apikey`, `card`, `mail`), username and whether a password/OTP/key exists. |
 | `list_credentials` | — | Lists the stored sites with their kind. |
 | `fill_credentials` | `site` | Fills credentials into the live browser (used inside `browse_web`). |
 | `get_otp` | `site` | A site's current OTP/2FA code. |
