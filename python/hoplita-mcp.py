@@ -5019,7 +5019,29 @@ def tool_get_todo_context():
             "scope": _scope}
 
 
+_APT_DATE_FMTS = ("%Y-%m-%d %H:%M", "%Y-%m-%d")
+_APT_DATE_RULE = "'YYYY-MM-DD HH:MM', or 'YYYY-MM-DD' for a whole day"
+
+
+def _apt_date_ok(date):
+    for fmt in _APT_DATE_FMTS:
+        try:
+            if datetime.strptime(date, fmt).strftime(fmt) == date:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
+def _apt_date_match(stored, date):
+    stored = str(stored or "")
+    return stored == date if len(date) > 10 else stored[:10] == date
+
+
 def tool_add_appointment(date, title, desc, urgency="Normal", project=None):
+    date = str(date or "").strip()
+    if not _apt_date_ok(date):
+        return {"error": f"date must be {_APT_DATE_RULE}; got '{date}'"}
     a = todo_mgr.add_appointment(date, title, desc, "", urgency, project)
     return {"added": True, "id": a["id"], "project": a["project"]}
 
@@ -5147,13 +5169,24 @@ def tool_list_appointments(project=None):
                     "title, e.g. contains='dentist'."}
 
 
-def tool_delete_appointment(title, date=None):
+def tool_delete_appointment(title=None, date=None, apt_id=None):
+    if apt_id:
+        hit = next((a for a in todo_mgr.get_appointments()
+                    if a["id"] == str(apt_id).strip()), None)
+        if hit is None:
+            return {"error": f"No appointment with id '{apt_id}'"}
+        todo_mgr.delete_appointment(hit["id"])
+        return {"deleted": 1, "title": hit["title"], "dates": [hit["date"]]}
     tl = (title or "").strip().lower()
     if not tl:
-        return {"error": "Missing title"}
+        return {"error": "Missing title (or the id list_appointments gives)"}
+    if date is not None:
+        date = str(date).strip()
+        if not _apt_date_ok(date):
+            return {"error": f"date must be {_APT_DATE_RULE}; got '{date}'"}
     matches = [a for a in todo_mgr.get_appointments()
                if a["title"].strip().lower() == tl
-               and (date is None or a["date"] == date)]
+               and (date is None or _apt_date_match(a["date"], date))]
     if not matches:
         return {"error": f"No appointments with title '{title}'"
                          + (f" and date {date}" if date else "")}
@@ -5165,11 +5198,15 @@ def tool_delete_appointment(title, date=None):
 
 def tool_delete_all_appointments(contains=None, date=None, project=None,
                                  confirm=False):
+    if date is not None:
+        date = str(date).strip()
+        if not _apt_date_ok(date):
+            return {"error": f"date must be {_APT_DATE_RULE}; got '{date}'"}
     apts = todo_mgr.get_appointments(project)
     sub = (contains or "").strip().lower()
     victims = [a for a in apts
                if (not sub or sub in a["title"].strip().lower())
-               and (date is None or a["date"] == date)]
+               and (date is None or _apt_date_match(a["date"], date))]
     if not sub and date is None and project is None:
         return {"error": "Total deletion of the calendar disabled via "
                          "tool. Add a filter: contains (title substring), "
@@ -9062,8 +9099,8 @@ def register_tools():
                                    "fn": lambda a: tool_list_todo_projects()},
         "list_appointments":      {"desc": "List the calendar appointments (all, or filtered by 'project').",
                                    "fn": lambda a: tool_list_appointments(a.get("project"))},
-        "delete_appointment":     {"desc": "Delete calendar appointments by 'title' (exact) and optionally 'date' (YYYY-MM-DD HH:MM). Deletes ALL matching ones (useful for cleaning duplicates) and returns how many.",
-                                   "fn": lambda a: tool_delete_appointment(a["title"], a.get("date"))},
+        "delete_appointment":     {"desc": "Delete one appointment by its 'id' (as list_appointments gives it), or calendar appointments by 'title' (exact) and optionally 'date': 'YYYY-MM-DD HH:MM' for that moment, 'YYYY-MM-DD' for any time that day. Deletes ALL matching ones (useful for cleaning duplicates) and returns how many.",
+                                   "fn": lambda a: tool_delete_appointment(a.get("title"), a.get("date"), a.get("id"))},
         "delete_all_appointments": {"desc": "Delete MULTIPLE appointments at once (clean up duplicates without enumerating titles). Optional combinable filters: 'contains' (title substring), 'date', 'project'. With NO filters it deletes the WHOLE calendar and requires 'confirm':true. Returns how many it deleted.",
                                    "fn": lambda a: tool_delete_all_appointments(a.get("contains"), a.get("date"), a.get("project"), a.get("confirm", False))},
         "add_todo_project":       {"desc": "Create a project to group tasks and appointments. Use it when the user wants a new group.",
@@ -9607,13 +9644,13 @@ def register_tool_params():
         "list_credentials":       {"properties": {}},
         "fill_credentials":       {"properties": {"site": {"type": "string"}}, "required": ["site"]},
         "get_todo_context":       {"properties": {}},
-        "add_appointment":        {"properties": {"date": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "urgency": {"type": "string"}, "project": {"type": "string", "description": "Optional TODO project. 'general' if not specified."}}, "required": ["date", "title", "description"]},
+        "add_appointment":        {"properties": {"date": {"type": "string", "description": "'YYYY-MM-DD HH:MM', or 'YYYY-MM-DD' for a whole day. Nothing else is accepted."}, "title": {"type": "string"}, "description": {"type": "string"}, "urgency": {"type": "string"}, "project": {"type": "string", "description": "Optional TODO project. 'general' if not specified."}}, "required": ["date", "title", "description"]},
         "add_task":               {"properties": {"title": {"type": "string"}, "description": {"type": "string"}, "priority": {"type": "string"}, "progress": {"type": "integer"}, "project": {"type": "string", "description": "Optional TODO project. 'general' if not specified."}, "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Titles of tasks in the same project this task depends on."}}, "required": ["title", "description"]},
         "update_task_progress":   {"properties": {"task_title": {"type": "string"}, "new_progress": {"type": "integer"}}, "required": ["task_title", "new_progress"]},
         "task_depends":           {"properties": {"task_title": {"type": "string"}, "depends_on": {"type": "array", "items": {"type": "string"}}, "project": {"type": "string"}}, "required": ["task_title", "depends_on"]},
         "list_appointments":      {"properties": {"project": {"type": "string", "description": "Optional: filter by project."}}, "required": []},
-        "delete_appointment":     {"properties": {"title": {"type": "string"}, "date": {"type": "string", "description": "Optional: YYYY-MM-DD HH:MM to narrow down."}}, "required": ["title"]},
-        "delete_all_appointments": {"properties": {"contains": {"type": "string", "description": "Title substring (optional)."}, "date": {"type": "string", "description": "Exact date (optional)."}, "project": {"type": "string", "description": "Project (optional)."}, "confirm": {"type": "boolean", "description": "Mandatory true if you provide no filter (deletes everything)."}}, "required": []},
+        "delete_appointment":     {"properties": {"id": {"type": "string", "description": "The appointment's id from list_appointments: deletes that one."}, "title": {"type": "string", "description": "Exact title, when no id is given."}, "date": {"type": "string", "description": "Optional, with title: 'YYYY-MM-DD HH:MM' (that moment) or 'YYYY-MM-DD' (that day)."}}, "required": []},
+        "delete_all_appointments": {"properties": {"contains": {"type": "string", "description": "Title substring (optional)."}, "date": {"type": "string", "description": "Optional: 'YYYY-MM-DD HH:MM' (that moment) or 'YYYY-MM-DD' (that day)."}, "project": {"type": "string", "description": "Project (optional)."}, "confirm": {"type": "boolean", "description": "Mandatory true if you provide no filter (deletes everything)."}}, "required": []},
         "list_todo_projects":     {"properties": {}},
         "add_todo_project":       {"properties": {"name": {"type": "string"}}, "required": ["name"]},
         "delete_todo_project":    {"properties": {"name": {"type": "string"}}, "required": ["name"]},

@@ -155,10 +155,10 @@ A code project's memory is a notes folder with exactly four notes, `rules` (the 
 
 | Tool | Args | What it does |
 |---|---|---|
-| `add_appointment` | `date` `title` `description` `urgency?` `project?` | Creates an appointment, with optional urgency and project. |
+| `add_appointment` | `date` `title` `description` `urgency?` `project?` | Creates an appointment, with optional urgency and project. `date` is `YYYY-MM-DD HH:MM`, or `YYYY-MM-DD` for a whole day; anything else is refused. |
 | `list_appointments` | `project?` | Lists appointments, all or one project's. |
-| `delete_appointment` | `title` `date?` | Deletes appointments by exact title and, optionally, date; all matches. |
-| `delete_all_appointments` | `contains?` `date?` `project?` `confirm?` | Deletes several appointments at once with combinable filters (`contains`, `date`, `project`). With no filter it clears the whole calendar and requires `confirm: true`. |
+| `delete_appointment` | `id?` `title?` `date?` | Deletes one appointment by the `id` `list_appointments` gives, or appointments by exact title and, optionally, date (`YYYY-MM-DD HH:MM` for that moment, `YYYY-MM-DD` for any time that day); all matches. |
+| `delete_all_appointments` | `contains?` `date?` `project?` `confirm?` | Deletes several appointments at once with combinable filters (`contains`, `date` as in `delete_appointment`, `project`). With no filter it deletes nothing: clearing the whole calendar is done by hand. |
 
 
 ## ⏰ CRON
