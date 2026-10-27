@@ -526,6 +526,8 @@ It is drawn the way an engineer reads an unknown repository, not by one agent re
 
 The page follows the whiteboard the moment it exists, so you watch it being drawn; a project with no whiteboard at all gets «How it works» on its own the first time you open the page. **Which model draws** is a box on the same page: with one model it just says which; with a pool you pick one the first time (the drawing waits for you) and the page remembers it. **A whiteboard follows its code**: when the project has moved on from «How it works» or from the uncommitted work it was drawn from, the page says so and offers **Bring it up to date** — the same kind of background agent re-pins it, fixes the anchors that no longer hold and revises what changed, as a new version (the old one stays in the history). «How it works» does it on its own, once per state of the project; a whiteboard of one commit is that commit's record and never changes.
 
+**History** draws the project's past from its commits: pick the months (from the beginning to now, or any span), and the whiteboard shows one box per period joined in time («Aug 2026 · Card payments → Sep 2026 · Product search»), the arc of the whole span on top, and under each box what that period did with the commits that show it best. It reads what each commit says of itself and which areas it touched, never the diffs, so a history of thousands of commits costs a call per period. The cut follows the span: weeks for up to six weeks, months for up to a year and a half, quarters beyond. A period is remembered by its last commit: the periods that are over are never told again, and drawing the history next week tells only what is new. A period too long for one call is told in pieces and then as one; nothing is cut to fit. Same months, same last commit: the button opens the whiteboard instead of drawing it again.
+
 **Redraw** and **Delete** on the page's header act on the whiteboard on screen, each after asking: redraw draws it again from scratch with the model picked in the box, reusing nothing the previous model read, as a new version (the old ones stay in the history); delete removes it here and wherever it travelled. The page itself is not a browser: no browser menu, no navigating away — its right-click offers copy and copy for agent, and web links open in the system browser. You can also ask in the chat ("review the last commit on a whiteboard", "show me how this code works") and the page comes up on what that agent writes.
 
 Either way the whiteboard carries: what and why, the requirements in your own words (quoted from the conversation, and checked to be really there), the design as one diagram — a sequence, a flow or a database lens — and the implementation as the call path old against new, with code peeks where the mechanism lives. Every phrase, step, node and operation that describes code carries a file and line range at pinned commits, verified against those bytes before the edit is accepted; clicking it opens the code beside the page or in a guided tour, and **Open file** takes you to the line in the code tab. The Diff view splits the change into lenses and tracks what you have read. With `python install.py --diffr` the diff is structural (diffr, a difftastic fork): unchanged regions, tests and generated files fold away.
@@ -804,7 +806,10 @@ their own hand.**
 The page shows the three things you need at once: who it is **already shared
 with**, who you can **invite**, and what is **coming in** — with ✓ *fully
 arrived* apart from ⏳ *still in parts*, because «nothing arrived» and «it is on
-its way» are different answers. Plus the two manual verbs (bring in / send
+its way» are different answers. Select what came in and **🧭 Whiteboard** explains
+it before you take it: the whole branch, from where it left yours to its tip, on
+a whiteboard named for who sent it (pressing again opens it; a new push from
+them is a new whiteboard). Plus the two manual verbs (bring in / send
 mine) for when you do not trust the background engine yet.
 
 **And a way out**: `✕ Stop sharing` ends the co-work with one peer or with all

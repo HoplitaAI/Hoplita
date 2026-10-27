@@ -3471,19 +3471,24 @@ class ChatAssistantWindow(QMainWindow):
 
     _WB_WHATS = {"changes": ("code.wb_draw_changes", "code.wb_draw_changes_tip", "code.wb_what_changes"),
                  "commit": ("code.wb_draw_commit", "code.wb_draw_commit_tip", "code.wb_what_commit"),
-                 "overview": ("code.wb_draw_overview", "code.wb_draw_overview_tip", "code.wb_what_overview")}
+                 "overview": ("code.wb_draw_overview", "code.wb_draw_overview_tip", "code.wb_what_overview"),
+                 "history": ("code.wb_draw_history", "code.wb_draw_history_tip", "code.wb_what_history")}
     _WB_REFUSALS = {"no_changes": "code.wb_no_changes", "no_parent": "code.wb_no_parent",
                     "model_unknown": "code.wb_model_unknown", "up_to_date": "code.wb_up_to_date",
                     "not_updatable": "code.wb_not_updatable", "still_behind": "code.wb_still_behind",
-                    "empty": "code.wb_empty", "no_answers": "code.wb_no_answers"}
+                    "empty": "code.wb_empty", "no_answers": "code.wb_no_answers",
+                    "nothing_incoming": "code.wb_nothing_incoming", "incoming_gone": "code.wb_incoming_gone",
+                    "no_history": "code.wb_no_history"}
 
     _WB_STAGES = {"mapping": "code.wb_stage_mapping", "planning": "code.wb_stage_planning",
                   "exploring": "code.wb_stage_exploring", "writing": "code.wb_stage_writing",
-                  "checking": "code.wb_stage_checking"}
+                  "checking": "code.wb_stage_checking", "history": "code.wb_stage_history"}
 
     def _wb_phrase(self, what):
         if what in self._WB_WHATS:
             return self._WB_WHATS[what][2]
+        if what == "incoming":
+            return "code.wb_what_incoming"
         return "code.wb_what_redraw" if what == "redraw" else "code.wb_what_update"
 
     def _code_wb_shown(self, wid):
@@ -3506,6 +3511,8 @@ class ChatAssistantWindow(QMainWindow):
         pins = snap.get("pins") or {}
         if not pins:
             return ""
+        if snap.get("drawnAs"):
+            return snap["drawnAs"]
         return ("changes" if pins.get("head") == "worktree" else
                 "overview" if pins.get("base") == pins.get("head") else "commit")
 
@@ -3602,7 +3609,10 @@ class ChatAssistantWindow(QMainWindow):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setToolTip(t(tip))
-            b.clicked.connect(lambda _c=False, w=what: self._code_wb_draw(w))
+            if what == "history":
+                b.clicked.connect(lambda _c=False, b=b: self._code_wb_history_menu(b))
+            else:
+                b.clicked.connect(lambda _c=False, w=what: self._code_wb_draw(w))
             sl.addWidget(b)
             self._code_wb_btns[what] = b
         hb.add(seg)
@@ -3842,13 +3852,63 @@ class ChatAssistantWindow(QMainWindow):
             self._wb_root_shown = (self._code_project or "").rstrip("/\\")
             wb.show_whiteboard(None, self._wb_root_shown)
 
-    def _code_wb_draw(self, what):
+    def _code_wb_history_menu(self, btn):
+        btn.setChecked(self._wb_kind(self._wb_shown_id) == "history" if getattr(self, "_wb_shown_id", "") else False)
         root = (self._code_project or "").rstrip("/\\")
         if not root:
             self._code_say(t("code.no_project"), bad=True)
             return
         try:
-            f = requests.get(f"{self._wb_url()}/wb/api/find", params={"root": root, "what": what},
+            r = subprocess.run(["git", "-C", root, "log", "--format=%ad", "--date=format:%Y-%m", "HEAD"],
+                               capture_output=True, text=True, timeout=60,
+                               **__import__("hoplita_paths").no_console())
+            months = sorted(set(r.stdout.split())) if r.returncode == 0 else []
+        except Exception:
+            months = []
+        if not months:
+            self.code_wb_status.setText(t("code.wb_no_history"))
+            self._wb_status_row.setVisible(True)
+            return
+        from PyQt6.QtWidgets import QGridLayout, QWidgetAction
+        menu = QMenu(self)
+        box = QWidget()
+        lay = QGridLayout(box)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setHorizontalSpacing(8)
+        lay.setVerticalSpacing(6)
+        f, u = QComboBox(), QComboBox()
+        f.addItem(t("code.wb_history_start"), "")
+        u.addItem(t("code.wb_history_now"), "")
+        for m in months:
+            f.addItem(m, m)
+            u.addItem(m, m)
+        lay.addWidget(QLabel(t("code.wb_history_from")), 0, 0)
+        lay.addWidget(f, 0, 1)
+        lay.addWidget(QLabel(t("code.wb_history_to")), 1, 0)
+        lay.addWidget(u, 1, 1)
+        go = QPushButton(t("code.wb_history_draw"))
+        go.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay.addWidget(go, 2, 0, 1, 2)
+        wa = QWidgetAction(menu)
+        wa.setDefaultWidget(box)
+        menu.addAction(wa)
+
+        def draw():
+            menu.close()
+            self._code_wb_draw("history", since=f.currentData() or "", until=u.currentData() or "")
+        go.clicked.connect(draw)
+        self._wb_history_menu = menu
+        menu.popup(btn.mapToGlobal(btn.rect().bottomLeft()))
+
+    def _code_wb_draw(self, what, ref=None, since="", until=""):
+        root = (self._code_project or "").rstrip("/\\")
+        if not root:
+            self._code_say(t("code.no_project"), bad=True)
+            return
+        try:
+            f = requests.get(f"{self._wb_url()}/wb/api/find",
+                             params=dict({"root": root, "what": what}, **({"ref": ref} if ref else {}),
+                                         **({"since": since, "until": until} if what == "history" else {})),
                              timeout=10).json()
         except Exception:
             f = {}
@@ -3863,7 +3923,9 @@ class ChatAssistantWindow(QMainWindow):
             return
         if f.get("running"):
             return
-        self._code_wb_start({"root": root, "what": what}, lambda: self._code_wb_draw(what))
+        self._code_wb_start(dict({"root": root, "what": what}, **({"ref": ref} if ref else {}),
+                                 **({"since": since, "until": until} if what == "history" else {})),
+                            lambda: self._code_wb_draw(what, ref, since, until))
 
     def _code_wb_update(self, wid, root, current="", auto=False):
         if auto:
@@ -10046,6 +10108,9 @@ enabled = true
         rv.addWidget(self.code_cowork_incoming)
         _r1 = QHBoxLayout(); _r1.setSpacing(4)
         _r1.addWidget(_btn(t("code.cowork_review"), self._code_cowork_review))
+        _wbb = _btn(t("code.cowork_board"), self._code_cowork_board)
+        _wbb.setToolTip(t("code.cowork_board_tip"))
+        _r1.addWidget(_wbb)
         self.code_cowork_take = _btn(t("code.cowork_take"),
                                      self._code_cowork_take, green=True)
         self.code_cowork_take.setToolTip(t("code.cowork_take_tip"))
@@ -10405,6 +10470,14 @@ enabled = true
         if q.get("summary"):
             lines.append(q["summary"])
         self._code_cowork_say("\n".join(lines))
+
+    def _code_cowork_board(self):
+        q = self._code_cowork_selected_incoming()
+        if not q or not q.get("ref"):
+            self._code_cowork_say(t("code.cowork_take_pick"), bad=True)
+            return
+        self._code_activity(7, force=True)
+        self._code_wb_draw("incoming", ref=q["ref"])
 
     def _code_cowork_take(self):
         q = self._code_cowork_selected_incoming()

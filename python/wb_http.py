@@ -93,13 +93,21 @@ def wb_list(project: str = None, root: str = None):
 
 
 @router.get("/wb/api/find")
-def wb_find(root: str, what: str):
+def wb_find(root: str, what: str, ref: str = None, since: str = "", until: str = ""):
     import wb_jobs
     import wb_pipeline as P
     root = os.path.realpath(root.rstrip("/\\"))
-    running = next((j for j in wb_jobs.jobs(root) if j["what"] == what and j["state"] == "running"), None)
+    running = next((j for j in wb_jobs.jobs(root) if j["what"] == what and j["state"] == "running"
+                     and (what != "incoming" or j.get("ref") == ref)
+                     and (what != "history" or (j.get("since"), j.get("until")) == (since, until))), None)
     try:
-        head = V.head_commit(root)
+        if what == "incoming":
+            head = V.resolve(root, ref)
+        elif what == "history":
+            import wb_history
+            head = wb_history.range_head(root, since, until)
+        else:
+            head = V.head_commit(root)
     except Exception:
         head = ""
     found = None
@@ -114,8 +122,12 @@ def wb_find(root: str, what: str):
         except S.WbError:
             continue
         k = P.kind_of(st.snapshot(item["id"]), st.plan_get(item["id"]))
-        if k != what or (k == "commit" and pins.get("head") != head):
+        if k != what or (k in ("commit", "incoming", "history") and pins.get("head") != head):
             continue
+        if k == "history":
+            pl = st.plan_get(item["id"]) or {}
+            if (pl.get("since") or "", pl.get("until") or "") != (since, until):
+                continue
         found = item["id"]
         break
     return {"whiteboardId": found, "running": running, "head": head}
@@ -128,7 +140,9 @@ async def wb_draw(request: Request):
         return wb_jobs.start(body.get("root"), body.get("what"), body.get("model") or "",
                              body.get("whiteboardId") or None,
                              blocked=body.get("blocked") or (),
-                             remote_ok=bool(body.get("remoteOk")))
+                             remote_ok=bool(body.get("remoteOk")),
+                             ref=body.get("ref") or None,
+                             since=body.get("since") or "", until=body.get("until") or "")
     except wb_jobs.JobError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
@@ -153,7 +167,11 @@ def wb_draw_cancel(jid: str):
 @router.get("/wb/api/{wid}")
 def wb_get(wid: str, version: int = None):
     try:
-        return _decorate(_st().snapshot(wid, version))
+        snap = _decorate(_st().snapshot(wid, version))
+        if snap.get("pins") and snap.get("kind") != "scratchpad":
+            import wb_pipeline as P
+            snap["drawnAs"] = P.kind_of(snap, _st().plan_get(wid))
+        return snap
     except S.WbError as e:
         return _err(e)
 

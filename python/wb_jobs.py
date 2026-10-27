@@ -3,7 +3,7 @@ import threading
 import time
 import uuid
 
-WHATS = ("changes", "commit", "overview", "update", "redraw")
+WHATS = ("changes", "commit", "overview", "update", "redraw", "incoming", "history")
 
 _JOBS = {}
 _LOCK = threading.Lock()
@@ -28,7 +28,8 @@ def _project(root):
 
 
 def _public(job):
-    return {k: job.get(k) for k in ("id", "root", "project", "what", "alias", "model", "state",
+    return {k: job.get(k) for k in ("id", "root", "project", "what", "ref", "since", "until",
+                                    "alias", "model", "state",
                                     "whiteboardId", "started", "ended", "error", "reply", "usage",
                                     "stage", "explored", "modelFree", "trace", "gate")}
 
@@ -40,7 +41,8 @@ def _prune():
         _JOBS.pop(jid, None)
 
 
-def start(root, what, alias="", whiteboard=None, blocked=(), remote_ok=False):
+def start(root, what, alias="", whiteboard=None, blocked=(), remote_ok=False, ref=None,
+          since="", until=""):
     root = (root or "").rstrip("/\\")
     if not root:
         raise JobError("root is required: the project's checkout.")
@@ -50,17 +52,26 @@ def start(root, what, alias="", whiteboard=None, blocked=(), remote_ok=False):
         raise JobError("No agent can draw here: the MCP has no runner.")
     if what in ("update", "redraw") and not whiteboard:
         raise JobError("whiteboardId is required to bring a whiteboard up to date or redraw it.")
+    ref = (ref or "").strip()
+    if what == "incoming" and not ref.startswith("refs/hoplita/incoming/"):
+        raise JobError("ref is required: a branch under refs/hoplita/incoming/.")
+    since, until = (since or "").strip(), (until or "").strip()
+    if since and until and since > until:
+        since, until = until, since
     with _LOCK:
         _prune()
         for job in _JOBS.values():
             if job["root"] == root and job["what"] == what and job["state"] == "running" \
-                    and (what not in ("update", "redraw") or job["whiteboardId"] == whiteboard):
+                    and (what not in ("update", "redraw") or job["whiteboardId"] == whiteboard) \
+                    and job.get("ref") == (ref or None) \
+                    and (job.get("since") or "", job.get("until") or "") == (since, until):
                 return _public(job)
         job = {"id": uuid.uuid4().hex[:12], "root": root, "project": _project(root),
                "what": what, "alias": (alias or "base").strip() or "base", "model": "",
                "state": "running", "whiteboardId": whiteboard if what in ("update", "redraw") else None,
                "started": time.time(), "ended": None, "error": None, "reply": "",
                "cancel": threading.Event(),
+               "ref": ref or None, "since": since, "until": until,
                "blocked": sorted(str(b) for b in (blocked or ()) if b),
                "remote_ok": bool(remote_ok)}
         _JOBS[job["id"]] = job

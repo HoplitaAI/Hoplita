@@ -39,6 +39,44 @@ def text_includes_quote(text, quote):
     return bool(q) and q in _norm_quote(text)
 
 
+class _Rows:
+
+    def __init__(self, rows, rowcount, lastrowid):
+        self._rows, self.rowcount, self.lastrowid = rows, rowcount, lastrowid
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _LockedDB:
+
+    def __init__(self, conn, lock):
+        self._conn, self._lock = conn, lock
+
+    def execute(self, sql, args=()):
+        with self._lock:
+            cur = self._conn.execute(sql, args)
+            return _Rows(cur.fetchall() if cur.description else [], cur.rowcount, cur.lastrowid)
+
+    def executemany(self, sql, seq):
+        with self._lock:
+            cur = self._conn.executemany(sql, seq)
+            return _Rows([], cur.rowcount, cur.lastrowid)
+
+    def executescript(self, script):
+        with self._lock:
+            self._conn.executescript(script)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 class Store:
     def __init__(self, home):
         os.makedirs(home, exist_ok=True)
@@ -46,8 +84,8 @@ class Store:
         self._lock = threading.RLock()
         self._cond = threading.Condition(self._lock)
         self._changes = {}
-        self._db = sqlite3.connect(self.path, check_same_thread=False,
-                                   isolation_level=None, timeout=5)
+        self._db = _LockedDB(sqlite3.connect(self.path, check_same_thread=False,
+                                             isolation_level=None, timeout=5), self._lock)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript("""
         CREATE TABLE IF NOT EXISTS reviews(id TEXT PRIMARY KEY, version INTEGER NOT NULL,

@@ -494,7 +494,7 @@ def fill_section(board, part, brief, prose):
 
 
 
-def _change_text(root, pins):
+def _change_text(root, pins, n_commits=12):
     try:
         files = V.changed_files(root, pins["base"], pins["head"])
     except Exception:
@@ -502,11 +502,15 @@ def _change_text(root, pins):
     lines = [f"- {f.get('path')}: +{f.get('additions', 0)} -{f.get('deletions', 0)} ({f.get('status', '')})"
              for f in files[:80]]
     try:
-        msgs = [c.get("subject", "") for c in V.commits(root, pins["base"], pins["head"])][:12]
+        msgs = [c.get("subject", "") for c in V.commits(root, pins["base"], pins["head"])][:n_commits]
     except Exception:
         msgs = []
     return ("Changed files:\n" + "\n".join(lines) + ("\n\nCommits:\n" + "\n".join(msgs) if msgs else "")), \
         [f.get("path") for f in files]
+
+
+def _peer_of(ref):
+    return (ref or "").split("refs/hoplita/incoming/", 1)[-1].split("/", 1)[0] or "?"
 
 
 def _drop(board, job):
@@ -521,15 +525,28 @@ def _drop(board, job):
     job["whiteboardId"] = None
 
 
+def incoming_pins(root, ref):
+    tip = V.resolve(root, ref)
+    base = V.merge_base(root, "HEAD", tip)
+    if not base or base == tip:
+        raise PipelineError("nothing_incoming")
+    return base, tip
+
+
 def draw(job, ctx, project_of=None):
     root = job["root"]
     kind = job["what"]
     ctx.progress("mapping")
     dossier = DS.build(root)
-    target = ({"kind": "worktree"} if kind == "changes" else
-              {"kind": "commits", "head": "HEAD", "base": "HEAD~1"} if kind == "commit" else
-              {"kind": "commits", "head": "HEAD"})
+    if kind == "incoming":
+        base, tip = incoming_pins(root, job["ref"])
+        target = {"kind": "commits", "head": tip, "base": base}
+    else:
+        target = ({"kind": "worktree"} if kind == "changes" else
+                  {"kind": "commits", "head": "HEAD", "base": "HEAD~1"} if kind == "commit" else
+                  {"kind": "commits", "head": "HEAD"})
     wid = create_board(root, target, os.path.basename(root), project_of)
+    S.store().plan_put(wid, {"kind": kind, "parts": []})
     job["whiteboardId"] = wid
     board = Board(wid)
     board.begin(ctx.focus("planning"))
@@ -537,15 +554,20 @@ def draw(job, ctx, project_of=None):
         pins = board.snap()["pins"]
         change_text = ""
         if kind != "overview":
-            change_text, changed = _change_text(root, pins)
+            change_text, changed = _change_text(root, pins, 40 if kind == "incoming" else 12)
             dossier["files"] = list(dict.fromkeys(dossier["files"] + [c for c in changed if c]))
+            if kind == "incoming":
+                change_text = (f"This is what the contact '{_peer_of(job['ref'])}' sent: every "
+                               f"commit of their branch since it left mine, not merged yet.\n\n"
+                               + change_text)
         ctx.progress("planning")
         plan = _plan(ctx, "overview" if kind == "overview" else "change", dossier, change_text,
                      changed if kind != "overview" else None)
         if ctx.cancelled():
             _drop(board, job)
             return
-        board.cmd({"type": "rename", "title": plan["title"][:120]})
+        board.cmd({"type": "rename", "title": (f"{_peer_of(job['ref'])}: " if kind == "incoming" else "")
+                   + plan["title"][:120]})
         if plan.get("story"):
             _safe_insert(board, {"type": "markdown", "markdown": plan["story"]})
         for p in plan["parts"]:
@@ -676,7 +698,7 @@ def update(job, ctx, info):
 
 
 def kind_of(snap, plan=None):
-    if plan and plan.get("kind") in ("overview", "changes", "commit"):
+    if plan and plan.get("kind") in ("overview", "changes", "commit", "incoming", "history"):
         return plan["kind"]
     pins = snap.get("pins") or {}
     if pins.get("head") == V.WORKTREE:
@@ -695,6 +717,9 @@ def redraw(job, ctx):
     repo = st.repository(rid)["path"]
     job["root"] = repo
     kind = kind_of(snap, st.plan_get(wid))
+    if kind == "history":
+        import wb_history
+        return wb_history.redraw(job, ctx)
     now = V.head_commit(repo)
     if kind == "overview":
         pins, target = {"repositoryId": rid, "base": now, "head": now}, {"kind": "commits", "head": "HEAD", "repositoryId": rid}

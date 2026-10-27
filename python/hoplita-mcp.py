@@ -2274,6 +2274,12 @@ _JSON_CALLERS = {"pick_skill_for": "SKILL-PICK", "_pick": "ESCALATE",
 _NO_THINK_EXTRA = {"response_format": {"type": "json_object"},
                    "chat_template_kwargs": {"enable_thinking": False}}
 _EXTRA_REJECTED = {}
+_JSON_MODE_BROKEN = {}
+
+
+def _json_mode_corrupt(obj):
+    return isinstance(obj, dict) and any(
+        not k or not (k[0].isalpha() or k[0] == "_") for k in obj)
 
 
 def _norm_base(base_url):
@@ -2347,11 +2353,14 @@ def _llm_call_json(prompt, max_tokens=None, timeout=60, breaker=True,
                   f"or a buggy LLM server. Check the messages above.")
 
     try:
+        _json_mode = not _JSON_MODE_BROKEN.get(_norm_base(base_url))
         raw = _llm_chat_with_tools(payload["messages"], None, timeout=timeout,
                                    base_url=base_url, api_key=api_key,
                                    model=model, temperature=0.2,
                                    max_tokens=max_tokens,
-                                   extra=_NO_THINK_EXTRA)
+                                   extra=(_NO_THINK_EXTRA if _json_mode else
+                                          {k: v for k, v in _NO_THINK_EXTRA.items()
+                                           if k != "response_format"}))
         raw_json = {"usage": (raw or {}).get("usage") or {}}
         if usage_sink is not None:
             try:
@@ -2431,6 +2440,15 @@ def _llm_call_json(prompt, max_tokens=None, timeout=60, breaker=True,
             return None
 
         parsed = _extract_json_block(content)
+        if parsed is not None and _json_mode and _json_mode_corrupt(parsed):
+            _JSON_MODE_BROKEN[_norm_base(base_url)] = content[:200]
+            print(f"[{_who}] the server's JSON mode mangled the object "
+                  f"({content[:80]!r}) — asked again without it, and never "
+                  f"with it again on {base_url}.")
+            return _llm_call_json(prompt, max_tokens=max_tokens, timeout=timeout,
+                                  breaker=breaker, _grew=_grew, _who=_who, quiet=quiet,
+                                  _follow=_follow, system=system, endpoint=endpoint,
+                                  usage_sink=usage_sink)
         if parsed is not None:
             _LLM_CALL_FAILS["count"] = 0
             return parsed
@@ -9496,6 +9514,23 @@ def _wb_draw_run(job):
             _wbv.resolve(root, "HEAD~1")
         except Exception:
             raise _wbj.JobError("no_parent")
+    elif job["what"] == "history":
+        import wb_history as _wbh0
+        try:
+            if not _wbh0.range_head(root, job.get("since"), job.get("until")):
+                raise _wbj.JobError("no_history")
+        except _wbj.JobError:
+            raise
+        except Exception as e:
+            raise _wbj.JobError(str(e)[:200])
+    elif job["what"] == "incoming":
+        import wb_pipeline as _wbp0
+        try:
+            _wbp0.incoming_pins(root, job["ref"])
+        except _wbp0.PipelineError:
+            raise _wbj.JobError("nothing_incoming")
+        except Exception:
+            raise _wbj.JobError("incoming_gone")
     info = None
     if job["what"] == "redraw":
         import wb_store as _wbst
@@ -9629,12 +9664,15 @@ def _wb_draw_run(job):
             _wbp.update(job, ctx, info)
         elif job["what"] == "redraw":
             _wbp.redraw(job, ctx)
+        elif job["what"] == "history":
+            import wb_history as _wbh
+            _wbh.draw(job, ctx, project_of=_wbt._project_of)
         else:
             _wbp.draw(job, ctx, project_of=_wbt._project_of)
     except _wbp.PipelineError as e:
         raise _wbj.JobError(str(e))
     res = {"reply": ""}
-    if job["what"] in ("changes", "commit", "overview") and job.get("whiteboardId") \
+    if job["what"] in ("changes", "commit", "overview", "incoming", "history") and job.get("whiteboardId") \
             and not job["cancel"].is_set():
         try:
             import wb_store as _wbst

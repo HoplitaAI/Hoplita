@@ -54,6 +54,13 @@ def resolve(root, rev):
                        f"before authoring.", 404)
 
 
+def merge_base(root, a, b):
+    try:
+        return _git(root, ["merge-base", a, b]).strip()
+    except VcsError:
+        return ""
+
+
 def head_commit(root):
     try:
         return _git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]).strip()
