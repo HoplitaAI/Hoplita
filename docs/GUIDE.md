@@ -731,8 +731,10 @@ the distilled `AGENTS.md`. The four ride a conversation from its first turn, and
 whichever changes during it — written by the model or edited by you — reaches
 the next turn as it is now. Notes titled `project`, `spec: …` or `change: …`
 are folded into `spec` and `future` when the project opens, without losing
-content; any other title is not read by the model, and a new one cannot be
-created there.
+content. The model cannot create a note with any other title there; you can,
+from Notes, and such a note is yours: it rides with the four, under its title
+and id, read as coming from you (a request left there gets done), and the model
+may edit or delete it but not rename it into a new title.
 
 **The left bar: one view at a time**, and pressing the active icon again folds the
 side panel away and gives you the code full screen.

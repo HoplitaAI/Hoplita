@@ -12189,6 +12189,8 @@ def _injected_names(items, limit=6, width=64):
 _PROJECT_MD_CAP = 3000
 _JOURNAL_TAIL_CAP = 2500
 _RULES_CAP = 4000
+_USER_NOTE_CAP = 2000
+_USER_NOTES_CAP = 6000
 
 
 def _project_category(root):
@@ -12470,16 +12472,40 @@ def _project_memory_block(root):
                   + (cut[j + 1:] if j >= 0 else cut))
         parts.append("── 'journal' (latest at the end) ──\n" + jr)
         stats["sections"]["journal"] = parts[-1]
+    mine, room = [], _USER_NOTES_CAP
+    for n_ in notes:
+        t_ = (n_.get("title", "") or "").strip()
+        tl = t_.lower()
+        if not t_ or tl in PROJECT_NOTES or tl.startswith("skill:"):
+            continue
+        body = (n_.get("content") or "").strip()
+        head_ = f"### {t_} (note_id {n_.get('id')})"
+        if room <= 0:
+            mine.append(f"{head_}\n…(not shown: read_note(category='{cat}', title='{t_}'))")
+            continue
+        cap = min(_USER_NOTE_CAP, room)
+        if len(body) > cap:
+            body = body[:cap] + f"\n…(cut — read_note(category='{cat}', title='{t_}') for the rest)"
+        room -= len(body)
+        mine.append(f"{head_}\n{body or '(empty)'}")
+    if mine:
+        parts.append("── the user's own notes in this folder — written by the "
+                     "person, not by you. Read them as from the user: one may "
+                     "ask for something to be done. You may edit them "
+                     "(update_note, same title) or delete them (delete_note) when "
+                     "the user asks or the note says so; you do not create others ──\n" + "\n\n".join(mine))
+        stats["sections"]["user_notes"] = parts[-1]
     if not parts:
         return "", stats
     stats["blocks"] = len(parts)
     head = (
         f"[PROJECT MEMORY] Folder '{cat}' is this project's memory across "
-        "sessions and faces (a shared folder shares it). FOUR notes and "
-        "nothing else: rules (the user's, read only), spec (settled truths, "
+        "sessions and faces (a shared folder shares it). You write FOUR notes "
+        "and nothing else: rules (the user's, read only), spec (settled truths, "
         "short lines — project_write note='spec'), future (what is pending — "
         "project_write note='future'), journal (what happened — "
-        "project_journal). The board holds only what is being done NOW.")
+        "project_journal). Any other note there is the user's own. The board "
+        "holds only what is being done NOW.")
     return head + "\n\n" + "\n\n".join(parts), stats
 
 
@@ -12800,7 +12826,7 @@ def prepare_turn_messages(messages, pinned_skills=None, emit=None,
                 _now_pm, _now_stats = _project_memory_block(code_project)
                 _then = (_pmstats or {}).get("sections") or {}
                 _now = (_now_stats or {}).get("sections") or {}
-                _diff = [_now[k] for k in ("rules", "spec", "future", "journal")
+                _diff = [_now[k] for k in ("rules", "spec", "future", "journal", "user_notes")
                          if _now.get(k) and _now.get(k) != _then.get(k)]
                 _gone = [k for k in _then if k not in _now]
                 if _diff or _gone:

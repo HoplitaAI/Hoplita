@@ -163,7 +163,7 @@ The model working on the user's own screen. Two layers under one contract: the *
 | `project_journal` | `path` `entry` `title?` | Appends a dated entry to the open code project's journal, a note in the project's own folder. That folder holds the project memory (`rules`, `spec`, `future`, `journal`, plus `skill: …` notes), read at the start of a conversation and again when it changes; it syncs and federates like any notes folder. |
 | `project_write` | `path` `note` `text` `replace?` | Writes one of the open project's notes: `spec` (a settled truth, short), `future` (something pending) or `journal` (dated). Appends; `replace=true` rewrites the note whole. |
 
-A code project's memory is a notes folder with exactly four notes, `rules` (the user's standing orders), `spec`, `future` and `journal`, plus any `skill: …` notes; `add_note` refuses any other title in a project folder. Its task board is for immediate work: at most 7 open tasks per code project (`add_task` refuses beyond that), and what is pending but not being done goes to `future`.
+A code project's memory is a notes folder with exactly four notes, `rules` (the user's standing orders), `spec`, `future` and `journal`, plus any `skill: …` notes; `add_note` refuses any other title in a project folder. A note with another title written by the user from Notes rides with the four as the user's own; the model may edit (`update_note`, same title) or delete it. Its task board is for immediate work: at most 7 open tasks per code project (`add_task` refuses beyond that), and what is pending but not being done goes to `future`.
 
 
 ## 📅 Calendar
