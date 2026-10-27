@@ -1706,8 +1706,14 @@ some desktops need more:
 
 - **KDE Plasma**: usually works out of the box. If not, install `libappindicator-gtk3` (RHEL)
   or `libayatana-appindicator3-1` (Debian).
-- **GNOME**: it also needs the AppIndicator extension —
-  `sudo apt install gnome-shell-extension-appindicator`, then enable it in *Extensions*.
+- **GNOME**: it has no tray of its own and needs the AppIndicator extension
+  (Ubuntu ships it enabled) — `sudo apt install gnome-shell-extension-appindicator`
+  or `sudo dnf install gnome-shell-extension-appindicator`, then enable it in
+  *Extensions* and log in again.
+
+Without a tray HOPLITA still runs: there is simply no icon, alerts come as a
+dialog with their sound, and the window's ✕ quits instead of hiding to the tray.
+Quitting stops the scheduled jobs too, since the scheduler lives in the window.
 
 ```bash
 python -c "from PyQt6.QtWidgets import QApplication,QSystemTrayIcon; \

@@ -52,6 +52,11 @@ the libraries Qt's web engine uses. `python3 install.py --system-libs`
 installs them with your distribution's package manager (it is the one flag
 that asks for `sudo`).
 
+GNOME has no tray of its own: install and enable the AppIndicator extension
+(`gnome-shell-extension-appindicator`; Ubuntu ships it enabled). Without a tray
+HOPLITA runs with no icon and the window's ✕ quits it instead of hiding it,
+which also stops the scheduled jobs.
+
 ## macOS
 
 macOS 13 (Ventura) or newer. The `python3` that comes with the Command Line
