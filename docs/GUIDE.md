@@ -1209,11 +1209,23 @@ arrives, not by pruning it once a week.
   their next sync (every deletion leaves a dated tombstone), and a curation
   change that touched a deleted fact says it can no longer be undone instead of
   bringing it back.
-- **What reaches a turn.** When every live fact fits, the whole list rides the
-  stable top of the prompt. When it does not, the most used ones do,
-  and a small block at the end of the message adds the facts that bear on what
-  you just asked — and, in a conversation already running, the facts learned
-  since it started.
+- **Every fact has a life.** *Permanent* (who you are: name, family, IDs,
+  your machines' addresses), *relevant* (something ongoing: a project, a trip,
+  a purchase) or *volatile* (one moment: a search, a troubleshooting step).
+  The extractor gives it when it writes the fact; an hourly clock gives one to
+  the rest. Memory → Facts shows it beside each fact.
+- **What reaches a turn.** Only the permanent facts ride the stable top of the
+  prompt. The rest come in when the words of your message touch them, in a
+  small block at the end, and the agent is told to `recall` before answering
+  when you bring up something of your life that neither covers. Every log
+  search result carries a marker (`at`) and `session_read` reads the
+  conversation around it, the way a file is read from a line.
+- **What passes, passes.** A volatile fact that has not come up for
+  `[MEMORY] volatile_days` (3) is archived by the clock; a relevant one silent
+  for `ask_after_days` (30) becomes a question in Memory → Proposals, «still
+  on with this?»: *No longer* archives it, *Yes* keeps it and restarts its
+  clock. «Come up» means stored again, returned by a search, or spoken of in
+  the log. Who you are never expires this way.
 - **The review applies, and can be undone.** Merging look-alikes (read in
   groups of related facts once the list outgrows one prompt), retiring what
   the conversation log shows ended, and archiving a session's errand kept as a
@@ -1275,8 +1287,10 @@ review_every_hours = 168   ; weekly. It checks the clock every 15 min, so a
 review_facts = 0           ; facts per automatic pass; 0 = a third of the
                            ; pending pool (6 to 60), so the whole store is
                            ; seen each window
-fade_after_days = 60       ; a fact said once and never spoken of again is
-                           ; archived after this long (undoable); 0 = never
+volatile_days = 3          ; a passing moment is archived after this long
+                           ; without coming up again (undoable); 0 = never
+ask_after_days = 30        ; something ongoing becomes a «still on with
+                           ; this?» question after this long; 0 = never
 ```
 
 The schedule is configuration, not a CRON row, on purpose: a row can be edited

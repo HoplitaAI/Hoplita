@@ -197,6 +197,7 @@ A code project's memory is a notes folder with exactly four notes, `rules` (the 
 |---|---|---|
 | `session_search` | `query` `limit?` `session?` `context?` `include_machinery?` | Searches everything ever said, verbatim, across all past conversations; each hit comes with the messages around it. `include_machinery=true` also searches what the tools did (each turn's record) and the summaries compactions produced. |
 | `session_moments` | `query` `limit?` `window_min?` | Finds the **moments** a subject was discussed (the bursts of messages where all the terms co-occur) rather than single matching lines. |
+| `session_read` | `at` `before?` `after?` | Reads the log **around a marker**: every message a log search returns carries its `at`, and a text cut short names the marker to read on from, the way a file is read from a line. |
 | `session_recall` | `session` `query?` `k?` | Searches inside one saved conversation. |
 | `session_brief` | `session` `refresh?` | Summarises a saved conversation (by title or uuid) so a scheduled task can inherit its context; cached per revision. |
 | `sticky_note` | `text` | Rewrites the conversation's sticky note: the working note pinned above the chat that the user reads and edits (what is settled, what is left to run). The whole note every time, at most 15 lines; empty text clears it. It rides at the top of every turn, so no tool is needed to read it. Written by the GUI on the tab it belongs to. |

@@ -160,7 +160,8 @@ model =
 auto_review = on
 review_every_hours = 168
 review_facts = 0
-fade_after_days = 60
+volatile_days = 3
+ask_after_days = 30
 
 [AGENTIC]
 defer_tool_schemas = true

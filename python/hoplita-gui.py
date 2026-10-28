@@ -4969,14 +4969,15 @@ enabled = true
         pl.addLayout(_ph)
         self.prop_list = QListWidget()
         self.prop_list.setWordWrap(True)
+        self.prop_list.currentItemChanged.connect(self._prop_buttons_for)
         pl.addWidget(self.prop_list, 1)
         _pb = QHBoxLayout()
-        _ac = QPushButton(t("prop.accept"))
+        _ac = self.prop_accept_btn = QPushButton(t("prop.accept"))
         _ac.setStyleSheet("QPushButton { background:#065f46; color:#d1fae5; "
                           "border:1px solid #10b981; border-radius:8px; "
                           "padding:4px 14px; font-weight:600; }")
         _ac.clicked.connect(lambda: self._decide_proposal(True))
-        _no = QPushButton(t("prop.reject"))
+        _no = self.prop_reject_btn = QPushButton(t("prop.reject"))
         _no.clicked.connect(lambda: self._decide_proposal(False))
         _all = QPushButton(t("prop.accept_all"))
         _all.setToolTip(t("prop.confirm_all", n="N"))
@@ -5193,6 +5194,7 @@ enabled = true
             _acc = ({"retire": lambda: t("prop.retire"),
                      "prune": lambda: t("prop.prune"),
                      "fade": lambda: t("prop.fade"),
+                     "ask": lambda: t("prop.ask", days=(re.findall(r"\d+", p.get("why") or "") or ["?"])[0]),
                      "merge": lambda: t("prop.merge", new=p.get("new_text", ""),
                                         n=len(p.get("absorbed") or []) + 1),
                      "replace": lambda: t("prop.replace",
@@ -5201,9 +5203,10 @@ enabled = true
             _quote = "\n".join(f"      «{q.get('text','')[:120]}»"
                                f"  ({q.get('ts','')[:10]})"
                                for q in (p.get("quotes") or [])[:2])
+            _why = "" if _act == "ask" else f"   ↳ {p.get('why','')}\n"
             it = QListWidgetItem(
                 f"{_acc}\n   {p.get('target_text') or p.get('target_id','')}\n"
-                f"   ↳ {p.get('why','')}\n{_quote}")
+                f"{_why}{_quote}")
             it.setData(Qt.ItemDataRole.UserRole, p)
             self.prop_list.addItem(it)
 
@@ -5297,7 +5300,7 @@ enabled = true
             tmr.start()
         self._review_tick()
 
-    _REVIEW_STILL_S = {"facts": 90, "lessons": 330, "duplicates": 330, "apply": 60}
+    _REVIEW_STILL_S = {"classify": 330, "facts": 90, "lessons": 330, "duplicates": 330, "apply": 60}
 
     def _review_tick(self):
         try:
@@ -5376,11 +5379,21 @@ enabled = true
                      dups=_d.get("looked_at", 0),
                      merged=len(_l.get("merged") or []),
                      pending=_f.get("pending", 0))
+            _ex = r.get("expired") or {}
+            if isinstance(_ex, dict) and (_ex.get("faded") or _ex.get("asked")):
+                _msg = t("prop.expired", faded=_ex.get("faded", 0),
+                         asked=len(_ex.get("asked") or [])) + "\n" + _msg
         self.prop_count.setText(_msg)
         if self.prop_list.count() == 1 \
                 and self.prop_list.item(0).data(Qt.ItemDataRole.UserRole) is None:
             self.prop_list.item(0).setText(_msg)
         self._load_memory_lessons()
+
+    def _prop_buttons_for(self, item, _prev=None):
+        p = item.data(Qt.ItemDataRole.UserRole) if item else None
+        ask = isinstance(p, dict) and p.get("action") == "ask"
+        self.prop_accept_btn.setText(t("prop.ask_no") if ask else t("prop.accept"))
+        self.prop_reject_btn.setText(t("prop.ask_yes") if ask else t("prop.reject"))
 
     def _decide_proposal(self, accept):
         item = self.prop_list.currentItem()
@@ -5553,13 +5566,15 @@ enabled = true
             pin = "📌" if hits >= 3 else "  "
             tags = ", ".join(f.get("tags", []))
             _seen = (f.get("last_seen") or f.get("ts") or "")[:10]
-            text = (f"{'⚠' if f.get('generic') else ' '}{pin} [{hits}×]  {_seen}   "
+            _life = {"permanent": t("mem.life_permanent"), "relevant": t("mem.life_relevant"),
+                     "volatile": t("mem.life_volatile")}.get(f.get("life"), t("mem.life_unsorted"))
+            text = (f"{'⚠' if f.get('generic') else ' '}{pin} [{hits}×]  {_seen}  {_life}   "
                     f"{f.get('text', '')}")
             if _arch_view:
                 _r = f.get("archived_reason") or ""
                 _rk = {"superseded": "mem.arch_superseded", "merged": "mem.arch_merged",
                        "retire": "mem.arch_retire", "prune": "mem.arch_prune",
-                       "fade": "mem.arch_fade"}.get(_r)
+                       "fade": "mem.arch_fade", "ask": "mem.arch_ask"}.get(_r)
                 _rl = t(_rk) if _rk else _r
                 text = (f"{(f.get('archived_at') or '')[:10]}  ·  {_rl}   "
                         f"{f.get('text', '')}")

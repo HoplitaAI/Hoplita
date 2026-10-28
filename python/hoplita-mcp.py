@@ -1699,7 +1699,7 @@ def _fact_gate(text, kind, live):
     return out
 
 
-def _add_fact(text, tags=None, kind="durable", report=None, gate=True):
+def _add_fact(text, tags=None, kind="durable", report=None, gate=True, life=None):
     report = report if isinstance(report, dict) else {}
     text, _hidden = sanitize_memory_text(text)
     if _hidden:
@@ -1785,6 +1785,8 @@ def _add_fact(text, tags=None, kind="durable", report=None, gate=True):
         "hits": 1,
         "last_seen": now,
     }
+    if life in _FACT_LIVES:
+        fact["life"] = life
     with _facts_lock:
         _facts_data.append(fact)
         _save_facts_to_disk()
@@ -1930,7 +1932,7 @@ def facts_catalogue(budget=None):
                 init_facts()
     except Exception as _e:
         print(f"[FACTS] could not check the store: {_e}", file=sys.stderr)
-    all_facts = _live_facts()
+    all_facts = [f for f in _live_facts() if f.get("life") not in ("volatile", "relevant")]
     if not all_facts:
         return "", 0, 0
     _weight = lambda f: ((f.get("hits", 1) + f.get("recalls", 0))
@@ -3955,6 +3957,32 @@ def backfill_message_log():
         return 0
 
 
+def _clip_at(text, n, at):
+    text = text or ""
+    return text if len(text) <= n else f"{text[:n]} [… cut: session_read(at={at})]"
+
+
+def tool_session_read(at, before=3, after=3):
+    try:
+        sql = _get_sql()
+        if sql is None:
+            return {"error": "store unavailable"}
+        before = max(0, min(int(before), 20))
+        after = max(0, min(int(after), 20))
+        rows = sql.message_context(int(at), before, after)
+        if not rows:
+            return {"error": f"nothing logged at {at}"}
+        return {"at": int(at),
+                "messages": [{"at": r["rowid"], "when": r.get("ts", ""),
+                              "session": r.get("session", ""), "role": r["role"],
+                              "text": _clip_at(r["text"], 4000, r["rowid"])}
+                             for r in rows],
+                "earlier": f"session_read(at={rows[0]['rowid']}, before={before or 3}, after=0)",
+                "later": f"session_read(at={rows[-1]['rowid']}, before=0, after={after or 3})"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def tool_session_moments(query, limit=4, window_min=5):
     try:
         sql = _get_sql()
@@ -3967,7 +3995,8 @@ def tool_session_moments(query, limit=4, window_min=5):
             out.append({
                 "when": m.get("ts", ""), "session": m.get("session", ""),
                 "matched_terms": m.get("covers", []), "score": m.get("score", 0),
-                "messages": [{"role": x["role"], "text": x["text"][:900]}
+                "messages": [{"at": x["rowid"], "role": x["role"],
+                              "text": _clip_at(x["text"], 900, x["rowid"])}
                              for x in sql.moment_messages(m["from_rowid"],
                                                           m["to_rowid"])]})
         return {"query": query, "moments": out,
@@ -3990,11 +4019,11 @@ def tool_session_search(query, limit=6, session=None, context=1,
                                    roles=("*",) if include_machinery else None)
         out = []
         for h in hits:
-            item = {"session": h["session"], "role": h["role"],
-                    "ts": h["ts"], "text": h["text"][:1200]}
+            item = {"at": h["rowid"], "session": h["session"], "role": h["role"],
+                    "ts": h["ts"], "text": _clip_at(h["text"], 1200, h["rowid"])}
             if context:
                 item["around"] = [
-                    {"role": c["role"], "text": c["text"][:400]}
+                    {"at": c["rowid"], "role": c["role"], "text": _clip_at(c["text"], 400, c["rowid"])}
                     for c in sql.message_context(h["rowid"], context, context)
                     if c["rowid"] != h["rowid"]]
             out.append(item)
@@ -4014,10 +4043,10 @@ def tool_propose_memory_change(target_id, action, why, quotes,
     sql = _get_sql()
     if sql is None:
         return {"error": "store unavailable"}
-    if action not in ("retire", "replace", "merge", "prune", "fade"):
+    if action not in ("retire", "replace", "merge", "prune", "fade", "ask"):
         return {"error": "action must be retire, replace, merge or prune"}
     quotes = [q for q in (quotes or []) if isinstance(q, dict) and q.get("text")]
-    if action in ("prune", "fade") and not quotes:
+    if action in ("prune", "fade", "ask") and not quotes:
         _f = next((x for x in _facts_data if x.get("id") == target_id), None)
         if _f is None:
             return {"error": "no such fact"}
@@ -4141,22 +4170,129 @@ def _curate_evidence(fact, window_min=5, max_lines=24):
     return lines[:max_lines]
 
 
-def _fade_after_days():
-    try:
-        return max(0, CONFIG.getint("MEMORY", "fade_after_days", fallback=60)) if CONFIG else 60
-    except Exception:
-        return 60
+_FACT_LIVES = ("volatile", "relevant", "permanent")
+_LIFE_PROMPT = """Each line below is something a memory system stored about a person.
+Say how long each one stays worth knowing.
+
+PERMANENT: who the person is, true for years: their name, age, ID numbers,
+family and the people around them, where they live, their job or role, health
+facts, addresses and IPs of their own machines and accounts, lasting tastes,
+habits and ways of working, how they want to be answered, the projects they
+own and maintain.
+
+RELEVANT: something ongoing in their life that may matter for weeks or months
+and then ends: a project in progress, a trip or a purchase being planned, a
+job search, something being learned, a problem that keeps coming back, work
+for a client.
+
+VOLATILE: one moment, worth nothing after a few days: a search, a question, a
+step taken while troubleshooting, a detail of the hardware or software found
+while fixing something, a test of a tool, a one-off request, a plan for a
+single file, today's error.
+
+When a line could be PERMANENT, it is PERMANENT: losing who someone is costs
+more than keeping one stale line. Between RELEVANT and VOLATILE, choose
+RELEVANT: those are asked about before they go.
+
+{lines}
+
+Answer with the numbers of each kind (a number in one list only; numbers in
+no list count as RELEVANT):
+{{"permanent": [numbers], "volatile": [numbers]}}"""
 
 
-def _fact_faded(f, days):
-    if not days or int(f.get("hits", 1) or 1) > 1 or int(f.get("recalls", 0) or 0) > 0:
+def _classify_facts_life(texts, batch=30):
+    out = {}
+    for start in range(0, len(texts), batch):
+        chunk = texts[start:start + batch]
+        lines = "\n".join(f"{i}. {t}" for i, t in enumerate(chunk))
+        r_ = _llm_call_json(_LIFE_PROMPT.format(lines=lines),
+                            timeout=_side_timeout(300), breaker=False)
+        if not isinstance(r_, dict):
+            continue
+
+        def _nums(key):
+            got = set()
+            for x in (r_.get(key) or []) if isinstance(r_.get(key), list) else []:
+                try:
+                    got.add(int(x))
+                except (TypeError, ValueError):
+                    pass
+            return got
+        perm, vol = _nums("permanent"), _nums("volatile")
+        for i in range(len(chunk)):
+            out[start + i] = ("permanent" if i in perm else
+                              "volatile" if i in vol else "relevant")
+    return out
+
+
+def _life_days():
+    def _g(k, d):
+        try:
+            return max(0, CONFIG.getint("MEMORY", k, fallback=d)) if CONFIG else d
+        except Exception:
+            return d
+    return _g("volatile_days", 3), _g("ask_after_days", 30)
+
+
+def _sort_facts_life():
+    with _facts_lock:
+        todo = [f for f in _facts_data
+                if _fact_live(f) and f.get("life") not in _FACT_LIVES]
+    if not todo:
         return 0
-    try:
-        age = (datetime.now() - datetime.fromisoformat(
-            f.get("last_seen") or f.get("ts") or "")).days
-    except Exception:
-        return 0
-    return age if age >= days else 0
+    got = _classify_facts_life([f.get("text", "") for f in todo])
+    with _facts_lock:
+        for i, f in enumerate(todo):
+            if i in got:
+                f["life"] = got[i]
+        _save_facts_to_disk()
+    return len(got)
+
+
+def _fact_silence(f, lines=()):
+    last = None
+    for m in [f.get("last_seen"), f.get("ts"), f.get("last_recalled")] + \
+             [r.get("ts") for r in (lines or ())]:
+        try:
+            d = datetime.fromisoformat(str(m)[:26])
+        except Exception:
+            continue
+        last = d if last is None or d > last else last
+    return (datetime.now() - last).days if last else None
+
+
+def expire_facts():
+    vdays, adays = _life_days()
+    rows = _proposals_rows()
+    waiting = {r.get("target_id") for r in rows if r.get("status") == "pending"}
+    with _facts_lock:
+        live = [f for f in _facts_data if _fact_live(f)
+                and f.get("life") in ("volatile", "relevant")
+                and f.get("id") not in waiting]
+    faded, asked = [], []
+    for f in live:
+        days = vdays if f["life"] == "volatile" else adays
+        if not days:
+            continue
+        quick = _fact_silence(f)
+        if quick is None or quick < days:
+            continue
+        silent = _fact_silence(f, _curate_evidence(f))
+        if silent is None or silent < days:
+            continue
+        if f["life"] == "volatile":
+            p_ = tool_propose_memory_change(
+                f["id"], "fade", f"a passing moment; nothing about it for {silent} days", [])
+            if p_.get("proposed"):
+                faded.append(p_["id"])
+        else:
+            p_ = tool_propose_memory_change(
+                f["id"], "ask", f"nothing about it for {silent} days", [])
+            if p_.get("proposed"):
+                asked.append({"id": p_["id"], "fact": f.get("text", ""), "days": silent})
+    applied = _apply_curator_proposals(faded) if faded else []
+    return {"faded": len(applied), "asked": asked}
 
 
 def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
@@ -4180,23 +4316,11 @@ def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
     elif int(limit) < 0:
         limit = max(1, len(_cands))
     _todo = _cands[:max(1, int(limit))]
+    _review_step("facts")
     _review_step(total=len(_todo), limit=_side_timeout(90))
-    _fade = _fade_after_days()
     for _n, f in enumerate(_todo):
         _review_step(done=_n, current=f.get("text", ""))
         lines = _curate_evidence(f, window_min=window_min)
-        _faded = not lines and _fact_faded(f, _fade)
-        if _faded:
-            _mark_curated(f["id"])
-            _why = (f"said once ({_faded} days ago) and not spoken of since, "
-                    f"nor returned by any search")
-            reviewed.append({"fact": f.get("text", ""), "verdict": "faded",
-                             "why": _why})
-            p_ = tool_propose_memory_change(f["id"], "fade", _why, [])
-            if p_.get("proposed"):
-                proposals.append({"id": p_["id"], "fact": f.get("text", ""),
-                                  "action": "fade"})
-            continue
         if not lines:
             ok += 1
             v_ = _llm_call_json(_PRUNE_PROMPT.format(text=f.get("text", "")),
@@ -4280,8 +4404,7 @@ def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
             proposals.append({"id": p["id"], "fact": f.get("text", ""),
                                "action": "replace" if v == "happened"
                                          else "retire"})
-    _nf = sum(1 for r in reviewed if r.get("verdict") == "faded")
-    out = {"asked": ok, "checked": ok + len(no_trace) + _nf, "faded": _nf,
+    out = {"asked": ok, "checked": ok + len(no_trace),
            "proposals": proposals, "reviewed": reviewed,
            "no_trace": no_trace[:20],
            "pool": len(_cands), "pool_stats": _pool_stats,
@@ -4602,7 +4725,12 @@ def _memory_review(facts):
         out["lessons"] = curate_lessons()
     except Exception as e:
         out["lessons"] = {"error": str(e)[:200]}
-    _review_step("facts")
+    _review_step("classify")
+    try:
+        out["sorted"] = _sort_facts_life()
+        out["expired"] = expire_facts()
+    except Exception as e:
+        out["expired"] = {"error": str(e)[:200]}
     try:
         out["facts"] = curate_memory(limit=facts)
     except Exception as e:
@@ -4686,12 +4814,26 @@ def _curate_due(hours):
         return True
 
 
+_EXPIRE_EVERY_S = 3600
+_expire_last = [time.time()]
+
+
 def _curate_loop():
     while True:
         try:
             woken = _CURATE_WAKE.wait(_CURATE_TICK_S)
             _CURATE_WAKE.clear()
             on, hours, facts = _curate_cfg()
+            if on and time.time() - _expire_last[0] >= _EXPIRE_EVERY_S:
+                _expire_last[0] = time.time()
+                try:
+                    _sort_facts_life()
+                    _ex = expire_facts()
+                    if _ex.get("faded") or _ex.get("asked"):
+                        print(f"[MEMORY] clock: {_ex['faded']} passing fact(s) archived, "
+                              f"{len(_ex['asked'])} question(s) for the person", file=sys.stderr)
+                except Exception as _e:
+                    print(f"[MEMORY] clock: {_e}", file=sys.stderr)
             if woken and on and time.time() - _pressure_last[0] > _PRESSURE_EVERY_S:
                 _pressure_last[0] = time.time()
                 r = memory_review(facts=facts)
@@ -4784,7 +4926,8 @@ def tool_recall(query, terms=None, n_results=4):
         _log = tool_session_moments(q, limit=max(2, n_results // 2))
         found["conversation"] = [
             {"when": m.get("when", ""), "matched": m.get("matched_terms", []),
-             "text": " | ".join(f"{x['role']}: {x['text'][:180]}"
+             "at": (m.get("messages") or [{}])[0].get("at"),
+             "text": " | ".join(f"{x['role']}@{x.get('at')}: {_clip_at(x['text'], 180, x.get('at'))}"
                                 for x in m.get("messages", [])[:6])}
             for m in (_log.get("moments") or [])]
         if _log.get("error"):
@@ -9168,6 +9311,8 @@ def register_tools():
                                    "fn": lambda a: list_facts()},
         "add_fact":               {"desc": "Save a FACT confirmed by the user about themselves or their world (name, mapping, personal detail, preference, equivalence). Use it WHEN the user explicitly says 'learn that X', 'remember that Y', 'don't forget that Z'. These facts are automatically injected into the context in future conversations. Do NOT use this for technical documentation or notes — for that use add_note. Pass `kind` when it is not a permanent truth: an intention ('wants to', 'is going to') or a state ('right now X'), so it can be retired when it stops applying instead of being injected for ever. If the result lists RELATED existing facts, READ them: when the new fact supersedes one (moved cities, changed jobs), delete_fact or edit_fact the stale one NOW — two contradictory facts injected together poison every future turn.",
                                    "fn": lambda a: tool_add_fact_checked(a["text"], a.get("tags"), a.get("kind"))},
+        "session_read":           {"desc": "Read the conversation log AROUND a marker: every message a log search returns (recall's conversation drawer, session_moments, session_search) carries its `at`, and a text cut short says so with the marker to read on from. Like reading a file from a line: one message after when a sentence stops at 'I want to buy the…', several before to see what started it. Whole messages, in order, with the markers to go earlier or later.",
+                                   "fn": lambda a: tool_session_read(a["at"], a.get("before", 3), a.get("after", 3))},
         "session_moments":        {"desc": "Find the MOMENTS you talked about something, not the lines that match. A conversation is a burst of messages about one thing: two common words may each appear everywhere alone, but the few minutes where BOTH appear is the conversation you want — and the answer is usually two messages later. Ranked by how many DISTINCT query terms a block covers, weighted by how rare each is in the whole log. PREFER THIS over session_search when you are looking for a past conversation rather than a single quote.",
                                    "fn": lambda a: tool_session_moments(a["query"], a.get("limit", 4), a.get("window_min", 5))},
         "session_search":         {"desc": "Search everything ever SAID, verbatim, across all past conversations. No summary, no distiller, no model: the raw log, in milliseconds. Use it for 'what did we decide about X', 'what was that command', 'which one was I going to pick' — and ALWAYS before telling the user there is no record of something. Each hit comes with the messages around it.",
@@ -9798,6 +9943,10 @@ def register_tool_params():
         "add_fact":               {"properties": {"text": {"type": "string", "description": "The fact in a clear sentence, e.g. 'The cat is called Pixel'"},
                                                   "kind": {"type": "string", "enum": ["durable", "intencion", "estado"], "description": "durable = true from now on (a name, a relationship, a machine). intencion = something they mean to do, which stops being true once done or dropped. estado = how things are right now, which changes. Default durable."},
                                                   "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]},
+        "session_read":           {"properties": {"at": {"type": "integer", "description": "A marker: the `at` a log search (recall, session_moments, session_search) returned."},
+                                                  "before": {"type": "integer", "description": "Messages before it (0-20, default 3)."},
+                                                  "after": {"type": "integer", "description": "Messages after it (0-20, default 3)."}},
+                                   "required": ["at"]},
         "session_moments":        {"properties": {"query": {"type": "string"},
                                                   "limit": {"type": "integer"},
                                                   "window_min": {"type": "integer", "description": "Minutes of silence that end a moment. 5 by default."}},
@@ -11650,7 +11799,7 @@ _FAMILY_BLURB = {
 
 _SHELF_KEEP_DESC = {
     "recall", "intent", "use_skill", "skill_folder", "search_rag",
-    "session_moments", "session_brief", "session_recall", "session_search",
+    "session_moments", "session_brief", "session_recall", "session_search", "session_read",
     "browse_web", "scrape_url", "call_api", "screenshot_web",
     "render_html", "canvas_eval", "canvas_see", "dashboard_render",
     "pdf", "pdf_info", "generate_pdf", "alert", "office", "office_info",
@@ -12934,8 +13083,7 @@ def prepare_turn_messages(messages, pinned_skills=None, emit=None,
     try:
         _shown = set(re.findall(r"• \[([^\]]+)\]", cat or ""))
         _since = ((_snap or {}).get("facts_ts") or (_new_snap or {}).get("facts_ts") or "") if _skey else ""
-        _rel = facts_relevant(query if (outside_n or not _skey) else "", _shown, since=_since) \
-            if (outside_n or _since) else []
+        _rel = facts_relevant(query, _shown, since=_since)
         if _rel:
             _rb = _tr("inject.facts_relevant") + "\n" + "\n".join(_rel)
             out = _inject_block(out, _rb, stable=False)
@@ -14336,7 +14484,8 @@ def _distill_facts(history):
             try:
                 _rep = {}
                 if _add_fact(text, f.get("tags") or ["auto_extract"],
-                             kind=f.get("kind", "durable"), report=_rep) is not None \
+                             kind=f.get("kind", "durable"), report=_rep,
+                             life=str(f.get("life") or "").strip().lower()) is not None \
                         and _rep.get("action") != "same":
                     saved += 1
             except Exception as e:
@@ -14658,6 +14807,16 @@ def memory_proposal_decide(pid: str, req: ProposalDecision):
     if row is None:
         return {"error": "not found"}
     if not req.accept:
+        if row.get("action") == "ask":
+            row["status"] = "kept"
+            row["decided"] = _chat_now_iso()
+            sql.upsert("memory_proposals", pid, row)
+            with _facts_lock:
+                for f in _facts_data:
+                    if f.get("id") == row.get("target_id"):
+                        f["last_seen"] = datetime.now().isoformat()
+                _save_facts_to_disk()
+            return {"kept": True}
         row["status"] = "rejected"
         row["decided"] = _chat_now_iso()
         sql.upsert("memory_proposals", pid, row)
@@ -14677,7 +14836,7 @@ def memory_proposal_decide(pid: str, req: ProposalDecision):
 
 def _apply_fact_change(row, fact_):
     images = []
-    if row["action"] in ("retire", "prune", "fade"):
+    if row["action"] in ("retire", "prune", "fade", "ask"):
         b = _archive_fact(fact_["id"], row["action"])
         if b:
             images.append(b)
@@ -14716,7 +14875,7 @@ def _apply_curator_proposals(pids):
     rows = {r.get("id"): r for r in _proposals_rows()}
     for pid in pids:
         row = rows.get(pid)
-        if not row or row.get("status") != "pending":
+        if not row or row.get("status") != "pending" or row.get("action") == "ask":
             continue
         fact_ = next((f for f in _facts_data if f.get("id") == row.get("target_id")), None)
         if fact_ is None or not _fact_live(fact_):
