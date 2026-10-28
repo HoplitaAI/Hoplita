@@ -3493,28 +3493,9 @@ class ChatAssistantWindow(QMainWindow):
 
     def _code_wb_shown(self, wid):
         self._wb_shown_id = wid or ""
-        kind = self._wb_kind(wid) if wid else ""
-        for w, b in self._code_wb_btns.items():
-            b.setChecked(w == kind)
         if wid and self._wb_to_follow:
             self._wb_to_follow = {j for j in self._wb_to_follow if self._wb_job_board(j) in ("", wid)}
-        on = bool(wid) and wid != "scratchpad"
-        self.code_wb_redraw.setEnabled(on)
-        self.code_wb_delete.setEnabled(on)
         self._code_wb_poll()
-
-    def _wb_kind(self, wid):
-        try:
-            snap = requests.get(f"{self._wb_url()}/wb/api/{wid}", timeout=5).json()
-        except Exception:
-            return ""
-        pins = snap.get("pins") or {}
-        if not pins:
-            return ""
-        if snap.get("drawnAs"):
-            return snap["drawnAs"]
-        return ("changes" if pins.get("head") == "worktree" else
-                "overview" if pins.get("base") == pins.get("head") else "commit")
 
     def _wb_job_board(self, jid):
         try:
@@ -3525,34 +3506,17 @@ class ChatAssistantWindow(QMainWindow):
             pass
         return ""
 
-    def _wb_title(self, wid):
-        try:
-            return requests.get(f"{self._wb_url()}/wb/api/{wid}", timeout=5).json().get("title") or wid
-        except Exception:
-            return wid
-
-    def _code_wb_redraw(self):
-        wid = getattr(self, "_wb_shown_id", "")
+    def _code_wb_redraw(self, wid=""):
+        wid = wid or getattr(self, "_wb_shown_id", "")
         if not wid:
-            return
-        alias = self._code_wb_model()
-        model = self.code_wb_model.currentText() if alias else t("code.wb_model_pick")
-        if QMessageBox.question(self, t("code.wb_redraw"),
-                                t("code.wb_redraw_confirm", title=self._wb_title(wid), model=model)) \
-                != QMessageBox.StandardButton.Yes:
             return
         root = (self._code_project or "").rstrip("/\\")
         self._code_wb_start({"root": root, "what": "redraw", "whiteboardId": wid},
-                            lambda: self._code_wb_start({"root": root, "what": "redraw", "whiteboardId": wid},
-                                                        lambda: None))
+                            lambda: self._code_wb_redraw(wid))
 
-    def _code_wb_delete(self):
-        wid = getattr(self, "_wb_shown_id", "")
+    def _code_wb_delete(self, wid=""):
+        wid = wid or getattr(self, "_wb_shown_id", "")
         if not wid:
-            return
-        if QMessageBox.question(self, t("code.wb_delete"),
-                                t("code.wb_delete_confirm", title=self._wb_title(wid))) \
-                != QMessageBox.StandardButton.Yes:
             return
         try:
             r = requests.post(f"{self._wb_url()}/call", json={"tool": "wb_delete",
@@ -3564,7 +3528,8 @@ class ChatAssistantWindow(QMainWindow):
             self.code_wb_status.setText(t("code.wb_failed", error=r["error"]))
             return
         self.code_wb_status.setText(t("code.wb_deleted"))
-        self._code_wb_home()
+        if self.whiteboard is not None:
+            self.whiteboard.refresh()
 
     _WB_BG, _WB_SEG, _WB_LINE, _WB_ON = "#0f172a", "#0b1224", "#1f2a44", "#1b2744"
 
@@ -3591,32 +3556,6 @@ class ChatAssistantWindow(QMainWindow):
             "QLabel { color:#7d8aa3; font-family:monospace; font-size:11px; }")
         hb.add(self.code_wb_where)
         hb.addStretch(1)
-        seg = QFrame()
-        seg.setObjectName("wbSeg")
-        seg.setStyleSheet(
-            "#wbSeg { background:%s; border:1px solid %s; border-radius:10px; }"
-            "#wbSeg QPushButton { background:transparent; color:#b6c2d6; border:none; border-radius:7px;"
-            " padding:5px 13px; font-size:12px; }"
-            "#wbSeg QPushButton:hover { background:#131d33; color:#e6edf7; }"
-            "#wbSeg QPushButton:checked { background:%s; color:#e6edf7; }"
-            "#wbSeg QPushButton:disabled { color:#3b4a63; }" % (self._WB_SEG, self._WB_LINE, self._WB_ON))
-        sl = QHBoxLayout(seg)
-        sl.setContentsMargins(3, 3, 3, 3)
-        sl.setSpacing(2)
-        self._code_wb_btns = {}
-        for what, (label, tip, _p) in self._WB_WHATS.items():
-            b = QPushButton(t(label))
-            b.setCheckable(True)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setToolTip(t(tip))
-            if what == "history":
-                b.clicked.connect(lambda _c=False, b=b: self._code_wb_history_menu(b))
-            else:
-                b.clicked.connect(lambda _c=False, w=what: self._code_wb_draw(w))
-            sl.addWidget(b)
-            self._code_wb_btns[what] = b
-        hb.add(seg)
-        hb.addStretch(1)
         self.code_wb_model = QComboBox()
         self.code_wb_model.setToolTip(t("code.wb_model_tip"))
         self.code_wb_model.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -3633,24 +3572,6 @@ class ChatAssistantWindow(QMainWindow):
             % (self._WB_SEG, self._wb_chevron(), self._WB_BG, self._WB_LINE, self._WB_ON))
         self.code_wb_model.setStyleSheet(self._wb_model_css % self._WB_LINE)
         hb.add(self.code_wb_model)
-        _ghost = ("QPushButton { background:transparent; color:#b6c2d6; border:1px solid transparent;"
-                  " border-radius:8px; padding:5px 10px; font-size:12px; }"
-                  "QPushButton:hover { background:#131d33; color:#e6edf7; border-color:%s; }"
-                  "QPushButton:disabled { color:#3b4a63; }" % self._WB_LINE)
-
-        def _quiet(text, slot, tip, danger=False, drop=None):
-            q = QPushButton(text)
-            q.setCursor(Qt.CursorShape.PointingHandCursor)
-            q.setToolTip(tip)
-            q.setStyleSheet(_ghost + ("QPushButton:hover { color:#ff7b72; }" if danger else ""))
-            q.clicked.connect(slot)
-            hb.add(q, drop=drop)
-            return q
-        self.code_wb_redraw = _quiet("\u21bb  " + t("code.wb_redraw"), self._code_wb_redraw, t("code.wb_redraw_tip"), drop=2)
-        self.code_wb_delete = _quiet("\u2715  " + t("code.wb_delete"), self._code_wb_delete, t("code.wb_delete_tip"), True, drop=1)
-        _quiet("\u2630  " + t("code.wb_all"), self._code_wb_home, t("code.wb_all_tip"), drop=3)
-        for _b in (self.code_wb_redraw, self.code_wb_delete):
-            _b.setEnabled(False)
         self._wb_status_row = QWidget()
         sr = QHBoxLayout(self._wb_status_row)
         sr.setContentsMargins(2, 0, 0, 0)
@@ -3700,7 +3621,6 @@ class ChatAssistantWindow(QMainWindow):
         self._wb_to_follow = set()
         self._wb_remote_ok = set()
         self._wb_asked = set()
-        self._wb_auto = set()
         self._wb_root_shown = None
         self._wb_pending = None
         self._wb_auto_updated = set()
@@ -3819,8 +3739,6 @@ class ChatAssistantWindow(QMainWindow):
         if getattr(self, "code_wb_where", None) is None:
             return
         self.code_wb_where.setText(os.path.basename(root) if root else t("code.side_none"))
-        for b in self._code_wb_btns.values():
-            b.setEnabled(bool(root))
         self._code_wb_fill_models()
         wb = self.whiteboard
         if wb is None:
@@ -3831,19 +3749,6 @@ class ChatAssistantWindow(QMainWindow):
         self._wb_root_shown = root
         self._wb_timer.start()
         self._code_wb_poll()
-        if root and root not in self._wb_auto:
-            self._wb_auto.add(root)
-            try:
-                items = requests.get(f"{self._wb_url()}/wb/api/list",
-                                     params={"root": root}, timeout=5).json()
-                jobs = requests.get(f"{self._wb_url()}/wb/api/draw",
-                                    params={"root": root}, timeout=5).json().get("jobs", [])
-            except Exception:
-                return
-            mine = [w for w in (items if isinstance(items, list) else [])
-                    if w.get("project") and w.get("project") == w.get("projectOfRoot")]
-            if not mine and not any(j.get("state") == "running" for j in jobs):
-                self._code_wb_draw("overview")
 
     def _code_wb_home(self):
         wb = self.whiteboard
@@ -3851,54 +3756,6 @@ class ChatAssistantWindow(QMainWindow):
             wb.mcp_url = self._wb_url()
             self._wb_root_shown = (self._code_project or "").rstrip("/\\")
             wb.show_whiteboard(None, self._wb_root_shown)
-
-    def _code_wb_history_menu(self, btn):
-        btn.setChecked(self._wb_kind(self._wb_shown_id) == "history" if getattr(self, "_wb_shown_id", "") else False)
-        root = (self._code_project or "").rstrip("/\\")
-        if not root:
-            self._code_say(t("code.no_project"), bad=True)
-            return
-        try:
-            r = subprocess.run(["git", "-C", root, "log", "--format=%ad", "--date=format:%Y-%m", "HEAD"],
-                               capture_output=True, text=True, timeout=60,
-                               **__import__("hoplita_paths").no_console())
-            months = sorted(set(r.stdout.split())) if r.returncode == 0 else []
-        except Exception:
-            months = []
-        if not months:
-            self.code_wb_status.setText(t("code.wb_no_history"))
-            self._wb_status_row.setVisible(True)
-            return
-        from PyQt6.QtWidgets import QGridLayout, QWidgetAction
-        menu = QMenu(self)
-        box = QWidget()
-        lay = QGridLayout(box)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setHorizontalSpacing(8)
-        lay.setVerticalSpacing(6)
-        f, u = QComboBox(), QComboBox()
-        f.addItem(t("code.wb_history_start"), "")
-        u.addItem(t("code.wb_history_now"), "")
-        for m in months:
-            f.addItem(m, m)
-            u.addItem(m, m)
-        lay.addWidget(QLabel(t("code.wb_history_from")), 0, 0)
-        lay.addWidget(f, 0, 1)
-        lay.addWidget(QLabel(t("code.wb_history_to")), 1, 0)
-        lay.addWidget(u, 1, 1)
-        go = QPushButton(t("code.wb_history_draw"))
-        go.setCursor(Qt.CursorShape.PointingHandCursor)
-        lay.addWidget(go, 2, 0, 1, 2)
-        wa = QWidgetAction(menu)
-        wa.setDefaultWidget(box)
-        menu.addAction(wa)
-
-        def draw():
-            menu.close()
-            self._code_wb_draw("history", since=f.currentData() or "", until=u.currentData() or "")
-        go.clicked.connect(draw)
-        self._wb_history_menu = menu
-        menu.popup(btn.mapToGlobal(btn.rect().bottomLeft()))
 
     def _code_wb_draw(self, what, ref=None, since="", until=""):
         root = (self._code_project or "").rstrip("/\\")
@@ -4037,8 +3894,6 @@ class ChatAssistantWindow(QMainWindow):
         running = [j for j in jobs if j.get("state") == "running"]
         self._wb_running = [j["id"] for j in running]
         self.code_wb_stop.setVisible(bool(running))
-        for b in self._code_wb_btns.values():
-            b.setEnabled(bool(root))
         if running:
             j = running[0]
             st = j.get("stage") or {}
@@ -4143,6 +3998,14 @@ class ChatAssistantWindow(QMainWindow):
         elif action == "update":
             self._code_wb_update(q.get("id", ""), q.get("root", ""), q.get("current", ""),
                                  auto=q.get("auto") == "1")
+        elif action == "draw":
+            if q.get("what") in self._WB_WHATS or q.get("what") == "incoming":
+                self._code_wb_draw(q["what"], ref=q.get("ref") or None,
+                                   since=q.get("since", ""), until=q.get("until", ""))
+        elif action == "redraw":
+            self._code_wb_redraw(q.get("id", ""))
+        elif action == "delete":
+            self._code_wb_delete(q.get("id", ""))
 
     def _wb_open_code(self, q):
         wid, file = q.get("whiteboard", ""), q.get("file", "")

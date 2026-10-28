@@ -210,7 +210,7 @@ def range_head(root, since="", until=""):
     return cs[-1]["sha"] if cs else ""
 
 
-def draw(job, ctx, project_of=None, wid=None):
+def draw(job, ctx, project_of=None, wid=None, remember=None):
     root = job["root"]
     since, until = job.get("since") or "", job.get("until") or ""
     ctx.progress("mapping")
@@ -229,6 +229,7 @@ def draw(job, ctx, project_of=None, wid=None):
     except Exception:
         base = first
     redraw = bool(wid)
+    remember = (not redraw) if remember is None else remember
     if not redraw:
         wid = create_board(root, {"kind": "commits", "head": last, "base": base}, name, project_of)
         S.store().plan_put(wid, {"kind": "history", "since": since, "until": until, "parts": []})
@@ -241,7 +242,7 @@ def draw(job, ctx, project_of=None, wid=None):
         cache = {k: (_cache_key(root, g, k, ctx.lang), _fingerprint(periods[k])) for k in keys}
         remembered = []
         for k in keys:
-            hit = None if redraw else st.brief_get(*cache[k])
+            hit = st.brief_get(*cache[k]) if remember else None
             if hit:
                 told[k] = hit
                 remembered.append(k)
@@ -297,7 +298,7 @@ def draw(job, ctx, project_of=None, wid=None):
                                 "title": _fit(f"{label_of(k, g)} — {t_['headline'] or str(len(periods[k])) + ' commits'}", 120)}
                                )["targetId"]
             md = t_["story"] or "—"
-            md += f"\n\n*{len(periods[k])} commits.*"
+            md += f"\n\n*{len(periods[k])} commit{'' if len(periods[k]) == 1 else 's'}.*"
             if t_["key"]:
                 md += "\n\n" + "\n".join(f"- `{s}` {by[s]['subject'][:140]}" for s in t_["key"] if s in by)
             _safe_insert(board, {"type": "markdown", "markdown": md}, parent=sec)
@@ -319,3 +320,42 @@ def redraw(job, ctx):
     plan = S.store().plan_get(job["whiteboardId"]) or {}
     job["since"], job["until"] = plan.get("since") or "", plan.get("until") or ""
     return draw(job, ctx, wid=job["whiteboardId"])
+
+
+def update(job, ctx):
+    plan = S.store().plan_get(job["whiteboardId"]) or {}
+    job["since"], job["until"] = plan.get("since") or "", plan.get("until") or ""
+    return draw(job, ctx, wid=job["whiteboardId"], remember=True)
+
+
+def staleness(root, plan):
+    try:
+        now = range_head(root, plan.get("since") or "", plan.get("until") or "")
+    except Exception:
+        now = ""
+    told = plan.get("head") or ""
+    stale = bool(now and told and now != told)
+    return {"kind": "history", "updatable": True, "stale": stale, "pinned": told, "current": now,
+            "ahead": V.ahead_count(root, told, now) if stale else 0}
+
+
+def periods(root, plan):
+    cs = commits(root, plan.get("since") or "", plan.get("until") or "")
+    head = plan.get("head") or ""
+    if head:
+        i = next((n for n, c in enumerate(cs) if c["sha"] == head), None)
+        cs = cs[:i + 1] if i is not None else cs
+    if not cs:
+        return []
+    g = plan.get("grain") or grain(cs[0]["date"], cs[-1]["date"])
+    out = {}
+    for c in cs:
+        k = period_of(c["date"], g)
+        out.setdefault(k, {"key": k, "label": label_of(k, g), "commits": []})["commits"].append(
+            {"sha": c["sha"], "date": c["date"][:10], "subject": c["subject"]})
+    return list(out.values())
+
+
+def months(root):
+    r = _git(root, ["log", "--format=%ad", "--date=format:%Y-%m", "HEAD"])
+    return sorted(set(r.split()))

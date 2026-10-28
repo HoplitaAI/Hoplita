@@ -543,7 +543,8 @@ def draw(job, ctx, project_of=None):
         target = {"kind": "commits", "head": tip, "base": base}
     else:
         target = ({"kind": "worktree"} if kind == "changes" else
-                  {"kind": "commits", "head": "HEAD", "base": "HEAD~1"} if kind == "commit" else
+                  {"kind": "commits", "head": job.get("ref") or "HEAD",
+                   "base": (job.get("ref") or "HEAD") + "~1"} if kind == "commit" else
                   {"kind": "commits", "head": "HEAD"})
     wid = create_board(root, target, os.path.basename(root), project_of)
     S.store().plan_put(wid, {"kind": kind, "parts": []})
@@ -639,6 +640,9 @@ def update(job, ctx, info):
     job["root"] = job.get("root") or repo
     kind = info.get("kind")
     plan = st.plan_get(wid)
+    if kind == "history":
+        import wb_history
+        return wb_history.update(job, ctx)
     now = V.head_commit(repo)
     board = Board(wid)
     ctx.progress("checking")

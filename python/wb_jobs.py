@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 import threading
 import time
 import uuid
@@ -55,6 +56,8 @@ def start(root, what, alias="", whiteboard=None, blocked=(), remote_ok=False, re
     ref = (ref or "").strip()
     if what == "incoming" and not ref.startswith("refs/hoplita/incoming/"):
         raise JobError("ref is required: a branch under refs/hoplita/incoming/.")
+    if what == "commit" and ref and not re.fullmatch(r"[0-9a-f]{7,40}", ref):
+        raise JobError("ref of a commit is its sha (7 to 40 hex digits).")
     since, until = (since or "").strip(), (until or "").strip()
     if since and until and since > until:
         since, until = until, since

@@ -56,6 +56,10 @@ class WhiteboardWidget(QWidget):
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._menu)
         self.view.urlChanged.connect(self._url_changed)
+        self.view.loadFinished.connect(self._loaded)
+        self._base = None
+        self._fresh = False
+        self._filtered = None
 
     @property
     def mcp_url(self):
@@ -73,15 +77,52 @@ class WhiteboardWidget(QWidget):
             lang = getattr(hoplita_i18n, "_lang", "") or "en"
         except Exception:
             lang = "en"
+        root = (root or "").rstrip("/\\")
+        base = (self.mcp_url, lang, root or self.root)
         self.current = wid
-        self.root = root or ""
+        if self.loaded and self._base == base and root in ("", self.root):
+            import json as _json
+            self.view.page().runJavaScript(
+                f"window.wbOpen && window.wbOpen({_json.dumps(wid or None)}, {_json.dumps(root)})")
+            return
+        self.root = root or self.root
         self.loaded = True
+        self._base = (self.mcp_url, lang, self.root)
         q = {"lang": lang}
         if wid:
             q["id"] = wid
-        elif root:
-            q["root"] = root
+        if self.root:
+            q["root"] = self.root
+        self._fresh = True
         self.view.load(QUrl(f"{self.mcp_url}/wb/app?{urlencode(q)}"))
+
+    def refresh(self):
+        self.view.page().runJavaScript("window.wbRefresh && window.wbRefresh()")
+
+    def _loaded(self, ok):
+        if ok and self._fresh:
+            self._fresh = False
+            self.view.history().clear()
+        fp = self.view.focusProxy()
+        if fp is not None and fp is not self._filtered:
+            fp.installEventFilter(self)
+            self._filtered = fp
+
+    def eventFilter(self, obj, ev):
+        from PyQt6.QtCore import QEvent
+        if ev.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                         QEvent.Type.MouseButtonDblClick) \
+                and ev.button() in (Qt.MouseButton.BackButton, Qt.MouseButton.ForwardButton):
+            if ev.type() == QEvent.Type.MouseButtonPress:
+                self.go_back() if ev.button() == Qt.MouseButton.BackButton else self.go_forward()
+            return True
+        return super().eventFilter(obj, ev)
+
+    def go_back(self):
+        self.view.page().runJavaScript("window.wbBack && window.wbBack()")
+
+    def go_forward(self):
+        self.view.page().runJavaScript("window.wbForward && window.wbForward()")
 
     def _url_changed(self, url):
         from urllib.parse import parse_qs as _pq

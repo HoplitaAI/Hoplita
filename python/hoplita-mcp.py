@@ -9511,7 +9511,7 @@ def _wb_draw_run(job):
             raise _wbj.JobError("no_changes")
     elif job["what"] == "commit":
         try:
-            _wbv.resolve(root, "HEAD~1")
+            _wbv.resolve(root, (job.get("ref") or "HEAD") + "~1")
         except Exception:
             raise _wbj.JobError("no_parent")
     elif job["what"] == "history":

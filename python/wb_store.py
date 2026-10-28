@@ -961,6 +961,10 @@ class Store:
             root = self.repository(pins["repositoryId"])["path"]
         except WbError as e:
             return {"kind": "unknown", "updatable": False, "stale": False, "error": str(e)}
+        plan = self.plan_get(review_id) or {}
+        if plan.get("kind") == "history":
+            import wb_history
+            return wb_history.staleness(root, plan)
         now = V.head_commit(root)
         if pins["head"] == V.WORKTREE:
             moved = bool(now) and now != pins["base"]

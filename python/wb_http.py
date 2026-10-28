@@ -75,6 +75,12 @@ def _decorate(snap):
         except S.WbError:
             out["repositoryName"] = "?"
     out["structural"] = bool(V.diffr_binary())
+    if pins:
+        try:
+            import wb_pipeline as P
+            out["drawnAs"] = P.kind_of(snap, _st().plan_get(rid))
+        except Exception:
+            pass
     return out
 
 
@@ -86,7 +92,49 @@ def wb_list(project: str = None, root: str = None):
             import wb_tools
             project = wb_tools._project_of(root.rstrip("/\\"))
             items = [dict(w, projectOfRoot=project) for w in _st().catalog(project)]
-        return items if items is not None else _st().catalog(project)
+        items = items if items is not None else _st().catalog(project)
+        return [_listed(w) for w in items]
+    except Exception as e:
+        return _err(e)
+
+
+def _listed(w):
+    import wb_pipeline as P
+    st = _st()
+    plan = {}
+    try:
+        plan = st.plan_get(w["id"]) or {}
+        if w.get("pins"):
+            w["drawnAs"] = P.kind_of(st.snapshot(w["id"]), plan)
+            w["repositoryPath"] = st.repository(w["pins"]["repositoryId"])["path"]
+    except Exception:
+        pass
+    if plan.get("kind") == "history":
+        w["since"], w["until"] = plan.get("since") or "", plan.get("until") or ""
+    if plan.get("ref"):
+        w["ref"] = plan["ref"]
+    return w
+
+
+@router.get("/wb/api/months")
+def wb_months(root: str):
+    import wb_history
+    try:
+        return {"months": wb_history.months(os.path.realpath(root.rstrip("/\\")))}
+    except Exception as e:
+        return _err(e)
+
+
+@router.get("/wb/api/{wid}/periods")
+def wb_periods(wid: str):
+    import wb_history
+    try:
+        st = _st()
+        plan = st.plan_get(wid) or {}
+        if plan.get("kind") != "history":
+            return {"periods": []}
+        root = st.repository(st.snapshot(wid)["pins"]["repositoryId"])["path"]
+        return {"periods": wb_history.periods(root, plan), "grain": plan.get("grain") or ""}
     except Exception as e:
         return _err(e)
 
@@ -98,10 +146,10 @@ def wb_find(root: str, what: str, ref: str = None, since: str = "", until: str =
     import wb_pipeline as P
     root = os.path.realpath(root.rstrip("/\\"))
     running = next((j for j in wb_jobs.jobs(root) if j["what"] == what and j["state"] == "running"
-                     and (what != "incoming" or j.get("ref") == ref)
+                     and (what not in ("incoming", "commit") or (j.get("ref") or None) == (ref or None))
                      and (what != "history" or (j.get("since"), j.get("until")) == (since, until))), None)
     try:
-        if what == "incoming":
+        if what == "incoming" or (what == "commit" and ref):
             head = V.resolve(root, ref)
         elif what == "history":
             import wb_history
