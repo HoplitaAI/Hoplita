@@ -399,11 +399,22 @@ def child_prefix(handle):
 
 
 def _child_port(prefix):
+    import glob
     import socket
     had = (child_mark(prefix) or {}).get("port")
     if had:
         return had
+    taken = set()
+    for d in {os.path.dirname(os.path.abspath(prefix)), os.path.expanduser("~")}:
+        for m in glob.glob(os.path.join(d, "*", CHILD_MARK)):
+            try:
+                with open(m, encoding="utf-8") as fh:
+                    taken.add(int(json.load(fh).get("port") or 0))
+            except Exception:
+                pass
     for port in range(9177, 9277):
+        if port in taken:
+            continue
         with socket.socket() as sk:
             try:
                 sk.bind(("127.0.0.1", port))

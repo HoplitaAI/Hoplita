@@ -625,6 +625,14 @@ On Windows the answer gives the same in PowerShell.
   and the program and keeps its data.
 - What the child runs, it runs on that machine as that user. For anything you
   do not trust, use a container (7c).
+- **Several children on one machine**, of one person or of several who share
+  its administration, each from its owner's own line, do not get in each
+  other's way: each lives in its own folder with its own vault, memory and
+  model; each gets a port no other child holds (a stopped one included), and
+  one that finds its port taken when it starts moves to the next free one,
+  noted in its `.hoplita-child.json`, instead of failing; a file a child makes
+  with no path given goes to its own `outputs/`, never to the shared home.
+  Uninstalling one leaves the others running.
 
 **Its vault.** By default it is **open**: its key is the file `vault.key`
 beside it, and every start says so. It is open when a spawn token boots a

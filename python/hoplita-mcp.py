@@ -8570,7 +8570,7 @@ def _generate_pdf_chromium(content, title, output_path):
 def tool_generate_pdf(content, title="Document", output_path=None):
     if not output_path:
         safe = re.sub(r"[^\w\-]+", "_", title).strip("_") or "Document"
-        output_path = os.path.join(os.path.expanduser("~"), f"{safe}.pdf")
+        output_path = os.path.join(_default_out_dir(), f"{safe}.pdf")
     output_path = os.path.expanduser(output_path)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     try:
@@ -8588,7 +8588,7 @@ def _generate_pdf_legacy(content, title="Document", output_path=None):
 
     if not output_path:
         safe = re.sub(r"[^\w\-]+", "_", title).strip("_") or "Document"
-        output_path = os.path.join(os.path.expanduser("~"), f"{safe}.pdf")
+        output_path = os.path.join(_default_out_dir(), f"{safe}.pdf")
     output_path = os.path.expanduser(output_path)
 
     pdf = FPDF()
@@ -11226,6 +11226,34 @@ def _drop_spawn_file():
         os.remove(os.path.join(hoplita_base(), SPAWN_FILE))
     except OSError:
         pass
+
+
+CHILD_MARK = ".hoplita-child.json"
+
+
+def _child_mark(**update):
+    p = os.path.join(hoplita_base(), CHILD_MARK)
+    try:
+        with open(p, encoding="utf-8") as fh:
+            mark = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if update:
+        mark.update(update)
+        try:
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump(mark, fh)
+        except OSError:
+            pass
+    return mark
+
+
+def _default_out_dir():
+    if _child_mark() is not None:
+        d = os.path.join(hoplita_base(), "outputs")
+        os.makedirs(d, exist_ok=True)
+        return d
+    return os.path.expanduser("~")
 
 
 def _enroll_from_env():
@@ -15703,6 +15731,24 @@ if __name__ == "__main__":
           + (" " * (_w - len(_lab) - (_w - len(_lab)) // 2)) + "║")
     print("╚" + "═" * _w + "╝\n")
     import socket as _socket
+
+    def _free(port):
+        sk = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        sk.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        try:
+            sk.bind((args.host, port))
+            return True
+        except OSError:
+            return False
+        finally:
+            sk.close()
+    _mark = _child_mark()
+    if _mark is not None and not _free(args.port):
+        _new = next((p for p in range(args.port + 1, args.port + 200) if _free(p)), None)
+        if _new:
+            print(f"[MCP] port {args.port} is taken: this child serves on {_new}")
+            args.port = _new
+            _child_mark(port=_new)
     test_sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
     test_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
     try:
