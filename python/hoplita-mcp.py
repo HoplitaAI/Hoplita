@@ -4142,10 +4142,31 @@ def _curate_evidence(fact, window_min=5, max_lines=24):
         return []
     since = fact.get("ts") or ""
     try:
-        momentos = sql.search_moments(text_, limit=3, window_min=window_min)
+        import math
+        from hoplita_search import _norm_words, _same_word
+        _n = max(1, sql.messages_count())
+        words = list(dict.fromkeys(_norm_words(text_)))
+        if _n >= 20:
+            rare = [w for w in words if 0 < sql.word_df(w)
+                    and math.log(_n / sql.word_df(w)) >= 3.0]
+            if not rare:
+                return []
+            query = " ".join(rare)
+        else:
+            query = text_
+        momentos = sql.search_moments(query, limit=3, window_min=window_min,
+                                      roles=("user",), since=since)
     except Exception as e:
         print(f"[CURATE] search failed: {e}", file=sys.stderr)
         return []
+
+    def _shares_two(m):
+        said = set()
+        for r in sql.moment_messages(m["from_rowid"], m["to_rowid"], pad=0,
+                                     roles=("user",)):
+            said.update(_norm_words(r.get("text") or ""))
+        return sum(1 for w in words if any(_same_word(w, x) for x in said)) >= 2
+    momentos = [m for m in momentos if _shares_two(m)]
     def _min(v):
         try:
             return datetime.fromisoformat(v).timestamp() / 60.0
@@ -4154,8 +4175,6 @@ def _curate_evidence(fact, window_min=5, max_lines=24):
 
     seen_ids, lines = set(), []
     for m in momentos:
-        if len(m.get("covers") or []) < 2:
-            continue
         m_min = _min(m.get("ts") or "")
         for r in sql.moment_messages(m["from_rowid"], m["to_rowid"],
                                      pad=1, cap=12):

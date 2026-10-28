@@ -291,19 +291,20 @@ class SqlStore:
                 for r in rows]
 
     def search_moments(self, query, limit=5, window_min=5, scan=300,
-                       roles=None):
+                       roles=None, since=""):
         import datetime as _dt
         from hoplita_search import group_and_score
         q = self.fts_query(query)
         if not self.fts or not q:
             return []
         _rc, _ra = self._role_clause(roles)
+        _sc, _sa = (" AND ts > ?", [str(since)]) if since else ("", [])
         with self._lock:
             rows = self._conn.execute(
                 "SELECT rowid, session, role, text, ts FROM msgs_fts"
-                " WHERE msgs_fts MATCH ?" + _rc
+                " WHERE msgs_fts MATCH ?" + _rc + _sc
                 + " ORDER BY bm25(msgs_fts) LIMIT ?",
-                [q] + _ra + [int(scan)]).fetchall()
+                [q] + _ra + _sa + [int(scan)]).fetchall()
         if not rows:
             return []
         hits = [{"rowid": r[0], "session": r[1], "role": r[2], "text": r[3],
