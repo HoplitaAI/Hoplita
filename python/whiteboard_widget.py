@@ -60,6 +60,7 @@ class WhiteboardWidget(QWidget):
         self._base = None
         self._fresh = False
         self._filtered = None
+        self._queued = None
 
     @property
     def mcp_url(self):
@@ -81,9 +82,10 @@ class WhiteboardWidget(QWidget):
         base = (self.mcp_url, lang, root or self.root)
         self.current = wid
         if self.loaded and self._base == base and root in ("", self.root):
-            import json as _json
-            self.view.page().runJavaScript(
-                f"window.wbOpen && window.wbOpen({_json.dumps(wid or None)}, {_json.dumps(root)})")
+            if self._fresh:
+                self._queued = (wid, root)
+            else:
+                self._open_in_page(wid, root)
             return
         self.root = root or self.root
         self.loaded = True
@@ -96,6 +98,11 @@ class WhiteboardWidget(QWidget):
         self._fresh = True
         self.view.load(QUrl(f"{self.mcp_url}/wb/app?{urlencode(q)}"))
 
+    def _open_in_page(self, wid, root):
+        import json as _json
+        self.view.page().runJavaScript(
+            f"window.wbOpen && window.wbOpen({_json.dumps(wid or None)}, {_json.dumps(root)})")
+
     def refresh(self):
         self.view.page().runJavaScript("window.wbRefresh && window.wbRefresh()")
 
@@ -103,6 +110,9 @@ class WhiteboardWidget(QWidget):
         if ok and self._fresh:
             self._fresh = False
             self.view.history().clear()
+            if self._queued:
+                self._open_in_page(*self._queued)
+                self._queued = None
         fp = self.view.focusProxy()
         if fp is not None and fp is not self._filtered:
             fp.installEventFilter(self)
@@ -126,7 +136,8 @@ class WhiteboardWidget(QWidget):
 
     def _url_changed(self, url):
         from urllib.parse import parse_qs as _pq
-        wid = (_pq(urlparse(url.toString()).query).get("id") or [""])[0]
+        q = _pq(urlparse(url.toString()).query)
+        wid = (q.get("id") or q.get("wb") or [""])[0]
         if wid != (self.current or ""):
             self.current = wid or None
         self.shown.emit(wid)

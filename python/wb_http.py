@@ -125,6 +125,73 @@ def wb_months(root: str):
         return _err(e)
 
 
+
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _repo_pair(root, commit):
+    root = os.path.realpath(root.rstrip("/\\"))
+    if commit == "worktree":
+        return root, V.head_commit(root), V.WORKTREE
+    head = V.resolve(root, commit)
+    try:
+        base = V.resolve(root, head + "~1")
+    except Exception:
+        base = _EMPTY_TREE
+    return root, base, head
+
+
+@router.get("/wb/api/repo/log")
+def wb_repo_log(root: str, skip: int = 0, n: int = 60):
+    try:
+        root = os.path.realpath(root.rstrip("/\\"))
+        raw = V._git(root, ["log", f"--skip={max(0, skip)}", f"-n{max(1, min(n, 200))}",
+                            "--format=%H%x00%P%x00%an%x00%aI%x00%s%x1e", "HEAD"])
+        explained = {}
+        st = _st()
+        import wb_pipeline as P
+        for w in st.catalog():
+            pins = w.get("pins") or {}
+            if pins.get("head") and pins.get("head") != V.WORKTREE and w.get("blocks"):
+                try:
+                    if P.kind_of(st.snapshot(w["id"]), st.plan_get(w["id"])) == "commit":
+                        explained.setdefault(pins["head"], w["id"])
+                except Exception:
+                    pass
+        out = []
+        for rec in raw.split("\x1e"):
+            rec = rec.strip("\n")
+            if not rec:
+                continue
+            c, parents, an, at, subj = (rec.split("\0") + [""] * 5)[:5]
+            out.append({"sha": c, "parents": len(parents.split()), "author": an, "date": at,
+                        "subject": subj, "whiteboardId": explained.get(c)})
+        return {"commits": out, "more": len(out) == max(1, min(n, 200))}
+    except Exception as e:
+        return _err(e)
+
+
+@router.get("/wb/api/repo/files")
+def wb_repo_files(root: str, commit: str):
+    try:
+        r, b, h = _repo_pair(root, commit)
+        return V.changed_files(r, b, h)
+    except Exception as e:
+        return _err(e)
+
+
+@router.get("/wb/api/repo/filediff")
+def wb_repo_filediff(root: str, commit: str, path: str):
+    try:
+        r, b, h = _repo_pair(root, commit)
+        fr = _file_rows(r, b, h, D.check_path(path))
+        rows = [_row_view(fr, i) for i in range(len(fr["rows"]))]
+        return {"path": path, "mode": fr["mode"], "status": fr["status"],
+                "previousPath": fr["previousPath"], "rows": rows, "bands": fr["bands"]}
+    except Exception as e:
+        return _err(e)
+
+
 @router.get("/wb/api/{wid}/periods")
 def wb_periods(wid: str):
     import wb_history
