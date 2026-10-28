@@ -24,6 +24,11 @@ def err(s):  print(_c("31", "✗ ") + s, file=sys.stderr)
 def step(s): print("\n" + _c("36;1", "▶ " + s))
 
 
+def again(flags=""):
+    cmd = os.environ.get("HOPLITA_RERUN") or "python install.py"
+    return f"{cmd} {flags}".rstrip()
+
+
 def default_prefix():
     if IS_WINDOWS:
         appdata = os.getenv("APPDATA", "")
@@ -372,7 +377,8 @@ def _prune_stale(prefix, shipped):
 
 
 _OURS_DIRS = ("venv", "lang", "icons", "cli", "docs", "bin", "wb_canvas",
-              "wb_instructions", "council_view", "__pycache__")
+              "wb_instructions", "council_view", "__pycache__",
+              "python")
 _OURS_FILES = ("config.ini.example", "README.md", "requirements.txt", MANIFEST)
 
 
@@ -545,8 +551,8 @@ def uninstall(prefix, purge=False, yes=False):
     ok(_c("32;1", "HOPLITA uninstalled" + (" with its data." if purge else ".")))
     if not purge and (data or extra_data):
         print("Your data is still there (listed above). To remove it too:")
-        print(f"  python install.py --uninstall --purge"
-              + (f" --prefix {prefix}" if prefix != default_prefix() else ""))
+        print("  " + again("--uninstall --purge"
+                           + (f" --prefix {prefix}" if prefix != default_prefix() else "")))
     return not failed
 
 
@@ -582,7 +588,7 @@ def install_lsp(prefix):
     if not os.path.exists(py):
         err(f"{prefix} has no venv ({os.path.join(prefix, 'venv')}).")
         print("   · This install is incomplete: the MCP cannot start there either.")
-        print(f"   · Complete it:  python install.py --prefix {prefix}")
+        print(f"   · Complete it:  {again(f'--prefix {prefix}')}")
         return
     r = pip_install(py, ["python-lsp-server[all]"])
     if r.returncode != 0:
@@ -826,19 +832,24 @@ def install_system_libs():
         pkgs = ["libnss3", "libnspr4", "libxcomposite1",
                 "libxdamage1", "libxrandr2", "libxtst6", "libxkbcommon0",
                 "libgbm1", "libasound2", "libxshmfence1", "libegl1", "libgl1",
-                "libxcb-cursor0", "fonts-liberation", "libayatana-appindicator3-1"]
+                "libxcb-cursor0", "libxkbfile1", "libxcb-icccm4", "libxcb-keysyms1",
+                "libxcb-shape0", "libxcb-xkb1", "libxkbcommon-x11-0", "fonts-liberation", "libayatana-appindicator3-1"]
         run(sudo + ["apt-get", "update", "-qq"], check=False)
+        if subprocess.run(["apt-cache", "show", "libasound2t64"], capture_output=True).returncode == 0:
+            pkgs[pkgs.index("libasound2")] = "libasound2t64"
         r = run(sudo + ["apt-get", "install", "-y", "-qq"] + pkgs, check=False)
     elif shutil.which("dnf") or shutil.which("yum"):
         pkg = "dnf" if shutil.which("dnf") else "yum"
         pkgs = ["nss", "nspr", "libXcomposite", "libXdamage",
                 "libXrandr", "libXtst", "libxkbcommon", "mesa-libgbm", "alsa-lib",
                 "libxshmfence", "libglvnd-egl", "libglvnd-opengl",
-                "xcb-util-cursor", "libappindicator-gtk3"]
+                "xcb-util-cursor", "libxkbfile", "xcb-util-wm", "xcb-util-keysyms",
+                "libxkbcommon-x11", "libappindicator-gtk3"]
         r = run(sudo + [pkg, "install", "-y", "-q"] + pkgs, check=False)
     elif shutil.which("pacman"):
         pkgs = ["nss", "nspr", "libxcomposite", "libxdamage", "libxrandr",
-                "libxtst", "libxkbcommon", "mesa", "alsa-lib", "libxshmfence"]
+                "libxtst", "libxkbcommon", "mesa", "alsa-lib", "libxshmfence",
+                "libxkbfile", "xcb-util-wm", "xcb-util-keysyms", "libxkbcommon-x11"]
         r = run(sudo + ["pacman", "-S", "--noconfirm", "--needed"] + pkgs, check=False)
     else:
         warn("Unrecognised package manager. Install the libraries by hand;")
@@ -991,7 +1002,7 @@ def main():
             raise PermissionError
     except PermissionError:
         err(f"Cannot write to {prefix}.")
-        err("  Pick a folder you own:  python3 install.py --prefix ~/hoplita")
+        err(f"  Pick a folder you own:  {again('--prefix ~/hoplita')}")
         sys.exit(1)
     ok(f"{prefix} is writable")
 
@@ -1116,8 +1127,10 @@ def main():
         print(f"  {act}")
         print(f"  {homehint}python hoplita-mcp.py")
         print(f"  {homehint}python hoplita-gui.py   (in another terminal)")
-    guide = os.path.join(SRC_DIR, "docs", "GUIDE.md")
-    print(f"\nDocs: {guide if os.path.exists(guide) else os.path.join(SRC_DIR, 'README.md')}")
+    guide = os.path.join(prefix, "docs", "GUIDE.md")
+    print(f"\nDocs: {guide if os.path.exists(guide) else os.path.join(prefix, 'README.md')}")
+    if os.environ.get("HOPLITA_RERUN"):
+        print(f"Update: run the same line again. Uninstall: {again('--uninstall')}")
 
 
 if __name__ == "__main__":

@@ -134,12 +134,23 @@ network.
 
 ## Install
 
-Python 3.11 or newer and git. What to install first on each system:
-**[docs/INSTALL.md](docs/INSTALL.md)**.
+Linux and macOS:
 
 ```bash
-python install.py
+curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | sh
 ```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1 | iex
+```
+
+No Python needed first: when the machine has no Python 3.11+ that can make a
+virtual environment, a standalone one is fetched into the install folder.
+Run the same line again to update. Options, the manual install from a clone
+(`python install.py`) and what each system needs:
+**[docs/INSTALL.md](docs/INSTALL.md)**.
 
 The installer creates the app folder and a virtual environment, installs the
 core dependencies (`requirements.txt`), creates `config.ini` and the desktop

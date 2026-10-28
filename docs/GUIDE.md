@@ -62,6 +62,7 @@ The source tree. `install.py` copies the contents of `python/` flat into the ins
 | `cli/compile.sh` | Builds the CLI for Linux and Windows into `cli/dist/` |
 | `lang/en.json`, `lang/es.json` | English and Spanish interface texts (same key list) |
 | `install.py` | Cross-platform installer, updater and uninstaller (Linux/macOS/Windows) |
+| `install.sh`, `install.ps1` | One-line installers (Linux/macOS, Windows): fetch the source and, when needed, a standalone Python, then run `install.py` |
 | `requirements.txt` | Core Python dependencies |
 | `requirements-browser.txt` | Web browsing stack (Playwright, browser-use, crawl4ai) |
 | `requirements-desktop.txt` | Desktop hands' pixel layer (pyautogui, mss; pywinauto on Windows) |
@@ -71,6 +72,15 @@ The source tree. `install.py` copies the contents of `python/` flat into the ins
 ## Installation
 
 What each system needs before this (Python, git), step by step: **[docs/INSTALL.md](INSTALL.md)**. What to set up after it (a model, a search key): **[docs/FIRST-STEPS.md](FIRST-STEPS.md)**.
+
+### In one line
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | sh                  # Linux, macOS
+irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1 | iex   # Windows (PowerShell)
+```
+
+`install.sh` and `install.ps1` download the source and run `install.py` with a Python 3.11+: the machine's own when it can make a venv, otherwise (and always on Windows) a standalone Python 3.12 fetched with uv into `<install folder>/python`, with no root, no `PATH` change and nothing outside the install folder. Options go after `sh -s --` (or through a script block on Windows, see [docs/INSTALL.md](INSTALL.md)). Running the line again is a full install over the existing one, so new libraries in `requirements.txt` come in too; `--uninstall` removes the fetched Python with the rest.
 
 ### With the installer (Linux, macOS, Windows)
 

@@ -9,11 +9,51 @@ Silicon and Intel).
 After installing, read **[First steps](FIRST-STEPS.md)**: the model and the
 search key HOPLITA needs before it can do anything useful.
 
+- [One line](#one-line)
 - [Linux](#linux)
 - [macOS](#macos)
 - [Windows](#windows)
 - [Optional parts](#optional-parts)
 - [Updating](#updating)
+
+## One line
+
+Without installing Python or git first. On Linux and macOS, in a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1 | iex
+```
+
+It downloads HOPLITA, uses the machine's Python when it is 3.11 or newer and
+can make a virtual environment, and otherwise fetches a standalone Python 3.12
+(with [uv](https://github.com/astral-sh/uv)) into the install folder: no
+administrator, nothing installed system-wide, no change to `PATH`. On Windows
+it always uses that standalone Python. Then it runs `install.py`.
+
+Options go after `sh -s --` on Linux and macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | sh -s -- --all
+```
+
+and on Windows through a script block:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1))) --all
+```
+
+Running the same line again updates the install, new Python libraries
+included; adding `--uninstall` removes it (your data stays; `--uninstall
+--purge` deletes it too). The code features (projects, shared repositories,
+the whiteboard) still need **git**; the sections below say how to get it.
+
+The rest of this page is the manual install, from a clone.
 
 ## Linux
 
@@ -167,6 +207,8 @@ The default install folder is `~/hoplita` on Linux and macOS and
 `%APPDATA%\hoplita` on Windows. `--prefix <folder>` picks another one.
 
 ## Updating
+
+Installed with the one-line command: run it again. From a clone:
 
 ```bash
 git pull
