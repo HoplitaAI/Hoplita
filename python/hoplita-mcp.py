@@ -1801,9 +1801,10 @@ def _add_fact(text, tags=None, kind="durable", report=None, gate=True, life=None
     return fact
 
 
-def tool_add_fact_checked(text, tags=None, kind=None):
+def tool_add_fact_checked(text, tags=None, kind=None, life=None):
     report = {}
-    fact = _add_fact(text, tags, kind or "durable", report=report)
+    fact = _add_fact(text, tags, kind or "durable", report=report,
+                     life=str(life or "").strip().lower())
     if fact is None:
         return {"added": False, "error": "empty fact"}
     out = {"added": report.get("action") in ("new", "supersede", None), "fact": fact,
@@ -9309,8 +9310,8 @@ def register_tools():
                                    "fn": lambda a: delete_lesson(a["id"])},
         "list_facts":             {"desc": "List ALL the user's facts (not by query). For periodic consolidation: see the full set and detect redundancies or obsolete facts.",
                                    "fn": lambda a: list_facts()},
-        "add_fact":               {"desc": "Save a FACT confirmed by the user about themselves or their world (name, mapping, personal detail, preference, equivalence). Use it WHEN the user explicitly says 'learn that X', 'remember that Y', 'don't forget that Z'. These facts are automatically injected into the context in future conversations. Do NOT use this for technical documentation or notes — for that use add_note. Pass `kind` when it is not a permanent truth: an intention ('wants to', 'is going to') or a state ('right now X'), so it can be retired when it stops applying instead of being injected for ever. If the result lists RELATED existing facts, READ them: when the new fact supersedes one (moved cities, changed jobs), delete_fact or edit_fact the stale one NOW — two contradictory facts injected together poison every future turn.",
-                                   "fn": lambda a: tool_add_fact_checked(a["text"], a.get("tags"), a.get("kind"))},
+        "add_fact":               {"desc": "Save a FACT confirmed by the user about themselves or their world (name, mapping, personal detail, preference, equivalence). Use it WHEN the user explicitly says 'learn that X', 'remember that Y', 'don't forget that Z'. A fact is PRINTER INK: everything said is already kept in the log and recall finds it, so a fact is only for WHO the person is (life=permanent: rides every future prompt) or something ONGOING to follow for weeks (life=relevant: found when its topic comes up, asked about after a silence). A moment of this conversation (a search, a troubleshooting step, a device detail) is NOT a fact — the log has it. Do NOT use this for technical documentation or notes — for that use add_note. Pass `kind` when it is not a permanent truth: an intention ('wants to', 'is going to') or a state ('right now X'), so it can be retired when it stops applying instead of being injected for ever. If the result lists RELATED existing facts, READ them: when the new fact supersedes one (moved cities, changed jobs), delete_fact or edit_fact the stale one NOW — two contradictory facts injected together poison every future turn.",
+                                   "fn": lambda a: tool_add_fact_checked(a["text"], a.get("tags"), a.get("kind"), a.get("life"))},
         "session_read":           {"desc": "Read the conversation log AROUND a marker: every message a log search returns (recall's conversation drawer, session_moments, session_search) carries its `at`, and a text cut short says so with the marker to read on from. Like reading a file from a line: one message after when a sentence stops at 'I want to buy the…', several before to see what started it. Whole messages, in order, with the markers to go earlier or later.",
                                    "fn": lambda a: tool_session_read(a["at"], a.get("before", 3), a.get("after", 3))},
         "session_moments":        {"desc": "Find the MOMENTS you talked about something, not the lines that match. A conversation is a burst of messages about one thing: two common words may each appear everywhere alone, but the few minutes where BOTH appear is the conversation you want — and the answer is usually two messages later. Ranked by how many DISTINCT query terms a block covers, weighted by how rare each is in the whole log. PREFER THIS over session_search when you are looking for a past conversation rather than a single quote.",
@@ -9942,6 +9943,7 @@ def register_tool_params():
         "list_facts":             {"properties": {}, "required": []},
         "add_fact":               {"properties": {"text": {"type": "string", "description": "The fact in a clear sentence, e.g. 'The cat is called Pixel'"},
                                                   "kind": {"type": "string", "enum": ["durable", "intencion", "estado"], "description": "durable = true from now on (a name, a relationship, a machine). intencion = something they mean to do, which stops being true once done or dropped. estado = how things are right now, which changes. Default durable."},
+                                                  "life": {"type": "string", "enum": ["permanent", "relevant"], "description": "permanent = who the person is: rides every future prompt. relevant = something ongoing: found when its topic comes up, asked about after a silence. A moment is not a fact at all."},
                                                   "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]},
         "session_read":           {"properties": {"at": {"type": "integer", "description": "A marker: the `at` a log search (recall, session_moments, session_search) returned."},
                                                   "before": {"type": "integer", "description": "Messages before it (0-20, default 3)."},
@@ -15589,7 +15591,19 @@ def facts_list():
     except Exception:
         _inside = _outside = None
     _arch = [f for f in _facts_data if not _fact_live(f)]
-    return {"facts": [dict(f, generic=_fact_looks_generic(f.get("text", "")))
+    _vd, _ad = _life_days()
+    _asking = {r.get("target_id") for r in _proposals_rows()
+               if r.get("action") == "ask" and r.get("status") == "pending"}
+
+    def _left(f):
+        d = {"volatile": _vd, "relevant": _ad}.get(f.get("life"))
+        if not d or not _fact_live(f):
+            return None
+        quiet = _fact_silence(f)
+        return None if quiet is None else max(0, d - quiet)
+    return {"facts": [dict(f, generic=_fact_looks_generic(f.get("text", "")),
+                           days_left=None if f.get("id") in _asking else _left(f),
+                           asking=f.get("id") in _asking)
                       for f in _facts_data],
             "total": len(_facts_data),
             "live": sum(1 for f in _facts_data if _fact_live(f)),

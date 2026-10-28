@@ -5568,6 +5568,11 @@ enabled = true
             _seen = (f.get("last_seen") or f.get("ts") or "")[:10]
             _life = {"permanent": t("mem.life_permanent"), "relevant": t("mem.life_relevant"),
                      "volatile": t("mem.life_volatile")}.get(f.get("life"), t("mem.life_unsorted"))
+            if f.get("asking") and not _arch_view:
+                _life += " · " + t("mem.left_asking")
+            elif f.get("days_left") is not None and not _arch_view:
+                _life += " · " + t("mem.left_volatile" if f.get("life") == "volatile"
+                                   else "mem.left_relevant", n=f["days_left"])
             text = (f"{'⚠' if f.get('generic') else ' '}{pin} [{hits}×]  {_seen}  {_life}   "
                     f"{f.get('text', '')}")
             if _arch_view:

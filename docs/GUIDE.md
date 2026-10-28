@@ -1213,7 +1213,14 @@ arrives, not by pruning it once a week.
   your machines' addresses), *relevant* (something ongoing: a project, a trip,
   a purchase) or *volatile* (one moment: a search, a troubleshooting step).
   The extractor gives it when it writes the fact; an hourly clock gives one to
-  the rest. Memory → Facts shows it beside each fact.
+  the rest. Memory → Facts shows it beside each fact, with the days it has
+  left before it is forgotten or asked about.
+- **A fact is printer ink.** Every word said is kept in the conversation log
+  and recall finds it, so the extractor writes a fact only for who you are or
+  something ongoing; a moment of a conversation (a search, a troubleshooting
+  step, the parts of the device being fixed) stays in the log. Lessons ride
+  every turn and are written as sparingly. A fact is a note: when the detail
+  matters, the agent recalls what was actually said.
 - **What reaches a turn.** Only the permanent facts ride the stable top of the
   prompt. The rest come in when the words of your message touch them, in a
   small block at the end, and the agent is told to `recall` before answering
