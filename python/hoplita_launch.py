@@ -16,6 +16,9 @@ if os.name == "nt":
         _interp = _pyw
 
 
+MCP_WAIT = 600
+
+
 def mcp_url():
     import configparser
     sys.path.insert(0, HERE)
@@ -54,8 +57,10 @@ def main():
     if not mcp_answers(url):
         os.environ.setdefault("HOPLITA_GUI_PROMPT", "1")
         os.environ.setdefault("HOPLITA_LOGFILE", LOG)
-        _spawn("hoplita-mcp.py", *mcp_args(url))
-        time.sleep(2)
+        mcp = _spawn("hoplita-mcp.py", *mcp_args(url))
+        deadline = time.time() + MCP_WAIT
+        while mcp.poll() is None and time.time() < deadline and not mcp_answers(url):
+            time.sleep(0.5)
     _spawn("hoplita-gui.py")
 
 
