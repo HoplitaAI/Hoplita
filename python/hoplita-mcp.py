@@ -2047,6 +2047,13 @@ def _llm_max_tokens():
     return CONFIG.getint("CHAT", "max_tokens", fallback=8000)
 
 
+def _side_timeout(floor):
+    try:
+        return max(floor, CONFIG.getint("CHAT", "timeout", fallback=floor)) if CONFIG else floor
+    except Exception:
+        return floor
+
+
 _LLM_CALL_FAILS = {"count": 0, "limit": 3, "disabled": False,
                    "last_error": "", "since": ""}
 
@@ -4007,10 +4014,10 @@ def tool_propose_memory_change(target_id, action, why, quotes,
     sql = _get_sql()
     if sql is None:
         return {"error": "store unavailable"}
-    if action not in ("retire", "replace", "merge", "prune"):
+    if action not in ("retire", "replace", "merge", "prune", "fade"):
         return {"error": "action must be retire, replace, merge or prune"}
     quotes = [q for q in (quotes or []) if isinstance(q, dict) and q.get("text")]
-    if action == "prune" and not quotes:
+    if action in ("prune", "fade") and not quotes:
         _f = next((x for x in _facts_data if x.get("id") == target_id), None)
         if _f is None:
             return {"error": "no such fact"}
@@ -4134,6 +4141,24 @@ def _curate_evidence(fact, window_min=5, max_lines=24):
     return lines[:max_lines]
 
 
+def _fade_after_days():
+    try:
+        return max(0, CONFIG.getint("MEMORY", "fade_after_days", fallback=60)) if CONFIG else 60
+    except Exception:
+        return 60
+
+
+def _fact_faded(f, days):
+    if not days or int(f.get("hits", 1) or 1) > 1 or int(f.get("recalls", 0) or 0) > 0:
+        return 0
+    try:
+        age = (datetime.now() - datetime.fromisoformat(
+            f.get("last_seen") or f.get("ts") or "")).days
+    except Exception:
+        return 0
+    return age if age >= days else 0
+
+
 def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
                   window_min=5):
     sql = _get_sql()
@@ -4154,12 +4179,28 @@ def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
         limit = min(60, max(6, -(-len(_cands) // 3)))
     elif int(limit) < 0:
         limit = max(1, len(_cands))
-    for f in _cands[:max(1, int(limit))]:
+    _todo = _cands[:max(1, int(limit))]
+    _review_step(total=len(_todo), limit=_side_timeout(90))
+    _fade = _fade_after_days()
+    for _n, f in enumerate(_todo):
+        _review_step(done=_n, current=f.get("text", ""))
         lines = _curate_evidence(f, window_min=window_min)
+        _faded = not lines and _fact_faded(f, _fade)
+        if _faded:
+            _mark_curated(f["id"])
+            _why = (f"said once ({_faded} days ago) and not spoken of since, "
+                    f"nor returned by any search")
+            reviewed.append({"fact": f.get("text", ""), "verdict": "faded",
+                             "why": _why})
+            p_ = tool_propose_memory_change(f["id"], "fade", _why, [])
+            if p_.get("proposed"):
+                proposals.append({"id": p_["id"], "fact": f.get("text", ""),
+                                  "action": "fade"})
+            continue
         if not lines:
             ok += 1
             v_ = _llm_call_json(_PRUNE_PROMPT.format(text=f.get("text", "")),
-                                max_tokens=200, timeout=60)
+                                max_tokens=200, timeout=_side_timeout(60))
             if not isinstance(v_, dict):
                 no_trace.append(f.get("text", ""))
                 _why = ((f"the model answered with "
@@ -4199,7 +4240,7 @@ def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
         ok += 1
         r_ = _llm_call_json(_CURATE_PROMPT.format(
             age=age, text=f.get("text", ""), lines=numbered),
-            max_tokens=500, timeout=90)
+            max_tokens=500, timeout=_side_timeout(90))
         if not isinstance(r_, dict):
             _why = ((f"the model answered with "
                      f"{type(r_).__name__}, not an object")
@@ -4239,7 +4280,8 @@ def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
             proposals.append({"id": p["id"], "fact": f.get("text", ""),
                                "action": "replace" if v == "happened"
                                          else "retire"})
-    out = {"asked": ok, "checked": ok + len(no_trace),
+    _nf = sum(1 for r in reviewed if r.get("verdict") == "faded")
+    out = {"asked": ok, "checked": ok + len(no_trace) + _nf, "faded": _nf,
            "proposals": proposals, "reviewed": reviewed,
            "no_trace": no_trace[:20],
            "pool": len(_cands), "pool_stats": _pool_stats,
@@ -4345,7 +4387,7 @@ def curate_lessons(max_groups=_MERGE_MAX_GROUPS):
                           for i, l in enumerate(active))
     try:
         r_ = _llm_call_json(_LESSON_MERGE_PROMPT.format(lessons=numbered[:12000]),
-                            timeout=300, breaker=False)
+                            timeout=_side_timeout(300), breaker=False)
     except Exception as e:
         return {"looked_at": len(active), "merged": [], "deactivated": 0,
                 "error": str(e)[:200]}
@@ -4417,7 +4459,7 @@ def curate_fact_dups(max_groups=_DEDUP_MAX_GROUPS):
         return _curate_fact_dup_groups(all_facts, max_groups)
     try:
         r_ = _llm_call_json(_FACT_DEDUP_PROMPT.format(facts=numbered[:14000]),
-                            timeout=300, breaker=False)
+                            timeout=_side_timeout(300), breaker=False)
     except Exception as e:
         return {"looked_at": len(all_facts), "proposed": [],
                 "error": str(e)[:200]}
@@ -4496,7 +4538,7 @@ def _curate_fact_dup_groups(all_facts, max_groups):
                               f"{f.get('text', '')}" for i, f in enumerate(cl))
         looked += len(cl)
         try:
-            r_ = _llm_call_json(_FACT_DEDUP_PROMPT.format(facts=numbered), timeout=300, breaker=False)
+            r_ = _llm_call_json(_FACT_DEDUP_PROMPT.format(facts=numbered), timeout=_side_timeout(300), breaker=False)
         except Exception:
             continue
         if isinstance(r_, list):
@@ -4522,19 +4564,50 @@ def _curate_fact_dup_groups(all_facts, max_groups):
             "proposed": proposed}
 
 
+_REVIEW_PROGRESS = {"running": False, "phase": "", "done": 0, "total": 0,
+                    "current": "", "since": 0.0, "moved": 0.0, "limit": 0}
+
+
+def _review_step(phase=None, done=None, total=None, current=None, limit=None):
+    if phase is not None:
+        _REVIEW_PROGRESS.update(phase=phase, done=0, total=0, current="",
+                                limit=_side_timeout(300))
+    if limit is not None:
+        _REVIEW_PROGRESS["limit"] = limit
+    if done is not None:
+        _REVIEW_PROGRESS["done"] = done
+    if total is not None:
+        _REVIEW_PROGRESS["total"] = total
+    if current is not None:
+        _REVIEW_PROGRESS["current"] = current[:160]
+    _REVIEW_PROGRESS["moved"] = time.time()
+
+
 def memory_review(facts=None):
+    _REVIEW_PROGRESS.update(running=True, phase="", done=0, total=0, current="",
+                            since=time.time(), moved=time.time())
+    try:
+        return _memory_review(facts)
+    finally:
+        _REVIEW_PROGRESS.update(running=False, phase="", done=0, total=0, current="")
+
+
+def _memory_review(facts):
     out = {"at": _chat_now_iso()}
     _r = _llm_breaker_rearm("memory_review")
     if _r:
         out["llm_breaker_was_tripped"] = _r
+    _review_step("lessons")
     try:
         out["lessons"] = curate_lessons()
     except Exception as e:
         out["lessons"] = {"error": str(e)[:200]}
+    _review_step("facts")
     try:
         out["facts"] = curate_memory(limit=facts)
     except Exception as e:
         out["facts"] = {"error": str(e)[:200]}
+    _review_step("duplicates")
     try:
         out["duplicates"] = curate_fact_dups()
     except Exception as e:
@@ -4542,6 +4615,7 @@ def memory_review(facts=None):
     try:
         _pids = [p.get("id") for p in ((out.get("facts") or {}).get("proposals") or [])] + \
                 [p.get("id") for p in ((out.get("duplicates") or {}).get("proposed") or [])]
+        _review_step("apply")
         out["applied"] = _apply_curator_proposals([p for p in _pids if p])
     except Exception as e:
         out["applied"] = {"error": str(e)[:200]}
@@ -14422,6 +14496,15 @@ def memory_curate(req: CurateReq):
                          recheck_days=req.recheck_days)
 
 
+@app.get("/memory/review/progress")
+def memory_review_progress():
+    p = dict(_REVIEW_PROGRESS)
+    now = time.time()
+    p["elapsed"] = round(now - p.pop("since"), 1) if p["running"] else 0
+    p["still"] = round(now - p.pop("moved"), 1) if p["running"] else 0
+    return p
+
+
 @app.post("/memory/review")
 def memory_review_now(req: CurateReq):
     return memory_review(facts=(req.limit or None) if req.limit >= 0 else -1)
@@ -14594,7 +14677,7 @@ def memory_proposal_decide(pid: str, req: ProposalDecision):
 
 def _apply_fact_change(row, fact_):
     images = []
-    if row["action"] in ("retire", "prune"):
+    if row["action"] in ("retire", "prune", "fade"):
         b = _archive_fact(fact_["id"], row["action"])
         if b:
             images.append(b)

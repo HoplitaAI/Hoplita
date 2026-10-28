@@ -169,6 +169,7 @@ Any server that speaks the OpenAI Images API (`/v1/images/generations`, `/v1/ima
 | `auto_review` | text | `on` | The memory curation pass: merges duplicate lessons, retires rules that no longer hold and proposes changes to facts. `off` / `false` / `no` / `0` turn it off. Read on every tick, so no restart is needed. The same pass also runs early, as a pressure pass, when live memory grows past its budget |
 | `review_every_hours` | int | `168` | Hours between scheduled passes (168 = weekly). A fresh store gets its first pass one full period after it is created |
 | `review_facts` | text | `0` | Facts examined per pass. `0` / `auto` = self-sized: a third of the pending pool per pass, so the whole store is reviewed once per period. A number is used as written |
+| `fade_after_days` | int | `60` | A fact said once, never returned by a search and not spoken of since for this many days is archived by the pass (undoable, still found by a search). Repeated facts (x2 and up) and recalled ones never fade this way. `0` = never |
 
 ## `[SEARCH]` — Web search
 

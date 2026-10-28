@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                              QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from hoplita_i18n import t
+import pilot_light
 
 _SPIN = "◐◓◑◒"
 _STATE_COL = {"working": "#38bdf8", "waiting": "#f5b800",
@@ -53,10 +54,11 @@ class _Led(QWidget):
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        col = QColor(_AG_COL.get(self.status, _AG_COL["pending"]))
+        col = QColor(pilot_light.GREEN if self.status == "running"
+                     else _AG_COL.get(self.status, _AG_COL["pending"]))
         c = QRectF(4, 4, 10, 10)
         if self.status == "running":
-            ph = (time.time() % 1.1) / 1.1
+            ph = (time.time() % pilot_light.PERIOD_S) / pilot_light.PERIOD_S
             halo = QColor(col)
             halo.setAlphaF(0.55 * (1 - ph))
             r = 5 + 4 * ph
@@ -161,13 +163,13 @@ class _AgentRow(QFrame):
             f"#ovwAgent QLabel {{ background:transparent; border:none; }} "
             f"#ovwAgGoal {{ color:#e6edf7; font-size:12px; "
             f"{'text-decoration:line-through;' if st == 'cancelled' else ''} }} "
-            f"#ovwAgNow {{ color:#cbd5e1; font-size:11px; }} "
+            f"#ovwAgNow {{ color:#cbd5e1; font-size:12px; }} "
             f"#ovwAgMark {{ color:#94a3b8; font-size:13px; }}")
         self.led.set_status(st)
         self._goal = str(a.get("goal") or "")
         peer = _esc(a.get("peer") or t("ovw.remote"))
         where = "⌂" if o == "local" else ("→ " if o == "out" else "← ") + peer
-        badge = ("<span style='background:{bg}; color:{fg}; font-size:10px; "
+        badge = ("<span style='background:{bg}; color:{fg}; font-size:12px; "
                  "font-weight:600;'>&nbsp;{txt}&nbsp;</span>")
         meta = [badge.format(bg=obg, fg=ofg, txt=where),
                 badge.format(bg="#2a3346", fg="#cbd5e1",
@@ -175,10 +177,10 @@ class _AgentRow(QFrame):
                 badge.format(bg="#31184d", fg="#d8b4fe",
                              txt="🧠 " + _esc(a.get("model") or "base"))]
         if int(a.get("attempts") or 0) > 1:
-            meta.append(f"<span style='color:#93a1b5; font-size:10px;'>"
+            meta.append(f"<span style='color:#e6edf7; font-size:12px;'>"
                         f"{_esc(t('ovw.attempt', n=a['attempts']))}</span>")
         if a.get("error"):
-            meta.append(f"<span style='color:#fca5a5; font-size:10px;'>"
+            meta.append(f"<span style='color:#fca5a5; font-size:12px;'>"
                         f"{_esc(str(a['error'])[:60])}</span>")
         self.meta.setText(" ".join(meta))
         steps = [it for it in (a.get("intent") or []) if isinstance(it, dict)]
@@ -261,10 +263,10 @@ class _Card(QFrame):
             f"#ovwState {{ color:{scol}; font-size:13px; font-weight:600; }} "
             f"#ovwWhen {{ color:{scol}; font-size:12px; }} "
             f"#ovw_job, #ovw_goal, #ovw_doing {{ color:#cbd5e1; font-size:12px; }} "
-            f"#ovw_agents_head {{ color:#c4b5fd; font-size:11px; "
+            f"#ovw_agents_head {{ color:#c4b5fd; font-size:12px; "
             f"font-weight:600; padding-top:4px; }} "
-            f"#ovw_last {{ color:#94a3b8; font-size:12px; }} "
-            f"#ovw_foot {{ color:#7c8ba1; font-size:11px; }}")
+            f"#ovw_last {{ color:#e6edf7; font-size:12px; }} "
+            f"#ovw_foot {{ color:#7c8ba1; font-size:12px; }}")
         glyph = {"working": spin, "waiting": "⏸", "ended": "⏹",
                  "idle": "·"}.get(st, "·")
         self.state.setText(f"{glyph} {t('ovw.state_' + st)}")
@@ -344,7 +346,7 @@ class TabsOverview(QWidget):
         outer.addWidget(self.head)
         self.sub = QLabel(t("ovw.sub"))
         self.sub.setWordWrap(True)
-        self.sub.setStyleSheet("QLabel { color:#8296b1; font-size:12px; "
+        self.sub.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; "
                                "background:transparent; }")
         outer.addWidget(self.sub)
         scroll = QScrollArea()

@@ -2143,7 +2143,7 @@ class ChatAssistantWindow(QMainWindow):
             f"#motd_banner {{ background:{bg}; border-bottom:2px solid {c}; }} "
             f"#motd_banner QLabel {{ color:{c}; font-size:13px; }} "
             f"#motd_who {{ font-weight:800; letter-spacing:1px; "
-            f"font-size:11px; }} "
+            f"font-size:12px; }} "
             f"#motd_banner QPushButton {{ color:{c}; background:transparent; "
             f"border:none; font-weight:700; }}")
         _txt = (m.get("text", "") or "").strip()
@@ -3329,9 +3329,9 @@ class ChatAssistantWindow(QMainWindow):
         for old in [k for k in store if k <= rid - 200]:
             store.pop(old, None)
         return (f'&nbsp;&nbsp;<a href="hoplita:rate:ok:{rid}" '
-                f'style="text-decoration:none;font-size:8pt;">👍</a>'
+                f'style="text-decoration:none;font-size:12px;">👍</a>'
                 f'&nbsp;<a href="hoplita:rate:bad:{rid}" '
-                f'style="text-decoration:none;font-size:8pt;">👎</a>')
+                f'style="text-decoration:none;font-size:12px;">👎</a>')
 
     def _rate_reply(self, rid, verdict):
         rec = (getattr(self, "_rate_pending", {}) or {}).pop(rid, None)
@@ -3368,13 +3368,13 @@ class ChatAssistantWindow(QMainWindow):
         v = QVBoxLayout(dlg)
         head = QLabel(t("rate.scope"))
         head.setWordWrap(True)
-        head.setStyleSheet("QLabel { color:#94a3b8; font-size:12px; }")
+        head.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         v.addWidget(head)
         what = QPlainTextEdit(f"» {rec['goal'][:300]}\n\n{rec['result'][:800]}")
         what.setReadOnly(True)
         what.setFixedHeight(110)
         what.setStyleSheet("QPlainTextEdit { background:#0f172a; color:#8296b1; "
-                           "border:1px solid #334155; font-size:11px; padding:6px; }")
+                           "border:1px solid #334155; font-size:12px; padding:6px; }")
         v.addWidget(what)
         boxes = []
         steps = rec.get("steps") or []
@@ -3553,7 +3553,7 @@ class ChatAssistantWindow(QMainWindow):
         hb.add(_h1)
         self.code_wb_where = ElidedLabel("", hug=True)
         self.code_wb_where.setStyleSheet(
-            "QLabel { color:#7d8aa3; font-family:monospace; font-size:11px; }")
+            "QLabel { color:#e6edf7; font-family:monospace; font-size:12px; }")
         hb.add(self.code_wb_where)
         hb.addStretch(1)
         self.code_wb_model = QComboBox()
@@ -3577,7 +3577,7 @@ class ChatAssistantWindow(QMainWindow):
         sr.setContentsMargins(2, 0, 0, 0)
         sr.setSpacing(8)
         self.code_wb_status = ElidedLabel("")
-        self.code_wb_status.setStyleSheet("QLabel { color:#b6c2d6; font-size:11px; }")
+        self.code_wb_status.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         self.code_wb_status.changed = lambda text: self._wb_status_row.setVisible(
             bool(text) or self.code_wb_stop.isVisible())
         sr.addWidget(self.code_wb_status, 1)
@@ -3585,7 +3585,7 @@ class ChatAssistantWindow(QMainWindow):
         self.code_wb_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         self.code_wb_stop.setStyleSheet(
             "QPushButton { background:transparent; color:#d29922; border:1px solid #4a3a17; border-radius:7px;"
-            " padding:2px 10px; font-size:11px; } QPushButton:hover { background:#2a2112; }")
+            " padding:2px 10px; font-size:12px; } QPushButton:hover { background:#2a2112; }")
         self.code_wb_stop.clicked.connect(self._code_wb_stop)
         self.code_wb_stop.setVisible(False)
         self.code_wb_reads = QPushButton("")
@@ -3593,7 +3593,7 @@ class ChatAssistantWindow(QMainWindow):
         self.code_wb_reads.setToolTip(t("code.wb_reads_tip"))
         self.code_wb_reads.setStyleSheet(
             "QPushButton { background:transparent; color:#b6c2d6; border:1px solid %s; border-radius:7px;"
-            " padding:2px 10px; font-size:11px; } QPushButton:hover { background:#131d33; color:#e6edf7; }"
+            " padding:2px 10px; font-size:12px; } QPushButton:hover { background:#131d33; color:#e6edf7; }"
             "QPushButton[alarm=\"true\"] { color:#f0a8a8; border-color:#7f1d1d; }" % self._WB_LINE)
         self.code_wb_reads.clicked.connect(self._wb_show_reads)
         self.code_wb_reads.setVisible(False)
@@ -3846,7 +3846,7 @@ class ChatAssistantWindow(QMainWindow):
         dlg = QDialog(self)
         dlg.setWindowTitle(t("code.wb_reads_title"))
         dlg.resize(760, 480)
-        dlg.setStyleSheet("QDialog { background:%s; } QLabel { color:#b6c2d6; font-size:12px; }"
+        dlg.setStyleSheet("QDialog { background:%s; } QLabel { color:#e6edf7; font-size:12px; }"
                           "QListWidget { background:%s; color:#e6edf7; border:1px solid %s; border-radius:8px;"
                           " font-family:monospace; font-size:12px; padding:4px; }"
                           % (self._WB_BG, self._WB_SEG, self._WB_LINE))
@@ -4652,7 +4652,7 @@ enabled = true
                 err_label.setWordWrap(True)
                 err_label.setStyleSheet(
                     "QLabel { color: #cd3131; background: #1e1e1e; padding: 20px; "
-                    "font-family: monospace; font-size: 11px; }")
+                    "font-family: monospace; font-size: 12px; }")
                 err_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 self.tabs.addTab(err_label, t("tabs.terminal_err"))
                 print(t("init.terminal_fail", e=e), file=sys.stderr)
@@ -4691,7 +4691,7 @@ enabled = true
             err_label.setWordWrap(True)
             err_label.setStyleSheet(
                 "QLabel { color: #cd3131; background: #1e1e1e; padding: 20px; "
-                "font-family: monospace; font-size: 11px; }")
+                "font-family: monospace; font-size: 12px; }")
             err_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.tabs.addTab(err_label, t("tabs.dashboard_err"))
             print(t("init.dashboard_fail", e=e), file=sys.stderr)
@@ -4808,6 +4808,9 @@ enabled = true
         self.facts_sort = QComboBox()
         self.facts_sort.addItems([t("mem.sort_hits"), t("mem.sort_new"),
                                   t("mem.sort_old"), t("mem.sort_az")])
+        _fm = QFont(); _fm.setPixelSize(13)
+        self.facts_sort.setMinimumWidth(max(QFontMetrics(_fm).horizontalAdvance(
+            self.facts_sort.itemText(i)) for i in range(self.facts_sort.count())) + 64)
         self.facts_sort.currentIndexChanged.connect(self._load_memory_facts)
         _ff.addWidget(self.facts_sort)
         fl.addLayout(_ff)
@@ -4819,7 +4822,7 @@ enabled = true
             self.facts_table, self._delete_selected_fact)
         fl.addWidget(self.facts_table, 1)
         self.facts_count = QLabel("")
-        self.facts_count.setStyleSheet("color:#7c8aa3; font-size:12px;")
+        self.facts_count.setStyleSheet("color:#e6edf7; font-size:12px;")
         fl.addWidget(self.facts_count)
         _fp = QHBoxLayout()
         self.facts_only_generic = QCheckBox(t("mem.only_generic"))
@@ -4925,7 +4928,7 @@ enabled = true
         ll.addLayout(_lh)
         _lc = QHBoxLayout()
         self.log_count = QLabel("")
-        self.log_count.setStyleSheet("QLabel { color:#8296b1; font-size:11px; }")
+        self.log_count.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         _lc.addWidget(self.log_count)
         _lc.addStretch()
         _fc = QPushButton(t("log.forget_conv"))
@@ -4948,10 +4951,9 @@ enabled = true
         prop_w = QWidget()
         pl = QVBoxLayout(prop_w)
         _ph = QHBoxLayout()
-        self.prop_count = QLabel("")
-        self.prop_count.setStyleSheet("QLabel { color:#8296b1; font-size:11px; }")
-        _ph.addWidget(self.prop_count)
-        _ph.addStretch()
+        from pilot_light import PilotLine
+        self.prop_count = PilotLine()
+        _ph.addWidget(self.prop_count, 1)
         self.prop_curate = QPushButton(t("prop.curate"))
         self.prop_curate.setToolTip(t("prop.curate_tip"))
         self.prop_curate.setStyleSheet(
@@ -4991,7 +4993,7 @@ enabled = true
         pl.addWidget(_al)
         self.auto_hint = QLabel(t("prop.auto_hint"))
         self.auto_hint.setWordWrap(True)
-        self.auto_hint.setStyleSheet("QLabel { color:#8296b1; font-size:11px; }")
+        self.auto_hint.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         pl.addWidget(self.auto_hint)
         self.auto_list = QListWidget()
         self.auto_list.setWordWrap(True)
@@ -5175,6 +5177,8 @@ enabled = true
         if not hasattr(self, "prop_list"):
             return
         self.prop_list.clear()
+        if self.prop_count.light.state == "off":
+            self._watch_review()
         try:
             r = requests.get(f"{self._mcp_url}/memory/proposals", timeout=10).json()
         except Exception as e:
@@ -5188,6 +5192,7 @@ enabled = true
             _act = (p.get("action") or "").strip()
             _acc = ({"retire": lambda: t("prop.retire"),
                      "prune": lambda: t("prop.prune"),
+                     "fade": lambda: t("prop.fade"),
                      "merge": lambda: t("prop.merge", new=p.get("new_text", ""),
                                         n=len(p.get("absorbed") or []) + 1),
                      "replace": lambda: t("prop.replace",
@@ -5230,7 +5235,8 @@ enabled = true
             elif str(e.get("kind", "")).startswith("facts_"):
                 _a = e["kind"][6:]
                 _key = {"merge": "prop.auto_fact_merge", "retire": "prop.auto_fact_retire",
-                        "prune": "prop.auto_fact_prune"}.get(_a, "prop.auto_fact_rewrite")
+                        "prune": "prop.auto_fact_prune",
+                        "fade": "prop.auto_fact_fade"}.get(_a, "prop.auto_fact_rewrite")
                 _txt = t(_key, when=_when, fact=_s.get("fact", ""),
                          new=_s.get("new_text", ""))
             else:
@@ -5268,7 +5274,8 @@ enabled = true
 
     def _curate_memory(self):
         self.prop_curate.setEnabled(False)
-        self.prop_count.setText(t("prop.curating"))
+        self.prop_count.working(t("prop.curating"))
+        self._watch_review()
 
         def worker():
             try:
@@ -5280,9 +5287,55 @@ enabled = true
 
         threading.Thread(target=worker, daemon=True, name="curate-mem").start()
 
+    def _watch_review(self):
+        tmr = getattr(self, "_review_timer", None)
+        if tmr is None:
+            tmr = self._review_timer = QTimer(self)
+            tmr.setInterval(1000)
+            tmr.timeout.connect(self._review_tick)
+        if not tmr.isActive():
+            tmr.start()
+        self._review_tick()
+
+    _REVIEW_STILL_S = {"facts": 90, "lessons": 330, "duplicates": 330, "apply": 60}
+
+    def _review_tick(self):
+        try:
+            p = requests.get(f"{self._mcp_url}/memory/review/progress", timeout=2).json()
+        except Exception:
+            return
+        if not p.get("running"):
+            if not self.prop_curate.isEnabled():
+                return
+            self._review_timer.stop()
+            if self.prop_count.light.state != "off":
+                self.prop_count.done()
+                self._load_proposals()
+                self._load_autolog()
+            return
+        self.prop_curate.setEnabled(False)
+        mmss = lambda s: f"{int(s) // 60}:{int(s) % 60:02d}"
+        ph = p.get("phase") or ""
+        line = t("prop.phase_" + ph) if ph in self._REVIEW_STILL_S else t("prop.curating")
+        if p.get("total"):
+            line = t("prop.progress", what=line, done=p.get("done", 0) + 1,
+                     total=p["total"], time=mmss(p.get("elapsed", 0)))
+        else:
+            line = t("prop.progress_one", what=line, time=mmss(p.get("elapsed", 0)))
+        if p.get("current"):
+            line += "\n" + t("prop.progress_on", text=p["current"])
+        if p.get("still", 0) > (p.get("limit") or self._REVIEW_STILL_S.get(ph, 90)) + 30:
+            self.prop_count.stalled(line + "\n" + t("prop.progress_still",
+                                                     still=mmss(p["still"])))
+        else:
+            self.prop_count.working(line)
+
     def _on_curate_done(self, r):
+        if getattr(self, "_review_timer", None) is not None:
+            self._review_timer.stop()
         if hasattr(self, "prop_curate"):
             self.prop_curate.setEnabled(True)
+        self.prop_count.done()
         self._load_proposals()
         self._load_autolog()
         if r.get("error"):
@@ -5392,7 +5445,7 @@ enabled = true
             for hh in hits:
                 _term = ", ".join(hh.get("matched_terms") or [])
                 out.append(
-                    f'<div style="color:#5b6b83;font-size:9pt;margin-top:16px;">'
+                    f'<div style="color:#5b6b83;font-size:12px;margin-top:16px;">'
                     f'{_h.escape((hh.get("when") or "")[:16])}'
                     + (f' · <span style="color:#3b82f6;">{_h.escape(_term)}'
                        f'</span>' if _term else "") + '</div>')
@@ -5499,11 +5552,14 @@ enabled = true
             hits = f.get("hits", 1)
             pin = "📌" if hits >= 3 else "  "
             tags = ", ".join(f.get("tags", []))
-            text = f"{'⚠' if f.get('generic') else ' '}{pin} [{hits}×] {f.get('text', '')}"
+            _seen = (f.get("last_seen") or f.get("ts") or "")[:10]
+            text = (f"{'⚠' if f.get('generic') else ' '}{pin} [{hits}×]  {_seen}   "
+                    f"{f.get('text', '')}")
             if _arch_view:
                 _r = f.get("archived_reason") or ""
                 _rk = {"superseded": "mem.arch_superseded", "merged": "mem.arch_merged",
-                       "retire": "mem.arch_retire", "prune": "mem.arch_prune"}.get(_r)
+                       "retire": "mem.arch_retire", "prune": "mem.arch_prune",
+                       "fade": "mem.arch_fade"}.get(_r)
                 _rl = t(_rk) if _rk else _r
                 text = (f"{(f.get('archived_at') or '')[:10]}  ·  {_rl}   "
                         f"{f.get('text', '')}")
@@ -5676,7 +5732,7 @@ enabled = true
         parent_layout.addLayout(header)
         _hint = QLabel(t("tools.hint"))
         _hint.setWordWrap(True)
-        _hint.setStyleSheet("color:#7c8aa3; font-size:11px; padding:0 16px 4px;")
+        _hint.setStyleSheet("color:#e6edf7; font-size:12px; padding:0 16px 4px;")
         parent_layout.addWidget(_hint)
 
         from tools_firewall import ToolPicker
@@ -6397,7 +6453,7 @@ enabled = true
         _title.setStyleSheet(f"color:{self._COUNCIL_COL}; font-size:19px; "
                              f"font-weight:700; letter-spacing:.5px;")
         _sub = QLabel(t("council.subtitle"))
-        _sub.setStyleSheet("color:#8fa0b8; font-size:12px;")
+        _sub.setStyleSheet("color:#e6edf7; font-size:12px;")
         _sub.setWordWrap(True)
         _tt.addWidget(_title)
         _tt.addWidget(_sub)
@@ -6413,7 +6469,7 @@ enabled = true
         bl.setContentsMargins(12, 9, 12, 9)
         bl.setSpacing(5)
         _bh = QLabel(t("council.bench_head"))
-        _bh.setStyleSheet("color:#7c8aa3; font-size:11px; font-weight:600;")
+        _bh.setStyleSheet("color:#e6edf7; font-size:12px; font-weight:600;")
         bl.addWidget(_bh)
         self._council_rows = []
         self._council_first_group = QButtonGroup(bench)
@@ -6430,7 +6486,7 @@ enabled = true
         self._council_ctx_chk = QCheckBox(t("council.carry_context"))
         self._council_ctx_chk.setToolTip(t("council.carry_context_tip"))
         self._council_ctx_chk.setChecked(True)
-        self._council_ctx_chk.setStyleSheet("color:#93a1b5; font-size:12px;")
+        self._council_ctx_chk.setStyleSheet("color:#e6edf7; font-size:12px;")
         self._council_ctx_chk.toggled.connect(self._council_store_bench)
         bl.addWidget(self._council_ctx_chk)
         outer.addWidget(bench)
@@ -6541,17 +6597,17 @@ enabled = true
             _host = _council_host(_url)
             _prof = (_m.get("profile") or "").strip()
             m = QLabel(_lbl + (f"  ·  {_prof[:34]}" if _prof else ""))
-            m.setStyleSheet("color:#7c8aa3; font-size:11px;")
+            m.setStyleSheet("color:#e6edf7; font-size:12px;")
             row.addWidget(m, 1)
             h = QLabel(_host or "?")
             h.setToolTip(t("council.seat_host_tip", url=_url or "?"))
-            h.setStyleSheet("color:#5b6b82; font-size:10px; "
+            h.setStyleSheet("color:#e6edf7; font-size:12px; "
                             "font-family:monospace;")
             row.addWidget(h)
             rad = QRadioButton(t("council.first_mark"))
             rad.setToolTip(t("council.first_tip"))
             rad.setChecked(n == first)
-            rad.setStyleSheet("QRadioButton{color:#8fa0b8; font-size:11px;}"
+            rad.setStyleSheet("QRadioButton{color:#e6edf7; font-size:12px;}"
                               "QRadioButton:checked{color:" +
                               self._COUNCIL_COL + ";}")
             self._council_first_group.addButton(rad)
@@ -6793,7 +6849,7 @@ enabled = true
         return (
             f"<div style='margin:10px 0 0; border-left:3px solid {col}; "
             f"padding:2px 0 2px 10px;'>"
-            f"<div style='font-size:11px; color:{col}; font-weight:700; "
+            f"<div style='font-size:12px; color:{col}; font-weight:700; "
             f"letter-spacing:.3px;'>{_esc(who)}"
             f"<span style='color:#7c8aa3; font-weight:400;'> · "
             f"{_esc(t(key) if key else phase)}</span>{badge}</div>"
@@ -6811,7 +6867,7 @@ enabled = true
                 w = _where.get(m) or {}
                 _host = _council_host(w.get("base_url"))
                 _rows += (
-                    f"<div style='color:#7c8aa3; font-size:11px; "
+                    f"<div style='color:#e6edf7; font-size:12px; "
                     f"margin-left:2px;'>· <b style='color:#93a1b5;'>{_esc(m)}</b>"
                     f"{' ← ' + _esc(t('council.first_mark')) if m == ev.get('first') else ''}"
                     f" &nbsp;{_esc(w.get('model') or '?')}"
@@ -6821,7 +6877,7 @@ enabled = true
             _tq = (f"<div style='margin:2px 0 8px; padding:8px 11px; "
                    f"border-radius:8px; background:#131b2c; "
                    f"border-left:3px solid {self._COUNCIL_COL};'>"
-                   f"<div style='color:#7c8aa3; font-size:10px; "
+                   f"<div style='color:#e6edf7; font-size:12px; "
                    f"font-weight:700; letter-spacing:.4px;'>"
                    f"{_esc(t('council.the_matter'))}</div>"
                    f"<div style='color:#e6edf7; font-size:13px; "
@@ -6841,29 +6897,29 @@ enabled = true
                     f"<div style='margin:2px 0 6px; padding:7px 10px; "
                     f"border-radius:8px; background:#101728; "
                     f"border:1px dashed #2b3550;'>"
-                    f"<div style='color:#7c8aa3; font-size:10px; "
+                    f"<div style='color:#e6edf7; font-size:12px; "
                     f"font-weight:700; letter-spacing:.4px;'>"
                     f"{_esc(t('council.briefing_head', n=len(_b)))}</div>"
-                    f"<div style='color:#8fa0b8; font-size:11px; "
+                    f"<div style='color:#e6edf7; font-size:12px; "
                     f"margin-top:3px; white-space:pre-wrap; "
                     f"font-family:monospace;'>{_esc(_b[:1800])}"
                     f"{'…' if len(_b) > 1800 else ''}</div></div>"))
             else:
                 self._council_append(tab_id, (
-                    f"<div style='color:#5b6b82; font-size:11px; "
+                    f"<div style='color:#e6edf7; font-size:12px; "
                     f"margin:2px 0 6px;'>{_esc(t('council.briefing_none'))}"
                     f"</div>"))
         elif et == "step":
             _col = "#ef4444" if ev.get("kind") == "error" else "#5b6b82"
             self._council_append(tab_id, (
-                f"<div style='color:{_col}; font-size:11px; "
+                f"<div style='color:{_col}; font-size:12px; "
                 f"font-family:monospace; margin:1px 0 1px 4px; "
                 f"white-space:pre-wrap;'>{_esc(str(ev.get('text', ''))[:400])}"
                 f"</div>"))
         elif et == "speak_start":
             key, col = self._COUNCIL_PHASE.get(ev.get("phase"), ("", "#7c8aa3"))
             self._council_append(tab_id, (
-                f"<div style='color:#64748b; font-size:11px; margin-top:8px;'>"
+                f"<div style='color:#e6edf7; font-size:12px; margin-top:8px;'>"
                 f"▸ {_esc(ev.get('member', '?'))} · "
                 f"{_esc(t(key) if key else ev.get('phase', ''))}…</div>"))
         elif et == "speak_done":
@@ -6903,7 +6959,7 @@ enabled = true
                 f"</div>"))
         elif et == "note":
             self._council_append(tab_id, (
-                f"<div style='color:#8fa0b8; font-size:12px; margin-top:8px;'>"
+                f"<div style='color:#e6edf7; font-size:12px; margin-top:8px;'>"
                 f"{_esc(t(ev.get('key', ''), **(ev.get('args') or {})))}</div>"))
         elif et == "cancelled":
             self._council_append(tab_id, (
@@ -7449,7 +7505,7 @@ enabled = true
         outer.addWidget(head)
         hint = QLabel(t("sess.dialog_hint"))
         hint.setWordWrap(True)
-        hint.setStyleSheet("QLabel{color:#7c8aa3;font-size:11.5px;"
+        hint.setStyleSheet("QLabel{color:#e6edf7;font-size:12px;"
                            "background:transparent;border:none;}")
         outer.addWidget(hint)
         if not sessions:
@@ -7492,7 +7548,7 @@ enabled = true
             rl.addWidget(title)
             meta = QLabel(f"{s.get('n', 0)} msgs · "
                           f"{(s.get('updated_at') or '')[:16].replace('T', ' ')}")
-            meta.setStyleSheet("QLabel{color:#7c8aa3;font-size:11px;"
+            meta.setStyleSheet("QLabel{color:#e6edf7;font-size:12px;"
                                "background:transparent;border:none;}")
             rl.addWidget(meta)
             uid = s.get("uuid")
@@ -8382,17 +8438,20 @@ enabled = true
         proj_layout.addWidget(QLabel(t("lbl.projects")))
 
         proj_btns = QHBoxLayout()
-        new_proj_btn = QPushButton("➕")
+        new_proj_btn = QPushButton()
+        new_proj_btn.setIcon(self._svg_icon("plus", "#e6edf7", 18))
         new_proj_btn.setToolTip(t("btn.new_project"))
         new_proj_btn.setMaximumWidth(40)
         new_proj_btn.clicked.connect(self._todo_add_project)
         proj_btns.addWidget(new_proj_btn)
-        rename_proj_btn = QPushButton("✏️")
+        rename_proj_btn = QPushButton()
+        rename_proj_btn.setIcon(self._svg_icon("edit", "#e6edf7", 18))
         rename_proj_btn.setToolTip(t("btn.rename_project"))
         rename_proj_btn.setMaximumWidth(40)
         rename_proj_btn.clicked.connect(self._todo_rename_project)
         proj_btns.addWidget(rename_proj_btn)
-        del_proj_btn = QPushButton("🗑")
+        del_proj_btn = QPushButton()
+        del_proj_btn.setIcon(self._svg_icon("trash", "#fca5a5", 18))
         del_proj_btn.setToolTip(t("ui.del_project_tip"))
         del_proj_btn.setMaximumWidth(40)
         del_proj_btn.clicked.connect(self._todo_delete_project)
@@ -8416,7 +8475,8 @@ enabled = true
         task_header = QHBoxLayout()
         task_header.addWidget(QLabel(f"<b>📋 {t('todo.tasks')}</b>"))
         task_header.addStretch()
-        new_task_btn = QPushButton("➕ New task")
+        new_task_btn = QPushButton(t("todo.new_task"))
+        new_task_btn.setIcon(self._svg_icon("plus", "#e6edf7", 16))
         new_task_btn.clicked.connect(self._new_task_dialog)
         task_header.addWidget(new_task_btn)
         task_layout.addLayout(task_header)
@@ -8436,7 +8496,8 @@ enabled = true
         pending_apt_btn.setToolTip(t("fed.pending_appts_tip"))
         pending_apt_btn.clicked.connect(self._show_pending_appointments)
         apt_header.addWidget(pending_apt_btn)
-        new_apt_btn = QPushButton("➕ New appointment")
+        new_apt_btn = QPushButton(t("todo.new_apt"))
+        new_apt_btn.setIcon(self._svg_icon("plus", "#e6edf7", 16))
         new_apt_btn.clicked.connect(self._new_apt_dialog)
         apt_header.addWidget(new_apt_btn)
         apt_layout.addLayout(apt_header)
@@ -8465,7 +8526,7 @@ enabled = true
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(
                 "QPushButton{background:#131a29;border:1px solid #2a3547;"
-                "border-radius:9px;padding:5px 14px;color:#93a1b5;font-size:12px;}"
+                "border-radius:9px;padding:5px 14px;color:#e6edf7;font-size:12px;}"
                 "QPushButton:hover{border-color:#3b82f6;color:#e6edf7;}"
                 "QPushButton:checked{background:#1d2a44;border-color:#3b82f6;"
                 "color:#e6edf7;font-weight:700;}")
@@ -8571,7 +8632,7 @@ enabled = true
 
         def _title(text):
             lb = QLabel(text)
-            lb.setStyleSheet("QLabel { color:#e6edf7; font-size:11px; "
+            lb.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; "
                              "letter-spacing:1px; }")
             return lb
 
@@ -8695,7 +8756,7 @@ enabled = true
         ps.addWidget(self.code_search_box)
         self.code_search_count = QLabel("")
         self.code_search_count.setStyleSheet(
-            "QLabel { color:#e6edf7; font-size:11px; }")
+            "QLabel { color:#e6edf7; font-size:12px; }")
         self.code_search_count.setWordWrap(True)
         ps.addWidget(self.code_search_count)
         self.code_search_list = QListWidget()
@@ -8781,7 +8842,7 @@ enabled = true
         self.code_find_count = QLabel("")
         self.code_find_count.setMinimumWidth(110)
         self.code_find_count.setStyleSheet(
-            "QLabel { color:#e6edf7; font-size:11px; }")
+            "QLabel { color:#e6edf7; font-size:12px; }")
         _fb.addWidget(self.code_find_count)
         self.code_find_toggle = _mini(
             "⇄", t("code.replace_toggle"), self._code_replace_toggle, True)
@@ -8792,7 +8853,7 @@ enabled = true
         self.code_goto.setStyleSheet(
             "QLineEdit { background:#0d1526; color:#e6edf7; "
             "border:1px solid #24304a; border-radius:6px; padding:2px 6px; "
-            "font-family:monospace; font-size:11px; }")
+            "font-family:monospace; font-size:12px; }")
         self.code_goto.returnPressed.connect(self._code_goto_go)
         _fb.addWidget(self.code_goto)
         _mini("↵", t("code.goto_tip"), self._code_goto_go)
@@ -8889,16 +8950,16 @@ enabled = true
         sb = QHBoxLayout(stbar)
         sb.setContentsMargins(10, 0, 10, 0)
         sb.setSpacing(14)
-        _ST = "QLabel { color:#eff6ff; font-size:11px; }"
+        _ST = "QLabel { color:#eff6ff; font-size:12px; }"
         self.code_branch = QLabel("")
         self.code_branch.setStyleSheet(
-            "QLabel { color:#eff6ff; font-family:monospace; font-size:11px; }")
+            "QLabel { color:#eff6ff; font-family:monospace; font-size:12px; }")
         sb.addWidget(self.code_branch)
         self.code_mode_badge = QPushButton("")
         self.code_mode_badge.setCursor(Qt.CursorShape.PointingHandCursor)
         self.code_mode_badge.setFlat(True)
         self.code_mode_badge.setStyleSheet(
-            "QPushButton { color:#eff6ff; font-size:11px; border:none; "
+            "QPushButton { color:#eff6ff; font-size:12px; border:none; "
             "background:transparent; padding:0; text-align:left; } "
             "QPushButton:hover { text-decoration:underline; }")
         self.code_mode_badge.setVisible(False)
@@ -8906,7 +8967,7 @@ enabled = true
         sb.addWidget(self.code_mode_badge)
         self.code_verify_badge = QLabel("")
         self.code_verify_badge.setStyleSheet(
-            "QLabel { color:#eff6ff; font-family:monospace; font-size:11px; }")
+            "QLabel { color:#eff6ff; font-family:monospace; font-size:12px; }")
         sb.addWidget(self.code_verify_badge)
         self.code_status = QLabel("")
         self.code_status.setStyleSheet(_ST)
@@ -8938,7 +8999,7 @@ enabled = true
         hb.addWidget(_h1)
         self.code_run_where = QLabel("")
         self.code_run_where.setStyleSheet(
-            "QLabel { color:#e6edf7; font-family:monospace; font-size:11px; }")
+            "QLabel { color:#e6edf7; font-family:monospace; font-size:12px; }")
         hb.addWidget(self.code_run_where)
         hb.addStretch()
         pv.addWidget(head)
@@ -8978,7 +9039,7 @@ enabled = true
         self.code_verify_goal_state = QLabel("")
         self.code_verify_goal_state.setWordWrap(True)
         self.code_verify_goal_state.setStyleSheet(
-            "QLabel { color:#e6edf7; font-size:11px; }")
+            "QLabel { color:#e6edf7; font-size:12px; }")
         fv.addWidget(self.code_verify_goal_state)
         pv.addWidget(form)
 
@@ -9097,7 +9158,7 @@ enabled = true
                 "QPushButton { border:none; background:%s; "
                 "border-left:2px solid %s; } "
                 "QLabel#ico { font-size:17px; color:%s; } "
-                "QLabel#cap { font-size:10px; letter-spacing:0.3px; color:%s; }"
+                "QLabel#cap { font-size:12px; letter-spacing:0.3px; color:%s; }"
                 % ("#111c30" if on else "transparent",
                    "#3b82f6" if on else "transparent", col, col))
         self._code_paint_side_head()
@@ -9117,7 +9178,7 @@ enabled = true
             if _w is not None:
                 _w.setEnabled(_on)
         b.setStyleSheet(
-            "QPushButton { text-align:left; padding:4px 8px; font-size:11px; "
+            "QPushButton { text-align:left; padding:4px 8px; font-size:12px; "
             "border:none; border-radius:6px; background:%s; color:%s; "
             "font-weight:600; } QPushButton:hover { background:#16233c; }"
             % (("#132038", "#cfe0ff") if p else ("transparent", "#5b6b83")))
@@ -9269,7 +9330,7 @@ enabled = true
         else:
             lb.setText(t("code.check_goal_judged"))
             col = "#22d3ee"
-        lb.setStyleSheet("QLabel { color:%s; font-size:11px; }" % col)
+        lb.setStyleSheet("QLabel { color:%s; font-size:12px; }" % col)
 
     def _turn_check_goal(self):
         try:
@@ -9606,7 +9667,7 @@ enabled = true
         if lb is not None:
             lb.setText(t("code.goal_on") if txt.strip()
                        else t("code.goal_off"))
-            lb.setStyleSheet("QLabel { color:%s; font-size:11px; }"
+            lb.setStyleSheet("QLabel { color:%s; font-size:12px; }"
                              % ("#3fb950" if txt.strip() else "#e6edf7"))
 
     def _code_run_paint(self):
@@ -9730,12 +9791,12 @@ enabled = true
         v = QVBoxLayout(dlg)
         head = QLabel(t("code.projects_intro"))
         head.setWordWrap(True)
-        head.setStyleSheet("QLabel { color:#e6edf7; font-size:11px; }")
+        head.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         v.addWidget(head)
         lst = QListWidget()
         v.addWidget(lst, 1)
         state = QLabel(t("code.cowork_loading"))
-        state.setStyleSheet("QLabel { color:#e6edf7; font-size:11px; }")
+        state.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         v.addWidget(state)
 
         def _open():
@@ -9745,7 +9806,7 @@ enabled = true
             row = it.data(Qt.ItemDataRole.UserRole) or {}
             if not row.get("exists"):
                 state.setText(t("code.projects_gone", path=row.get("path", "")))
-                state.setStyleSheet("QLabel { color:#f87171; font-size:11px; }")
+                state.setStyleSheet("QLabel { color:#f87171; font-size:12px; }")
                 return
             self.code_project_edit.setText(row.get("path", ""))
             self._code_open_project()
@@ -9865,12 +9926,12 @@ enabled = true
             ]
             html = ""
             for title, label, sub in lines:
-                html += (f'<div style="color:#e6edf7;font-size:11px;'
+                html += (f'<div style="color:#e6edf7;font-size:12px;'
                          f'letter-spacing:1px;margin-top:10px;">'
                          f'{_h.escape(title)}</div>'
                          f'<div style="color:#e6edf7;font-weight:700;">'
                          f'{_h.escape(label)}</div>'
-                         f'<div style="color:#e6edf7;font-size:11px;">'
+                         f'<div style="color:#e6edf7;font-size:12px;">'
                          f'{_h.escape(sub)}</div>')
             if not ok:
                 verdict, col = t("app.build_no_mcp", err=err), "#f85149"
@@ -9920,7 +9981,7 @@ enabled = true
         hb.addWidget(_h1)
         self.code_cowork_where = QLabel("")
         self.code_cowork_where.setStyleSheet(
-            "QLabel { color:#e6edf7; font-family:monospace; font-size:11px; }")
+            "QLabel { color:#e6edf7; font-family:monospace; font-size:12px; }")
         hb.addWidget(self.code_cowork_where)
         hb.addStretch()
         _ref = _btn(t("code.refresh"), self._code_cowork_paint)
@@ -9939,7 +10000,7 @@ enabled = true
         lv.setSpacing(6)
         _lead = QLabel(t("code.cowork_lead"))
         _lead.setWordWrap(True)
-        _lead.setStyleSheet("QLabel { color:#e6edf7; font-size:11px; }")
+        _lead.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         lv.addWidget(_lead)
         lv.addWidget(_title(t("code.cowork_peers").upper()))
         self.code_cowork_peers = QListWidget()
@@ -9993,7 +10054,7 @@ enabled = true
         self.code_cowork_state = QLabel("")
         self.code_cowork_state.setWordWrap(True)
         self.code_cowork_state.setStyleSheet(
-            "QLabel { color:#e6edf7; font-size:11px; }")
+            "QLabel { color:#e6edf7; font-size:12px; }")
         rv.addWidget(self.code_cowork_state)
         bl.addWidget(right, 1)
         pv.addWidget(body, 1)
@@ -10003,7 +10064,7 @@ enabled = true
         w = getattr(self, "code_cowork_state", None)
         if w is not None:
             w.setText(msg)
-            w.setStyleSheet("QLabel { color:%s; font-size:11px; }"
+            w.setStyleSheet("QLabel { color:%s; font-size:12px; }"
                             % ("#f87171" if bad else "#e6edf7"))
 
     def _code_cowork_paint(self, note=""):
@@ -10734,7 +10795,7 @@ enabled = true
                 errmsg if errmsg
                 else ("" if not self.code_find.text() else t("code.find_none")))
             self.code_find_count.setStyleSheet(
-                "QLabel { color:%s; font-size:11px; }"
+                "QLabel { color:%s; font-size:12px; }"
                 % ("#f87171" if (errmsg or self.code_find.text()) else "#e6edf7"))
             return
         pos = self.code_editor.textCursor().selectionStart()
@@ -10766,7 +10827,7 @@ enabled = true
             t("code.find_count", i=idx + 1, n=len(hits))
             + ("" if shown == len(hits) else " " + t("code.find_capped", c=shown)))
         self.code_find_count.setStyleSheet(
-            "QLabel { color:#e6edf7; font-size:11px; }")
+            "QLabel { color:#e6edf7; font-size:12px; }")
         if not keep:
             cur = self.code_editor.textCursor()
             cur.setPosition(hits[idx][0])
@@ -11142,12 +11203,12 @@ enabled = true
             rec += (
                 '<tr><td style="padding:3px 0;">'
                 f'<a href="hoplita:open:{_h.escape(p)}" style="color:#7dd3fc;'
-                'text-decoration:none;font-size:11pt;">'
+                'text-decoration:none;font-size:12px;">'
                 f'{_h.escape(os.path.basename(p.rstrip("/")) or p)}</a>'
-                f'<span style="color:#4a5b74;font-size:9pt;">   {_h.escape(p)}'
+                f'<span style="color:#4a5b74;font-size:12px;">   {_h.escape(p)}'
                 '</span></td></tr>')
         if rec:
-            rec = (f'<p style="color:#e6edf7;font-size:9pt;letter-spacing:1px;'
+            rec = (f'<p style="color:#e6edf7;font-size:12px;letter-spacing:1px;'
                    f'margin:22px 0 2px 0;">{t("code.welcome_recent").upper()}'
                    f'</p><table cellspacing="0" cellpadding="0">{rec}</table>')
         steps = ""
@@ -11159,22 +11220,22 @@ enabled = true
                 f'<td valign="top" style="color:{"#3b82f6" if here else "#3d4b63"};'
                 f'font-size:13pt;font-weight:bold;padding:0 10px 8px 0;">{i + 1}</td>'
                 f'<td valign="top" style="color:{"#c8d6ea" if here else "#6b7c96"};'
-                f'font-size:10pt;padding:0 0 8px 0;">{t(key)}'
-                + (f'<span style="color:#3b82f6;font-size:9pt;">'
+                f'font-size:12px;padding:0 0 8px 0;">{t(key)}'
+                + (f'<span style="color:#3b82f6;font-size:12px;">'
                    f'&nbsp;&nbsp;← {t("code.step_here")}</span>' if here else "")
                 + '</td></tr>')
         self.code_diff.setHtml(
             '<div style="padding:26px 30px;">'
             f'<div style="color:#e6edf7;font-size:17pt;font-weight:bold;">'
             f'{t("code.welcome_title")}</div>'
-            f'<p style="color:#e6edf7;font-size:10pt;max-width:520px;">'
+            f'<p style="color:#e6edf7;font-size:12px;max-width:520px;">'
             f'{t("code.welcome_lead")}</p>'
             '<p style="margin-top:18px;"><a href="hoplita:pick" '
             'style="color:#d1fae5;background:#065f46;text-decoration:none;'
             'font-size:12pt;font-weight:bold;">'
             f'&nbsp;&nbsp;{t("code.welcome_pick")}&nbsp;&nbsp;</a></p>'
             + rec +
-            f'<p style="color:#e6edf7;font-size:9pt;letter-spacing:1px;'
+            f'<p style="color:#e6edf7;font-size:12px;letter-spacing:1px;'
             f'margin:26px 0 6px 0;">{t("code.welcome_cycle").upper()}</p>'
             f'<table cellspacing="0" cellpadding="0">{steps}</table></div>')
         self.code_status.setText(t("code.no_project"))
@@ -11390,7 +11451,7 @@ enabled = true
             import html as _h
             self.code_diff.setHtml(
                 f'<div style="color:{"#f87171" if bad else "#e6edf7"};'
-                f'font-size:11pt;padding:24px;white-space:pre-wrap;">'
+                f'font-size:12px;padding:24px;white-space:pre-wrap;">'
                 f'{_h.escape(msg)}</div>')
 
     def _code_no_mine(self):
@@ -11404,10 +11465,10 @@ enabled = true
         import html as _h
         self.code_diff.setHtml(
             '<div style="padding:24px;">'
-            f'<div style="color:#c8d6ea;font-size:11pt;">'
+            f'<div style="color:#c8d6ea;font-size:12px;">'
             f'{_h.escape(t("code.mine_none_but", n=n))}</div>'
             '<p style="margin-top:14px;"><a href="hoplita:allchanges" '
-            'style="color:#7dd3fc;text-decoration:none;font-size:11pt;">'
+            'style="color:#7dd3fc;text-decoration:none;font-size:12px;">'
             f'→ {_h.escape(t("code.see_all"))}</a></p></div>')
         self.code_status.setText(t("code.mine_none_but", n=n))
         self.code_status.setStyleSheet(
@@ -11883,7 +11944,7 @@ enabled = true
         clear_att_btn.setStyleSheet(
             "QPushButton { background:#1e293b; color:#f87171; border:1px "
             "solid #334155; border-radius:6px; padding:4px 8px; "
-            "min-height:0; font-size:11px; }")
+            "min-height:0; font-size:12px; }")
         title_row.addWidget(clear_att_btn)
         editor_layout.addLayout(title_row)
         self.current_attachment = None
@@ -11961,7 +12022,7 @@ enabled = true
         self.note_mode_note = QLabel("")
         self.note_mode_note.setWordWrap(True)
         self.note_mode_note.setStyleSheet(
-            "color:#fbbf24; font-size:11px; padding:2px 4px;")
+            "color:#fbbf24; font-size:12px; padding:2px 4px;")
         self.note_mode_note.setVisible(False)
         editor_layout.addWidget(self.note_mode_note)
         self.note_content_text.paste_hook = self._note_paste_hook
@@ -12593,7 +12654,7 @@ enabled = true
         QListWidget::item { padding: 8px; border-bottom: 1px solid #1e293b; }
         QListWidget::item:selected { background: #334155; }
         QLabel { color: #f1f5f9; }
-        #status_label { color: #94a3b8; font-size: 12px; }
+        #status_label { color: #e6edf7; font-size: 12px; }
         QScrollBar:vertical { background: transparent; width: 10px; }
         QScrollBar::handle:vertical { background: #475569; border-radius: 5px; min-height: 30px; }
         QScrollBar::handle:vertical:hover { background: #10b981; }
@@ -12616,7 +12677,7 @@ enabled = true
         QCheckBox::indicator:checked { border: 2px solid #10b981; border-radius: 4px; background: #10b981; }
         #input_area { background: #0f172a; border-top: 1px solid #334155; }
         #title_bar { background: #0b1120; border-bottom: 1px solid #1e293b; }
-        #title_label { color: #64748b; font-size: 12px; font-weight: 600; }
+        #title_label { color: #e6edf7; font-size: 12px; font-weight: 600; }
         #title_min, #title_max, #title_close {
             background: transparent; border: none; color: #94a3b8;
             font-size: 13px; border-radius: 6px; padding: 0;
@@ -12766,7 +12827,7 @@ enabled = true
         ink, label_c, card_bg, inset_bg, line = "#e6edf7", "#8296b1", "#111a2e", "#0b1220", "#1f2a44"
 
         def _label(key):
-            return (f'<p style="margin:10px 0 4px 0;color:{label_c};font-size:8pt;'
+            return (f'<p style="margin:10px 0 4px 0;color:{label_c};font-size:12px;'
                     f'font-weight:600;">{_h.escape(t(key).upper())}</p>')
 
         def _text(text):
@@ -12780,7 +12841,7 @@ enabled = true
             _is_obj = isinstance(_json.loads(said), dict)
         except Exception:
             _is_obj = False
-        parts = [f'<p style="margin:0;color:{label_c};font-size:8pt;font-weight:600;">'
+        parts = [f'<p style="margin:0;color:{label_c};font-size:12px;font-weight:600;">'
                  f'{_h.escape(t("qa.card_title", n=rec.get("round", 1)).upper())}</p>']
         parts.append(_label("qa.card_verdict"))
         parts.append(_text(why or t("qa.card_no_remarks")))
@@ -13111,12 +13172,12 @@ enabled = true
                     f'<td bgcolor="{_CODE_HEAD_BG}" style="padding:5px 10px;'
                     f'border:1px solid {_CODE_BORDER};border-right:none;">'
                     f'<span style="color:#8296b1;font-family:monospace;'
-                    f'font-size:8pt;">{lang or "texto"}</span></td>'
+                    f'font-size:12px;">{lang or "texto"}</span></td>'
                     f'<td bgcolor="{_CODE_HEAD_BG}" align="right" '
                     f'style="padding:5px 10px;border:1px solid {_CODE_BORDER};'
                     f'border-left:none;">'
                     f'<a href="hoplita:copy:{cid}" style="color:#38bdf8;'
-                    f'font-family:monospace;font-size:8pt;'
+                    f'font-family:monospace;font-size:12px;'
                     f'text-decoration:none;">⧉ {t("chat.copy_code")}</a>'
                     '</td></tr><tr>'
                     f'<td colspan="2" bgcolor="{_CODE_BG}" style="padding:10px;'
@@ -15746,7 +15807,7 @@ enabled = true
             "<b>[MCP_SERVERS]</b> requires restarting the MCP."
         )
         info.setTextFormat(Qt.TextFormat.RichText)
-        info.setStyleSheet("color: #888; font-size: 11px; padding: 4px;")
+        info.setStyleSheet("color: #e6edf7; font-size: 12px; padding: 4px;")
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -18229,7 +18290,7 @@ enabled = true
         fl.addLayout(ctx_row)
         _ctxlbl = QLabel(t("cron.ctx_label"))
         _ctxlbl.setWordWrap(True)
-        _ctxlbl.setStyleSheet("QLabel { color:#8296b1; font-size:11px; }")
+        _ctxlbl.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         fl.addWidget(_ctxlbl)
         self._populate_cron_sessions()
 

@@ -161,7 +161,13 @@ third of the pending pool), -1 = all, a number = that many; `kinds` empty = what
 expires. Oldest expirable facts first (intentions and states, then durable ones
 over 90 days).
 A fact that has been asked about is not asked again for `recheck_days`.
-Returns `{asked, checked, proposals[], reviewed[], no_trace[], pending}` —
+A fact said **once**, never returned by a search, and not spoken of since for
+`[MEMORY] fade_after_days` (60) fades with no model call: verdict `faded`,
+action `fade`, archived like the rest (undoable, still found by a search).
+Repeated or recalled facts never fade this way.
+Every model call here waits as long as the chat does (`[CHAT] timeout`), never
+less than 60-90 s.
+Returns `{asked, checked, faded, proposals[], reviewed[], no_trace[], pending}` —
 including what it looked at and got nothing from, because a review that only
 shows its hits cannot be judged. It writes nothing to memory: everything it
 finds lands in the proposals below.
@@ -197,6 +203,15 @@ review_every_hours / review_facts` in config.ini (see CONFIG.md).
 `{at, lessons:{looked_at, merged[], deactivated}, facts:{…as /memory/curate},
 duplicates:{looked_at, proposed[]}}`. The «🔎 Curate memory» button runs THIS
 endpoint.
+
+## `GET /memory/review/progress`
+
+Where a running pass is, for whoever watches it (the window's pilot light):
+`{running, phase: lessons|facts|duplicates|apply, done, total, current,
+elapsed, still, limit}`. `done`/`total` and `current` (the fact being judged)
+move in the facts half; `still` is seconds since the pass last advanced and
+`limit` how long one model call may take, so a stuck pass can be told from a
+slow one. The scheduled pass reports here too.
 
 ## `GET /stats/tokens` · `POST /stats/tokens/reset` · `POST /stats/tokens/add`
 

@@ -304,10 +304,10 @@ def usage_html(d, t):
   .tile{background:#1e293b;border:1px solid #334155;border-radius:12px;
     padding:10px 14px;}
   .tile .v{font-size:24px;font-weight:700;color:#f1f5f9;}
-  .tile .k{font-size:11px;color:#94a3b8;margin-top:2px;}
+  .tile .k{font-size:12px;color:#e6edf7;margin-top:2px;}
   .grid{display:grid;grid-template-columns:280px 1fr;gap:10px;}
   .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;}
-  .card h3{margin:0 0 10px;font-size:12px;color:#94a3b8;font-weight:600;
+  .card h3{margin:0 0 10px;font-size:12px;color:#e6edf7;font-weight:600;
     text-transform:uppercase;letter-spacing:.5px;}
   .donutwrap{display:flex;align-items:center;gap:14px;flex-direction:column;}
   .donut{width:170px;height:170px;border-radius:50%;position:relative;}
@@ -334,7 +334,7 @@ def usage_html(d, t):
   .tl-head{display:flex;align-items:center;gap:6px;margin-bottom:10px;}
   .tl-head h3{margin:0;flex:1;}
   .tl-btn{background:#0f172a;color:#94a3b8;border:1px solid #334155;
-    border-radius:7px;padding:3px 12px;font-size:11px;cursor:pointer;}
+    border-radius:7px;padding:3px 12px;font-size:12px;cursor:pointer;}
   .tl-btn.on{background:#1d3a5f;color:#e2e8f0;border-color:#3b82f6;}
   .tl{display:flex;align-items:flex-end;gap:4px;height:170px;
     padding-top:16px;}
@@ -342,14 +342,14 @@ def usage_html(d, t):
     height:100%;justify-content:flex-start;position:relative;}
   .tl .seg{width:100%;}
   .tl .col:hover{filter:brightness(1.25);}
-  .tl-x{display:flex;gap:4px;font-size:9px;color:#64748b;margin-top:4px;}
+  .tl-x{display:flex;gap:4px;font-size:12px;color:#e6edf7;margin-top:4px;}
   .tl-x div{flex:1;text-align:center;overflow:hidden;white-space:nowrap;}
   .tl-top{position:absolute;top:-15px;width:100%;text-align:center;
-    font-size:9px;color:#94a3b8;}
+    font-size:12px;color:#e6edf7;}
   .empty{display:flex;flex-direction:column;align-items:center;
     justify-content:center;height:60vh;color:#64748b;text-align:center;}
   .empty .big{font-size:44px;margin-bottom:10px;}
-  .note{font-size:11px;color:#64748b;margin-top:10px;}
+  .note{font-size:12px;color:#e6edf7;margin-top:10px;}
   .inkey{display:inline-block;width:9px;height:9px;border-radius:2px;
     background:#38bdf8;margin-right:4px;}
   .outkey{display:inline-block;width:9px;height:9px;border-radius:2px;
@@ -620,7 +620,7 @@ class ConfigEditorDialog(QDialog):
             QLabel { color:#e6edf7; font-size:12px; }
             QLabel#cfgsection { color:#38bdf8; font-weight:800; font-size:12px;
                                 letter-spacing:1px; }
-            QLabel#cfgkey { color:#94a3b8; font-family:monospace; font-size:12px; }
+            QLabel#cfgkey { color:#e6edf7; font-family:monospace; font-size:12px; }
             QWidget#cfgcard { background:#0f172a; border:1px solid #1e293b;
                               border-radius:10px; }
             QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
@@ -692,7 +692,7 @@ class ConfigEditorDialog(QDialog):
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("color:#94a3b8; font-size:11px;")
+        self.status.setStyleSheet("color:#e6edf7; font-size:12px;")
         v.addWidget(self.status)
 
         row = QHBoxLayout()
@@ -849,7 +849,7 @@ class ConfigEditorDialog(QDialog):
         if note_key:
             _n = QLabel(self._t(note_key))
             _n.setWordWrap(True)
-            _n.setStyleSheet("color:#94a3b8; font-size:11px;")
+            _n.setStyleSheet("color:#e6edf7; font-size:12px;")
             cv.addWidget(_n)
         return card, cv
 
@@ -1105,7 +1105,7 @@ class ConfigEditorDialog(QDialog):
         note = QLabel(self._t("cfg.pool_seeded_other", alias=alias, base=self._base_alias)
                       if _had_base else self._t("cfg.pool_seeded", alias=alias))
         note.setWordWrap(True)
-        note.setStyleSheet("color:#fbbf24; font-size:11px;")
+        note.setStyleSheet("color:#fbbf24; font-size:12px;")
         self._pool_notes.insertWidget(2, note)
 
     def _model_section(self, name):
@@ -1182,7 +1182,7 @@ class ConfigEditorDialog(QDialog):
         nm.setStyleSheet("font-weight:700;")
         badge = QLabel(self._t("cfg.row_base_badge"))
         badge.setStyleSheet("background:#1d4ed8; color:#ffffff; border-radius:6px; "
-                            "padding:1px 7px; font-size:10px; font-weight:800;")
+                            "padding:1px 7px; font-size:12px; font-weight:800;")
         badge.setVisible(False)
         summary = QLabel("")
         summary.setStyleSheet("color:#cbd5e1;")
@@ -1286,7 +1286,7 @@ class ConfigEditorDialog(QDialog):
         lay = QVBoxLayout(inner)
         note = QLabel(self._t(note_key))
         note.setWordWrap(True)
-        note.setStyleSheet("color:#94a3b8; font-size:11px;")
+        note.setStyleSheet("color:#e6edf7; font-size:12px;")
         lay.addWidget(note)
         rows_box = QVBoxLayout()
         lay.addLayout(rows_box)
@@ -1335,7 +1335,7 @@ class ConfigEditorDialog(QDialog):
         lay.setSpacing(12)
         note = QLabel(self._t("cfg.others_note"))
         note.setWordWrap(True)
-        note.setStyleSheet("color:#94a3b8; font-size:11px;")
+        note.setStyleSheet("color:#e6edf7; font-size:12px;")
         lay.addWidget(note)
         n = 0
         for section in self._cp.sections():

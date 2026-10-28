@@ -180,7 +180,7 @@ class DashboardWidget(QWidget):
         bar = QHBoxLayout()
         bar.setContentsMargins(12, 8, 12, 8)
         self.status_label = QLabel("Dashboard ready")
-        self.status_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        self.status_label.setStyleSheet("color: #e6edf7; font-size: 12px;")
         bar.addWidget(self.status_label)
         bar.addStretch()
         clear_btn = QPushButton("🗑 Clear")

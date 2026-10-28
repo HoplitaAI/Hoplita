@@ -136,7 +136,7 @@ class _PermissionsDialog(QDialog):
 
         hint = QLabel(t("fed.perms_tree_hint"))
         hint.setWordWrap(True)
-        hint.setStyleSheet("QLabel { color:#64748b; font-weight:normal; font-size:11px; }")
+        hint.setStyleSheet("QLabel { color:#e6edf7; font-weight:normal; font-size:12px; }")
         gl.addWidget(hint)
         lay.addWidget(box)
 
@@ -231,7 +231,7 @@ class _ChildPackDialog(QDialog):
 
         head = QLabel(t("child.edit_hint"))
         head.setWordWrap(True)
-        head.setStyleSheet("QLabel { color:#94a3b8; font-size:11px; }")
+        head.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         lay.addWidget(head)
 
         row = QHBoxLayout()
@@ -299,7 +299,7 @@ class _ChildPackDialog(QDialog):
             cg.addWidget(cb)
         _pre = QLabel(t("child.caps_are_a_preset"))
         _pre.setWordWrap(True)
-        _pre.setStyleSheet("color:#7c8aa3; font-size:11px;")
+        _pre.setStyleSheet("color:#e6edf7; font-size:12px;")
         cg.addWidget(_pre, 1)
         lay.addWidget(cap_box)
 
@@ -308,7 +308,7 @@ class _ChildPackDialog(QDialog):
         fl = QVBoxLayout(fw_box)
         _fh = QLabel(t("child.tools_hint"))
         _fh.setWordWrap(True)
-        _fh.setStyleSheet("color:#7c8aa3; font-size:12px;")
+        _fh.setStyleSheet("color:#e6edf7; font-size:12px;")
         fl.addWidget(_fh)
         from tools_firewall import ToolPicker
         self._orig_tools = [x for x in (pack.get("tools") or []) if x]
@@ -322,7 +322,7 @@ class _ChildPackDialog(QDialog):
         sg = QVBoxLayout(sc_box)
         hint = QLabel(t("child.scope_hint"))
         hint.setWordWrap(True)
-        hint.setStyleSheet("QLabel { color:#64748b; font-weight:normal; font-size:11px; }")
+        hint.setStyleSheet("QLabel { color:#e6edf7; font-weight:normal; font-size:12px; }")
         sg.addWidget(hint)
         inner = QWidget()
         iv = QVBoxLayout(inner)
@@ -351,7 +351,7 @@ class _ChildPackDialog(QDialog):
         if projects or pchosen:
             pl = QLabel(t("child.projects"))
             pl.setStyleSheet("QLabel { color:#94a3b8; font-weight:normal; "
-                             "font-size:11px; }")
+                             "font-size:12px; }")
             pl.setWordWrap(True)
             sg.addWidget(pl)
             pin = QWidget()
@@ -759,6 +759,9 @@ class FederationWidget(QWidget):
             "QLabel { background:#0f172a; color:#e2e8f0; padding:12px 14px; "
             "border-radius:8px; font-size:13px; }")
         root.addWidget(self.header)
+        from pilot_light import PilotLine
+        self.pilot = PilotLine(hide_idle=True)
+        root.addWidget(self.pilot)
 
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(
@@ -829,7 +832,7 @@ class FederationWidget(QWidget):
         contacts_lay.addWidget(self.list, 1)
 
         hint = QLabel(t("fed.list_hint"))
-        hint.setStyleSheet("QLabel { color:#64748b; font-size:11px; }")
+        hint.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         contacts_lay.addWidget(hint)
 
         page_act = QWidget()
@@ -860,7 +863,7 @@ class FederationWidget(QWidget):
 
         act_hint = QLabel(t("fed.activity_hint"))
         act_hint.setWordWrap(True)
-        act_hint.setStyleSheet("QLabel { color:#64748b; font-size:11px; }")
+        act_hint.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
         act_lay.addWidget(act_hint)
 
     _CHIP = ("QPushButton { background:#1e293b; color:#cbd5e1; "
@@ -1147,8 +1150,7 @@ class FederationWidget(QWidget):
         dlg = _LocalChildDialog(self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        QMessageBox.information(self, t("child.add_title"),
-                                t("child.add_designing"))
+        self.pilot.running(t("child.add_designing"))
         w = _PostWorker(f"{self._mcp_url}/child/design", dlg.values(), 300)
         w.done.connect(self._on_child_designed)
         w.done.connect(lambda *_: self._workers.remove(w) if w in self._workers else None)
@@ -1156,6 +1158,7 @@ class FederationWidget(QWidget):
         w.start()
 
     def _on_child_designed(self, data):
+        self.pilot.done()
         data = data if isinstance(data, dict) else {}
         if data.get("error") or not data.get("child"):
             QMessageBox.warning(self, t("child.add_title"),
@@ -1169,12 +1172,11 @@ class FederationWidget(QWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         v = dlg.values()
-        if v["launch"]:
-            QMessageBox.information(self, t("child.box_title"),
-                                    t("child.box_starting"))
+        self.pilot.running(t("child.box_starting") if v["launch"] else t("child.box_making"))
         self._run("fed_spawn_child", v, self._on_box_child)
 
     def _on_box_child(self, data):
+        self.pilot.done()
         data = data if isinstance(data, dict) else {}
         if data.get("error"):
             QMessageBox.warning(self, t("child.box_title"), data["error"])

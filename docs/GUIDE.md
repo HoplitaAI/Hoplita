@@ -1275,6 +1275,8 @@ review_every_hours = 168   ; weekly. It checks the clock every 15 min, so a
 review_facts = 0           ; facts per automatic pass; 0 = a third of the
                            ; pending pool (6 to 60), so the whole store is
                            ; seen each window
+fade_after_days = 60       ; a fact said once and never spoken of again is
+                           ; archived after this long (undoable); 0 = never
 ```
 
 The schedule is configuration, not a CRON row, on purpose: a row can be edited
