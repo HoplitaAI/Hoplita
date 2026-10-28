@@ -4894,7 +4894,7 @@ FED_TOOLS = {
                 "desktop) or in a container. Returns a single-use token. The "
                 "child self-enrolls, appears in your children list and is fully trusted "
                 "(free rein, it's yours). Optional: 'label' to recognize it "
-                "(e.g. 'kitchen-pc'). The token also carries the child's starter "
+                "(e.g. 'server-1'). The token also carries the child's starter "
                 "kit, sealed so the server cannot read it: the model it thinks "
                 "with ('model', a pool alias, empty for the base; or a model of "
                 "its OWN with base_url + model_id + api_key, the safer choice "
@@ -5058,7 +5058,7 @@ FED_TOOLS = {
         "required": ["project_name"],
         "fn": lambda a: tool_fed_project_info(a["project_name"])},
     "fed_delete_shared_folder": {
-        "desc": "OWNER ONLY: delete a shared folder FOR ALL members (like the owner in Dropbox). Members lose their copy; links broken.",
+        "desc": "OWNER ONLY: delete a shared folder FOR ALL members. Members lose their copy; links broken.",
         "params": {"folder_name": {"type": "string"}},
         "required": ["folder_name"],
         "fn": lambda a: tool_fed_delete_shared("folder", a["folder_name"])},
@@ -5343,7 +5343,7 @@ FED_TOOL_PARAMS = {
                        "in the federation, e.g. 'alice@example.org' or 'alice'."},
             "email": {"type": "string", "description": "Email for verification."},
             "server_url": {"type": "string", "description": "URL of the "
-                           "federation server, e.g. 'https://hoplita.net'."},
+                           "federation server, e.g. 'https://fed.example.org'."},
             "invite": {"type": "string", "description": "Invitation code, if "
                        "the server doesn't allow open registration (the usual "
                        "case once it has a public domain)."},
@@ -5377,7 +5377,7 @@ FED_TOOL_PARAMS = {
     "fed_spawn_child": {
         "properties": {
             "label": {"type": "string", "description": "Free label to recognize "
-                      "the child later, e.g. 'kitchen-pc'. Optional."},
+                      "the child later, e.g. 'server-1'. Optional."},
             "handle": {"type": "string", "description": "The child's own handle "
                        "on the server. Optional: by default your handle and the "
                        "label."},
@@ -5438,7 +5438,7 @@ FED_TOOL_PARAMS = {
                        "you send the appointment to."},
             "title": {"type": "string", "description": "Appointment title."},
             "date": {"type": "string", "description": "Appointment date/time, "
-                     "e.g. '2026-07-20 18:00'."},
+                     "'YYYY-MM-DD HH:MM'."},
             "description": {"type": "string", "description": "Description (optional)."},
             "urgency": {"type": "string", "description": "Urgency: 'Alta', 'Normal' "
                         "or 'Baja' (optional, defaults to Normal)."},

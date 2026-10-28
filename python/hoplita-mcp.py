@@ -3710,7 +3710,7 @@ def _image_request(prompt, refs=None, size=None, n=1):
     if not base_url:
         return {"error": "no picture server configured: set [IMAGE] base_url "
                          "(and model) to a server that speaks the OpenAI "
-                         "Images API — OpenAI, xAI, LocalAI, stable-diffusion.cpp."}
+                         "Images API."}
     prompt = (prompt or "").strip()
     if not prompt:
         return {"error": "generate_image needs a prompt."}
@@ -4175,21 +4175,22 @@ _FACT_LIVES = ("volatile", "relevant", "permanent")
 _LIFE_PROMPT = """Each line below is something a memory system stored about a person.
 Say how long each one stays worth knowing.
 
-PERMANENT: who the person is, true for years: their name, age, ID numbers,
-family and the people around them, where they live, their job or role, health
-facts, addresses and IPs of their own machines and accounts, lasting tastes,
-habits and ways of working, how they want to be answered, the projects they
-own and maintain.
+PERMANENT: who the person is, true for years: who they are and how to tell
+them apart, the people close to them, where they live and work, their health,
+what they own and keep, their lasting tastes and ways of working, how they
+want to be answered, what they maintain over years.
 
-RELEVANT: something ongoing in their life that may matter for weeks or months
-and then ends: a project in progress, a trip or a purchase being planned, a
-job search, something being learned, a problem that keeps coming back, work
-for a client.
+RELEVANT: something ongoing in their life that will matter across
+conversations for weeks or months and then end. Read the verb: an activity
+that goes on over days or weeks (planning, preparing, comparing, choosing,
+looking for, setting up, moving, migrating, learning, building, working on,
+a problem that keeps coming back) is RELEVANT, whatever its subject.
 
-VOLATILE: one moment, worth nothing after a few days: a search, a question, a
-step taken while troubleshooting, a detail of the hardware or software found
-while fixing something, a test of a tool, a one-off request, a plan for a
-single file, today's error.
+VOLATILE: worth something only inside the conversation or the task where it
+came up. Read the verb: one act or one finding (asked, looked up, tried,
+tested, ran, got an error, found that a part or setting is so) is VOLATILE,
+whatever its subject. A part, setting or detail of something being fixed or
+built belongs to that task, not to the person.
 
 When a line could be PERMANENT, it is PERMANENT: losing who someone is costs
 more than keeping one stale line. Between RELEVANT and VOLATILE, choose
@@ -5461,7 +5462,7 @@ def tool_list_appointments(project=None):
                                  for t, n in by_title.most_common()],
             "hint": "There are many appointments (probably duplicates). Use "
                     "delete_all_appointments with 'contains' to clean up by "
-                    "title, e.g. contains='dentist'."}
+                    "title, e.g. contains='<word in the title>'."}
 
 
 def tool_delete_appointment(title=None, date=None, apt_id=None):
@@ -6027,8 +6028,8 @@ def tool_scrape_url(url, max_chars=10000, escalate=True, depth=None):
                              "(404/410) or needs credentials (401). It was NOT "
                              "a fetch that failed, so no browser was started — "
                              "one would take minutes to be told the same. "
-                             "Check the path: a branch, a tag or a file name "
-                             "that does not exist looks exactly like this.")}
+                             "Check the path: a part of it that does not "
+                             "exist looks exactly like this.")}
         tried.append(f"requests: {e}"[:120])
     except Exception as e:
         tried.append(f"requests: {e}"[:120])
@@ -6248,7 +6249,9 @@ async def _browse_async(task, start_url, headless, max_steps, endpoint=None):
         "headless": headless,
         "viewport": {"width": vp_w, "height": vp_h},
         "user_agent": CONFIG.get("BROWSER", "user_agent", fallback=_MAC_UA),
-        "locale": CONFIG.get("BROWSER", "locale", fallback="es-ES"),
+        "locale": (CONFIG.get("BROWSER", "locale", fallback="").strip()
+                   or {"es": "es-ES", "en": "en-US"}.get(
+                       CONFIG.get("APP", "language", fallback="en").strip().lower()[:2], "en-US")),
         "wait_between_actions": CONFIG.getfloat("BROWSER", "wait_between_actions", fallback=1.2),
         "wait_for_network_idle_page_load_time": CONFIG.getfloat("BROWSER", "wait_network_idle", fallback=3.0),
         "cookies_file": cookies_path,
@@ -7402,7 +7405,7 @@ def tool_git_commit(path=None, message="", files=None, allow_main=False):
                          f"on '{branch}' explicitly."}
     if files is not None and not (isinstance(files, list)
                                   and all(isinstance(f, str) for f in files)):
-        return {"error": "'files' is a list of paths, e.g. [\"calc.py\"] — "
+        return {"error": "'files' is a list of paths, e.g. [\"<path>\"] — "
                          f"got {type(files).__name__}: {json.dumps(files, ensure_ascii=False)[:120]}"}
     touched = sorted({f for e in (_CODE_CHECKPOINTS.get(root) or [])
                       for f in e["files"]} | _CODE_EDITED.get(root, set()))
@@ -9272,9 +9275,9 @@ def register_tools():
                                    "fn": lambda a: tool_call_council(
                                        a.get("topic", ""), a.get("members"),
                                        a.get("first", ""), a.get("context", ""))},
-        "search_web":             {"desc": "For anything you need to know AND DO NOT ALREADY HAVE. If one of the user's saved SKILLS covers this, use that instead — a skill exists precisely because the generic web answer was not good enough, and a saved skill beats a search every time. Check the user's saved memory first — it is in front of you and it is authoritative about their world: who administers their machines, what they decided, what they own. No web search can confirm those, and going to the web for them makes you answer 'I could not verify it' about something you were told. For everything else — who, what, when, how much, does it exist — this is the default. One request, and it usually comes back already written with citations. Returns 'kind':'answer' (an answer with sources) or 'kind':'sources' (raw sources you must synthesize yourself) — check the 'provider'/'kind' field. Try this BEFORE browse_web, which drives a real browser and costs minutes.",
+        "search_web":             {"desc": "For anything you need to know AND DO NOT ALREADY HAVE. If one of the user's saved SKILLS covers this, use that instead — a skill exists precisely because the generic web answer was not good enough, and a saved skill beats a search every time. Check the user's saved memory first — it is in front of you and it is authoritative about their world: who the people in their life are, what they decided, what they own. No web search can confirm those, and going to the web for them makes you answer 'I could not verify it' about something you were told. For everything else — who, what, when, how much, does it exist — this is the default. One request, and it usually comes back already written with citations. Returns 'kind':'answer' (an answer with sources) or 'kind':'sources' (raw sources you must synthesize yourself) — check the 'provider'/'kind' field. Try this BEFORE browse_web, which drives a real browser and costs minutes.",
                                    "fn": lambda a: tool_search_web(a["query"])},
-        "run_command":            {"desc": f"Run a command ({platform.system()}). Pass `timeout` in SECONDS for anything that is not instant — an install, a build, a migration, an acceptance script. When it is cut short you get exit_code -1 with only part of the output: that is the clock running out, NOT the command failing, so re-run it with a bigger timeout instead of concluding anything from the fragment.",
+        "run_command":            {"desc": f"Run a command ({platform.system()}). Pass `timeout` in SECONDS for anything that is not instant — an install, a build, a migration, a test suite. When it is cut short you get exit_code -1 with only part of the output: that is the clock running out, NOT the command failing, so re-run it with a bigger timeout instead of concluding anything from the fragment.",
                                    "fn": lambda a: tool_run_command(a["command"], a.get("cwd"), a.get("timeout", 60))},
         "render_html":            {"desc": "Render HTML/CSS/JS/SVG in the GUI's visual CANVAS (a Chromium webview). To explain CODE — a flow, a call path, a data shape, a change — use the whiteboard (wb_*: diagrams anchored to the code) instead. It is a FREE canvas, not just for dashboards: use it for ANY other visual content — charts (Chart.js 4 already available, or D3/Plotly via CDN), SVG (diagrams, illustrations, icons, schematics), CSS/JS animations, canvas/WebGL (three.js via CDN), maps, UI mockups, tables, timelines, trees, graphs, or complete HTML pages. You can send just the <body> (it gets wrapped in a dark theme) or a complete HTML document (rendered as-is). If you need data, fetch it first (run_command, search_web...) and build the HTML with it. For a LONG document, split it across 2-4 calls with append=true — one giant call gets cut off by the output token limit.",
                                    "fn": lambda a: tool_dashboard_render(a.get("html", ""))},
@@ -9312,7 +9315,7 @@ def register_tools():
                                    "fn": lambda a: list_facts()},
         "add_fact":               {"desc": "Save a FACT confirmed by the user about themselves or their world (name, mapping, personal detail, preference, equivalence). Use it WHEN the user explicitly says 'learn that X', 'remember that Y', 'don't forget that Z'. A fact is PRINTER INK: everything said is already kept in the log and recall finds it, so a fact is only for WHO the person is (life=permanent: rides every future prompt) or something ONGOING to follow for weeks (life=relevant: found when its topic comes up, asked about after a silence). A moment of this conversation (a search, a troubleshooting step, a device detail) is NOT a fact — the log has it. Do NOT use this for technical documentation or notes — for that use add_note. Pass `kind` when it is not a permanent truth: an intention ('wants to', 'is going to') or a state ('right now X'), so it can be retired when it stops applying instead of being injected for ever. If the result lists RELATED existing facts, READ them: when the new fact supersedes one (moved cities, changed jobs), delete_fact or edit_fact the stale one NOW — two contradictory facts injected together poison every future turn.",
                                    "fn": lambda a: tool_add_fact_checked(a["text"], a.get("tags"), a.get("kind"), a.get("life"))},
-        "session_read":           {"desc": "Read the conversation log AROUND a marker: every message a log search returns (recall's conversation drawer, session_moments, session_search) carries its `at`, and a text cut short says so with the marker to read on from. Like reading a file from a line: one message after when a sentence stops at 'I want to buy the…', several before to see what started it. Whole messages, in order, with the markers to go earlier or later.",
+        "session_read":           {"desc": "Read the conversation log AROUND a marker: every message a log search returns (recall's conversation drawer, session_moments, session_search) carries its `at`, and a text cut short says so with the marker to read on from. Like reading a file from a line: one message after when a sentence stops half way, several before to see what started it. Whole messages, in order, with the markers to go earlier or later.",
                                    "fn": lambda a: tool_session_read(a["at"], a.get("before", 3), a.get("after", 3))},
         "session_moments":        {"desc": "Find the MOMENTS you talked about something, not the lines that match. A conversation is a burst of messages about one thing: two common words may each appear everywhere alone, but the few minutes where BOTH appear is the conversation you want — and the answer is usually two messages later. Ranked by how many DISTINCT query terms a block covers, weighted by how rare each is in the whole log. PREFER THIS over session_search when you are looking for a past conversation rather than a single quote.",
                                    "fn": lambda a: tool_session_moments(a["query"], a.get("limit", 4), a.get("window_min", 5))},
@@ -9322,7 +9325,7 @@ def register_tools():
                                    "fn": lambda a: tool_propose_memory_change(
                                        a["target_id"], a["action"], a.get("why", ""),
                                        a.get("quotes") or [], a.get("new_text", ""))},
-        "recall":                 {"desc": "Search EVERYTHING the user has recorded OR EVER SAID — facts, lessons, notes, tasks, appointments AND THE VERBATIM LOG OF EVERY PAST CONVERSATION — in one call. YES, IT SEARCHES PAST CHATS: the conversation log is one of its drawers, searched by MOMENTS (the burst of messages where your terms co-occur, which is the conversation you are looking for) and not by loose matching lines. So for \"what did we decide about X\", \"what did I say about Y\", \"that command from the other day\" this IS the tool, and you do not need session_search or session_moments first — reach for those only to dig further into a conversation this one surfaced. Use it for any 'what do I have written down / what did I say / what am I supposed to do about X'. Prefer it over the per-store searches: those look in ONE drawer, and a wrong guess reads as 'you have no record of that' when the record exists. It searches BY WORDS, so ALWAYS pass 'terms' with the words the record itself would likely contain — synonyms, the category word, brands, proper names. For 'what car should I buy': car, vehicle, brand, model, hybrid, petrol, electric. That expansion is your job and it costs nothing.",
+        "recall":                 {"desc": "Search EVERYTHING the user has recorded OR EVER SAID — facts, lessons, notes, tasks, appointments AND THE VERBATIM LOG OF EVERY PAST CONVERSATION — in one call. YES, IT SEARCHES PAST CHATS: the conversation log is one of its drawers, searched by MOMENTS (the burst of messages where your terms co-occur, which is the conversation you are looking for) and not by loose matching lines. So for \"what did we decide about X\", \"what did I say about Y\", \"that command from the other day\" this IS the tool, and you do not need session_search or session_moments first — reach for those only to dig further into a conversation this one surfaced. Use it for any 'what do I have written down / what did I say / what am I supposed to do about X'. Prefer it over the per-store searches: those look in ONE drawer, and a wrong guess reads as 'you have no record of that' when the record exists. It searches BY WORDS, so ALWAYS pass 'terms' with the words the record itself would likely contain — synonyms, the category word, brands, proper names. For 'which X should I get': X, its category word, the brands and names it might carry. That expansion is your job and it costs nothing.",
                                    "fn": lambda a: tool_recall(a["query"], a.get("terms"), a.get("n_results", 4))},
         "search_facts":           {"desc": "Search the user's saved facts ONLY (tasks, notes, appointments and lessons are OTHER stores — use recall to cover all of them). Normally you do not need this: the relevant facts are injected automatically at the start of the chat.",
                                    "fn": lambda a: _with_scope(
@@ -9418,8 +9421,8 @@ def register_tools():
                                     "friend). With a remote target, the scheduled task runs "
                                     "on the child's/friend's machine — local cron morphs into "
                                     "children's/friends' cron. own_tab=true gives a local job "
-                                    "a tab of its own (a worker: a mail watcher, a review "
-                                    "bot): every run is a turn in that tab, the person can "
+                                    "a tab of its own (a worker: a mail watcher, a feed "
+                                    "follower): every run is a turn in that tab, the person can "
                                     "open it and talk to it between runs, and it runs in "
                                     "parallel with other tabs. With 'startup' it opens and "
                                     "starts working when HOPLITA starts.",
@@ -9564,9 +9567,9 @@ def register_tools():
                                             "If the user just wants to KNOW something — who sang it, what it costs, "
                                             "when it happened — use search_web; if you need the text of a page you "
                                             "already know the URL of, use scrape_url. Renting a yacht to cross a "
-                                            "puddle is not thoroughness, it is ten minutes of someone waiting. "
+                                            "puddle is not thoroughness, it is minutes of someone waiting. "
                                             "THE FLIP SIDE IS JUST AS BINDING: when the user hands you a SPECIFIC "
-                                            "URL or asks for what only THAT page shows (a fare grid, a cart, live "
+                                            "URL or asks for what only THAT page shows (a results table, a cart, live "
                                             "listings) and the cheap readers came back blocked or empty, the "
                                             "browser is not a yacht — it is the only tool left, so USE it instead "
                                             "of downgrading to a generic search. And never claim you used or "
@@ -9652,7 +9655,7 @@ def register_tools():
                                    "fn": lambda a: tool_search_working_memory(a.get("query", ""), a.get("title", ""), bool(a.get("regex")), a.get("context", 1), a.get("k", 5))},
         "read_note":              {"desc": "One note, by title (forgiving: exact, then unique substring) or id — whole when it fits, else BY LINES like code_read_range: the first window plus 'next', the exact call for the following lines. search_notes previews 500 chars; this is the text itself. A miss answers with the titles that DO exist.",
                                    "fn": lambda a: tool_read_note(a["category"], a.get("title", ""), a.get("note_id", ""), a.get("start_line"), a.get("end_line"))},
-        "code_lint":              {"desc": "Real diagnostics: type errors (pyright), unused imports (ruff), static analysis.",
+        "code_lint":              {"desc": "Real diagnostics: type errors, unused imports, compile errors — from each language's own checker.",
                                    "fn": lambda a: tool_code_lint(a["path"])},
         "code_deps":              {"desc": "Extract imports/exports from a file (dependencies).",
                                    "fn": lambda a: tool_code_deps(a["path"])},
@@ -9921,7 +9924,7 @@ def register_tool_params():
         "plan_and_orchestrate":   {"properties": {"task": {"type": "string"}}, "required": ["task"]},
         "call_council":           {"properties": {"topic": {"type": "string", "description": "The matter, stated so it stands on its own: nobody sitting down has read your conversation."}, "members": {"type": "array", "items": {"type": "string"}, "description": "Pool aliases that take a seat. Empty = every pool model that sits on councils. 'base' is the model you are running on."}, "first": {"type": "string", "description": "Who answers first — the one the others examine. Empty = the first of the list."}, "context": {"type": "string", "description": "What they need that does not belong in the statement of the matter: what you already tried, what came back, the constraints."}}, "required": ["topic"]},
         "search_web":             {"properties": {"query": {"type": "string"}}, "required": ["query"]},
-        "run_command":            {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait. Raise it well above the default for installs, builds, migrations and acceptance scripts — 300 or more."}}, "required": ["command"]},
+        "run_command":            {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait. Raise it well above the default for installs, builds, migrations and test suites — 300 or more."}}, "required": ["command"]},
         "render_html":            {"properties": {"html": {"type": "string", "description": "HTML/CSS/JS/SVG to render. Chart.js 4 available; D3/Plotly/three.js via CDN. <body> fragment or complete document."}, "append": {"type": "boolean", "description": "true = ADD this chunk to what is already on the canvas. Use it to build a LARGE document in 2-4 calls: a single huge call gets truncated by the output token cap and the server rejects it."}}, "required": ["html"]},
         "see_image":              {"properties": {"path": {"type": "string", "description": "the image file"}, "max_width": {"type": "integer", "description": "downscale width in px (default 1024)"}}, "required": ["path"]},
         "canvas_see":             {"properties": {"max_width": {"type": "integer", "description": "Screenshot width in px (default 1024). Smaller = fewer tokens."}}, "required": []},
@@ -9941,7 +9944,7 @@ def register_tool_params():
         "deactivate_lesson":      {"properties": {"id": {"type": "string"}}, "required": ["id"]},
         "delete_lesson":          {"properties": {"id": {"type": "string"}}, "required": ["id"]},
         "list_facts":             {"properties": {}, "required": []},
-        "add_fact":               {"properties": {"text": {"type": "string", "description": "The fact in a clear sentence, e.g. 'The cat is called Pixel'"},
+        "add_fact":               {"properties": {"text": {"type": "string", "description": "The fact in a clear sentence, e.g. '<someone or something> is called <name>'"},
                                                   "kind": {"type": "string", "enum": ["durable", "intencion", "estado"], "description": "durable = true from now on (a name, a relationship, a machine). intencion = something they mean to do, which stops being true once done or dropped. estado = how things are right now, which changes. Default durable."},
                                                   "life": {"type": "string", "enum": ["permanent", "relevant"], "description": "permanent = who the person is: rides every future prompt. relevant = something ongoing: found when its topic comes up, asked about after a silence. A moment is not a fact at all."},
                                                   "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]},
@@ -10039,7 +10042,7 @@ def register_tool_params():
         "add_todo_project":       {"properties": {"name": {"type": "string"}}, "required": ["name"]},
         "delete_todo_project":    {"properties": {"name": {"type": "string"}}, "required": ["name"]},
         "list_cron":              {"properties": {}},
-        "add_cron":               {"properties": {"name": {"type": "string"}, "instruction": {"type": "string"}, "schedule_type": {"type": "string"}, "interval_minutes": {"type": "integer"}, "fixed_datetime": {"type": "string"}, "daily_times": {"type": "array", "items": {"type": "string"}}, "target": {"type": "string", "description": "local | child:<handle> | friend:<handle>. A LOCAL child (child_list) is written the same way and is the most reliable target there is: a remote peer only runs the job when it happens to be online, a local child always does."}, "context_current": {"type": "boolean", "description": "true = attach THE CONVERSATION YOU ARE IN RIGHT NOW. This is the normal case: the user says «set up a cron with this conversation and follow it up yourself» and means the one you are both in. You do not need its title — you do not have it. Pair it with context_live=true when they ask you to keep working on it."}, "context_session": {"type": "string", "description": "ANOTHER conversation, by title or uuid, when they mean a different one than this. Leave empty and use context_current for the current one. Title or uuid of a saved conversation this job CONTINUES: each run loads the whole chat, follows the instruction as its next turn and writes its findings back into it."}, "context_live": {"type": "boolean", "description": "Default true: the job CONTINUES the attached conversation — every run reads the whole chat (compacted when it outgrows the window, like a tab), works, and appends its findings to it, so reopening the tab shows the whole watch. false = remember only a frozen summary taken at attach time, for a job that must never touch the conversation."}, "model": {"type": "string", "description": "The job's own model: empty = the router decides per run, 'base' = the [API] model pinned, or a pool alias."}, "own_tab": {"type": "boolean", "description": "true = the job gets a tab of its own: each run is a turn there, the person can talk to it between runs, and it runs in parallel. For standing workers (watch my mail, review PRs)."}}, "required": ["name", "instruction", "schedule_type"]},
+        "add_cron":               {"properties": {"name": {"type": "string"}, "instruction": {"type": "string"}, "schedule_type": {"type": "string"}, "interval_minutes": {"type": "integer"}, "fixed_datetime": {"type": "string"}, "daily_times": {"type": "array", "items": {"type": "string"}}, "target": {"type": "string", "description": "local | child:<handle> | friend:<handle>. A LOCAL child (child_list) is written the same way and is the most reliable target there is: a remote peer only runs the job when it happens to be online, a local child always does."}, "context_current": {"type": "boolean", "description": "true = attach THE CONVERSATION YOU ARE IN RIGHT NOW. This is the normal case: the user says «set up a cron with this conversation and follow it up yourself» and means the one you are both in. You do not need its title — you do not have it. Pair it with context_live=true when they ask you to keep working on it."}, "context_session": {"type": "string", "description": "ANOTHER conversation, by title or uuid, when they mean a different one than this. Leave empty and use context_current for the current one. Title or uuid of a saved conversation this job CONTINUES: each run loads the whole chat, follows the instruction as its next turn and writes its findings back into it."}, "context_live": {"type": "boolean", "description": "Default true: the job CONTINUES the attached conversation — every run reads the whole chat (compacted when it outgrows the window, like a tab), works, and appends its findings to it, so reopening the tab shows the whole watch. false = remember only a frozen summary taken at attach time, for a job that must never touch the conversation."}, "model": {"type": "string", "description": "The job's own model: empty = the router decides per run, 'base' = the [API] model pinned, or a pool alias."}, "own_tab": {"type": "boolean", "description": "true = the job gets a tab of its own: each run is a turn there, the person can talk to it between runs, and it runs in parallel. For standing workers (watch my mail, follow a feed)."}}, "required": ["name", "instruction", "schedule_type"]},
         "load_tools":             {"properties": {"names": {"type": "array", "items": {"type": "string"}, "description": "Exact tool names from the catalogue."}}, "required": ["names"]},
         "pdf_info":               {"properties": {"source": {"type": "string", "description": "Path to the PDF."},
                                                   "password": {"type": "string", "description": "To open an encrypted source."},
@@ -10235,8 +10238,8 @@ def register_tool_params():
                          "the other half."},
             "orphans": {"type": "boolean",
                         "description": "Also drop what belongs to no "
-                        "conversation: the untagged notes the old tool_spill "
-                        "bucket left behind, which nothing else can reach."}}},
+                        "conversation: the untagged notes earlier versions "
+                        "left behind, which nothing else can reach."}}},
         "generate_image": {"properties": {"prompt": {"type": "string", "description": "What the picture shows, in words the picture model understands (subject, style, light, composition)."}, "size": {"type": "string", "description": "WIDTHxHEIGHT, e.g. 1024x1024 (default from [IMAGE] size)."}, "n": {"type": "integer", "description": "How many variants, 1-4."}, "refs": {"type": "array", "items": {"type": "string"}, "description": "Optional reference pictures (file paths, or 'attached'): with refs this is an edit."}}, "required": ["prompt"]},
         "edit_image":     {"properties": {"prompt": {"type": "string", "description": "The change to make."}, "refs": {"type": "array", "items": {"type": "string"}, "description": "Source pictures: local image file paths, or 'attached' for the ones the user pasted last in this conversation (up to 16)."}, "size": {"type": "string"}, "n": {"type": "integer"}}, "required": ["prompt", "refs"]},
         "canvas_save":   {"properties": {"canvas": {"type": "object"}}, "required": ["canvas"]},
@@ -12744,7 +12747,7 @@ def _project_memory_block(root):
                 "── 'spec' — STILL THE EMPTY TEMPLATE ──\n"
                 "Nobody has written what this project is. BEFORE (or alongside) "
                 "whatever this turn asks, look at the repo (code_index, git_log, "
-                "the README; distill an AGENTS.md / CLAUDE.md if there is one) and "
+                "the README; distill any agent-instructions file it has) and "
                 f"write the truth in short lines: project_write('{root}', "
                 "note='spec', text=<what it is / how it builds / how it is "
                 "tested / status>, replace=true). Tell the user you are doing it.")
@@ -13877,7 +13880,7 @@ def tool_plan_and_orchestrate(task, solo_single=False):
     out = {"orchestrated": True, "result": final or "[no result]"}
     if ctx.can_paint:
         out["canvas"] = ("The sub-agents did not draw anything. If this result "
-                         "is worth showing visually (an itinerary, a comparison, "
+                         "is worth showing visually (a comparison, "
                          "a table, a chart), render it NOW with render_html "
                          "using the complete result. If it is not, just answer.")
     return out

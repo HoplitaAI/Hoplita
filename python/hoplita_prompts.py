@@ -43,7 +43,7 @@ Reply with JSON:
 
   vacuous=false — KEEP IT (the default). Who they are and what lasts: a name \
 and what they want to be called, a place they live or lived, family, pets, health, dates, their job and \
-machines, what they drive, what they like or hate, how they want to be \
+the things they own, what they like or hate, how they want to be \
 answered, habits, skills they have or are learning, a plan with a purpose. \
 Looking for something IN THEIR LIFE — a flat, a job, a school for the kids — \
 is a plan that lasts months: keep it. A dull fact about their life stays. \
@@ -51,9 +51,9 @@ If in doubt, false.
   vacuous=true — ARCHIVE IT. Three kinds, and only these:
   · one moment of one conversation: something they asked for, looked up, \
 tried, tested, opened, restarted, or said about today («asked for the \
-weather tomorrow», «wants a summary of an article», «is testing the new \
-button», «checked the bitcoin price today», «got an error from the API», \
-«wants to know what a flight to Rome costs»). A request to the assistant is \
+weather tomorrow», «wants a summary of an article», «is testing a \
+feature», «checked a price today», «got an error», «wants to know what a \
+trip costs»). A request to the assistant is \
 not a fact about the person, even when it names a place or a thing.
   · a remark ABOUT them with no content: «shows interest in X», «values good \
 results», «is curious about history», «consults the news».
@@ -61,7 +61,7 @@ results», «is curious about history», «consults the news».
 they search — the assistant sees that for itself.
 
 Asking about something once is not liking it, owning it or planning it: \
-«searched for a football club» is not «supports that club»."""
+«searched for X» is not «likes X»."""
 
 
 _LESSON_MERGE_PROMPT = """An assistant keeps rules it learned from working \
@@ -80,8 +80,8 @@ is a general case that already covers another. Reply with JSON:
 the memory system itself, or reflections with no WHAT TO DO or WHAT TO AVOID]}}
 
 RULES FOR YOU, and they are the point:
-  · Two rules about the same SUBJECT are not the same rule. "Always run the \
-tests before committing" and "never commit to main directly" share a subject \
+  · Two rules about the same SUBJECT are not the same rule. "Always do A \
+before B" and "never do B without C" share a subject \
 and say different things. Merging those loses one of them.
   · The merged rule must lose NOTHING the originals said. If you cannot write \
 one sentence that covers the whole group without dropping a case, the group \
@@ -113,13 +113,13 @@ Reply with JSON:
              "why": "one short sentence, addressed to the person, in the same language the material above is written in"}}]}}
 
 RULES, and they are the point:
-  · Two facts about the same SUBJECT are not the same fact. "Plays tennis on \
-Fridays" and "took the racket to be restrung" share a sport and state \
+  · Two facts about the same SUBJECT are not the same fact. "Does X every \
+week" and "bought something for X" share a subject and state \
 different things. Grouping those loses one.
   · On contradiction, the NEWER one wins and the merged text says the current \
 state — but only when the lines truly contradict, not when both can be true.
   · The merged text must LOSE nothing: every detail of every fact in the group \
-survives in it (the make AND the model, the name AND the breed). \
+survives in it (every name, number and qualifier). \
   · The merged text may not contain ANYTHING that is not in the originals. \
 You are folding laundry, not buying clothes.
   · NOISE is narrow: "wants to test whether a search with X works", "is \
@@ -196,17 +196,16 @@ _QA_DELIVERED_ELSEWHERE = (
     "THERE, the deliverable is that it now exists there, and a short\n"
     "confirmation IS the complete answer. Do not demand that the content be\n"
     "pasted into the chat: you turn a correct answer into a wall of material\n"
-    "nobody asked for: a drawing rendered to the canvas is delivered, and\n"
-    "sending it back for 'not providing the HTML' only gets the whole file\n"
-    "pasted into the chat.\n")
+    "nobody asked for: rejecting it for not pasting the content only gets the\n"
+    "whole file pasted into the chat.\n")
 
 
 _QA_OUTPUT_RULES = (
     "  - it does not actually answer: it says it found nothing, it dodges, it "
     "describes what it was going to do instead of doing it, or it hands back a "
     "plan where a result was asked for\n"
-    "  - IT REPORTS ON THE TURN INSTEAD OF ANSWERING IT. «Plan closed, the "
-    "three points were already covered, nothing pending», «I have completed "
+    "  - IT REPORTS ON THE TURN INSTEAD OF ANSWERING IT. «Plan closed, "
+    "everything was covered», «I have completed "
     "the steps», anything that talks about its own intent list, its plan or "
     "this review. All of that is scaffolding the user did not ask about, and "
     "the answer is the only thing they see: an answer whose subject is the "
@@ -252,8 +251,8 @@ _QA_SYSTEM = (
     "training is older than the tools that just read them.\n"
     "  - WHAT THE USER HAS SAVED IS EVIDENCE. The agent is handed the user's "
     "own memory — things they confirmed about themselves and their world. An "
-    "answer drawn from it is grounded, and no web search can confirm who "
-    "administers a machine or what they decided last week.\n"
+    "answer drawn from it is grounded, and no web search can confirm who the "
+    "people in their life are or what they decided last week.\n"
     "  - A SHORT ANSWER. You are NOT judging style, length or politeness. If "
     "the request was trivial (a greeting, small talk), it passes.\n\n"
     "AND A CLAIMED ACTION MUST EXIST: an answer asserting the agent DID or "
@@ -326,7 +325,7 @@ the language the facts are written in.
 - "supersede": it makes one of them FALSE now and, being the newer, replaces \
 it. Give "target". This is the case whenever the new fact says the old \
 situation ended — "moved to X" / "no longer lives in Y" against "lives in Y", \
-"left the job" / "now works at Z" against "works at W", "sold the car", \
+"left the job" / "now works at Z" against "works at W", "sold X", \
 "stopped wanting it" — EVEN when it is told as an event rather than a state.
 
 Rules:

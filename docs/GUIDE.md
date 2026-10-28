@@ -308,7 +308,7 @@ Browser-use. An empty connection is filled from the base model. Applies to the M
 | `headless` | Browser with no window | `false` |
 | `viewport_width` | Viewport width | `1366` |
 | `viewport_height` | Viewport height | `900` |
-| `locale` | Browser locale | `es-ES` |
+| `locale` | Browser locale (e.g. `en-US`); empty = the app's language | — |
 | `use_vision` | `auto` / `true` / `false`. `auto` = the driving model's own vision declaration, else `[CHAT] vision` (the one vision rule) | `auto` |
 | `wait_between_actions` | Delay (seconds) between the agent's actions | `1.2` |
 | `wait_network_idle` | Wait for the network to go idle after loading a page | `3.0` |
@@ -375,11 +375,8 @@ Extra parameters: `name_key` and `name_whatever`, passed to a stdio server as en
 ```ini
 [MCP_SERVERS]
 # stdio: launches a local subprocess
-minimax = stdio:uvx minimax-mcp
-minimax_key = sk-xxxxx
-minimax_api_host = https://api.minimax.io
-minimax_mcp_base_path = /tmp
-minimax_api_resource_mode = url
+tool = stdio:<command> <args>
+tool_key = <key>              # given to the process as TOOL_KEY
 
 # SSE: connects to a remote server
 other = sse:https://mcp.example.com/sse
@@ -521,7 +518,7 @@ Experiences are saved through the MCP's `/feedback` endpoint (👍/👎 on an an
 
 ### 🔌 External (dynamic)
 
-External MCP tools are registered with a prefix: `minimax.text_to_audio`, `github.search_repos`, etc.
+External MCP tools are registered with a prefix: `<server>.<tool>`.
 They show up in the firewall automatically and are available to the LLM.
 
 Bundled media post-processor: when an external MCP returns `http(s)://` URLs with audio/image/video, `data:audio/...;base64,...` data URIs, or large base64 blobs (>10KB), the MCP downloads and saves the file to `/tmp/{server}_{tool}_{ts}.{ext}` and replaces the value in the response with the local path. Detection by extension, content-type and magic bytes.

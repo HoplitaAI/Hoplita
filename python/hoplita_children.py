@@ -501,7 +501,7 @@ CHILD_TOOLS = {
                  "it may search, read and write), 'projects' (the TODO "
                  "projects whose pending tasks it may see, do and update), "
                  "'skills_folder', 'avatar' (one emoji). WARNING to pass on: local children run in PARALLEL, so "
-                 "three tasks to three children compete for the same GPU."),
+                 "three tasks to three children compete for the same model server."),
         "fn": tool_child_create},
     "child_list": {
         "desc": ("List the LOCAL children (personalisation packs on this "
@@ -530,7 +530,7 @@ CHILD_SCHEMAS = {
     "child_create": {
         "properties": {
             "name": {"type": "string", "description": "How you will call it, "
-                     "e.g. 'MarketingManager'. Letters, digits, space, '.', '_' "
+                     "e.g. 'Researcher'. Letters, digits, space, '.', '_' "
                      "or '-'. No '@': that is a federated handle."},
             "role": {"type": "string", "description": "What it is and how it "
                      "works — the prompt it lives by. The most important field."},

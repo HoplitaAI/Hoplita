@@ -123,7 +123,7 @@ RAG is word search: no model call reads a `[RAG]` endpoint, so it has none. `bas
 | `fallback_model` | text | — | **Role** («Backup browser» on the Models tab): pool alias that rescues a step when the main model fails. Must be enabled in `[MODELS]`: a disabled alias is ignored and said in the MCP log — off is off on every road |
 | `flash_mode` | text | `auto` | `auto` · `true` · `false` — strips the agent's thinking (less prose to dirty the JSON) |
 | `headless` | bool | `False` | Browse without showing the window |
-| `locale` | text | `es-ES` | Browser locale |
+| `locale` | text | — | Browser locale (e.g. `en-US`); empty = the app's language |
 | `max_actions_per_step` | int | `3` | Actions per step |
 | `max_steps_default` | int | `30` | Maximum steps for the browsing agent |
 | `structured_output` | text | `auto` | `force` · `auto` · `off` — force makes the SERVER constrain the JSON (the cure for "Invalid JSON") |

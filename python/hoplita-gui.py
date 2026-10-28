@@ -4299,9 +4299,9 @@ class ChatAssistantWindow(QMainWindow):
 language = en
 
 [API]
-base_url = http://localhost:11434/v1
-api_key = ollama
-model = qwen3-coder-30b
+base_url = http://127.0.0.1:8080/v1
+api_key =
+model = your-model
 
 [RAG]
 base_url =
@@ -4313,7 +4313,7 @@ search_k = 5
 min_similarity_score = 0.3
 
 [PERPLEXITY]
-api_key = tu_perplexity_key
+api_key =
 model = sonar-pro
 url = https://api.perplexity.ai
 
@@ -4335,7 +4335,7 @@ model =
 headless = true
 viewport_width = 1366
 viewport_height = 900
-locale = es-ES
+locale =
 use_vision = auto
 use_thinking =
 wait_between_actions = 1.2
@@ -15509,16 +15509,17 @@ enabled = true
         if sticky:
             blocks.append(self._BRIEF_STICKY + "\n" + "\n\n".join(sticky))
         if pins:
-            blocks.append(self._BRIEF_FIXED + "\n\n" + "\n\n".join(pins)
-                          + "\n\nDo not use <think> tags.")
+            blocks.append(self._BRIEF_FIXED + "\n\n" + "\n\n".join(pins))
         if not blocks:
             return
         import fed_agent as _fa_tag
         _tag = _fa_tag.HARNESS_TAG + "\n"
+        _LEGACY_TAIL = "\n\nDo not use <think> tags."
 
         def _bare(content):
             c_ = str(content or "")
-            return c_[len(_tag):] if c_.startswith(_tag) else c_
+            c_ = c_[len(_tag):] if c_.startswith(_tag) else c_
+            return c_[:-len(_LEGACY_TAIL)] if c_.endswith(_LEGACY_TAIL) else c_
 
         def _is_brief(content, markers=(self._BRIEF_FIXED, self._BRIEF_STICKY)):
             return _bare(content).startswith(markers)
@@ -17806,7 +17807,7 @@ enabled = true
             if filtered: self.rag_manager.mark_chunks_as_used([c["chunk_index"] for c in filtered]); self.signals.update_rag_status.emit()
             context = self.get_enhanced_context_for_query(query, raw_results, filtered)
             if raw_results or filtered or context:
-                enhanced = [{"role": "system", "content": f"INFORMATION:\n{context}\nDo not use <think>."}, {"role": "user", "content": query}]
+                enhanced = [{"role": "system", "content": f"INFORMATION:\n{context}"}, {"role": "user", "content": query}]
                 response = self.call_chat(enhanced, stream=False)
                 if response:
                     clean = self.clean_ai_response(response)
@@ -17879,7 +17880,7 @@ enabled = true
                 self.signals.update_rag_status.emit()
             todo_ctx = self.todo_manager.get_context_text(); fixed = self.get_all_fixed_context_text()
             full_q = user_query if user_query else "Summarize my appointments and tasks"
-            enhanced = [{"role": "system", "content": f"TODO CONTEXT ({dt.strftime('%Y-%m-%d %H:%M:%S')}):\n{todo_ctx}\n{fixed}\nDo not use <think>."},
+            enhanced = [{"role": "system", "content": f"TODO CONTEXT ({dt.strftime('%Y-%m-%d %H:%M:%S')}):\n{todo_ctx}\n{fixed}"},
                         {"role": "user", "content": full_q}]
             response = self.call_chat(enhanced, stream=False)
             if response:
@@ -18982,7 +18983,7 @@ enabled = true
         cvv_e = QLineEdit(); cvv_e.setPlaceholderText("CVV")
         cvv_e.setEchoMode(QLineEdit.EchoMode.Password)
         hold_e = QLineEdit(); hold_e.setPlaceholderText(t("cred.holder_ph"))
-        mail_user_e = QLineEdit(); mail_user_e.setPlaceholderText("ana@gmail.com")
+        mail_user_e = QLineEdit(); mail_user_e.setPlaceholderText("name@example.com")
         mail_pass_e = QLineEdit(); mail_pass_e.setPlaceholderText(t("cred.mail_password_ph"))
         mail_pass_e.setEchoMode(QLineEdit.EchoMode.Password)
         mail_smtp_e = QLineEdit(); mail_smtp_e.setPlaceholderText(t("cred.mail_smtp_ph"))

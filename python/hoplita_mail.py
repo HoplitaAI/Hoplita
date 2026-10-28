@@ -98,7 +98,7 @@ def server_of(cred):
             url = url[m.end():]
         elif "://" in url:
             raise MailError(f"the server '{cred.get('url')}' is not imap:// or "
-                            f"imaps://; give the IMAP host, e.g. imap.gmail.com")
+                            f"imaps://; give the IMAP host, e.g. imap.example.com")
         url = url.strip("/")
         host, _, port = url.partition(":")
         if port and not port.isdigit():
@@ -626,7 +626,7 @@ def smtp_of(cred):
             url = url[m.end():]
         elif "://" in url:
             raise MailError(f"the SMTP server '{cred.get('smtp')}' is not smtp:// or "
-                            f"smtps://; give the host, e.g. smtp.gmail.com")
+                            f"smtps://; give the host, e.g. smtp.example.com")
         host, _, port = url.strip("/").partition(":")
         if port and not port.isdigit():
             raise MailError(f"bad port in '{cred.get('smtp')}'")

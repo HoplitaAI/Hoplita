@@ -580,7 +580,7 @@ server. It boots from a token with nothing typed into it. In a container, see
 **On your machine: create the token.**
 
 - **Contacts** → **+ 👶 Emancipated child** → **Token and commands**, or
-- chat: «create a child called kitchen-pc that thinks with my base model»
+- chat: «create a child called server-1 that thinks with my base model»
   (`fed_spawn_child`).
 
 The token carries the child's **starter kit**: the model it thinks with (yours,
@@ -594,14 +594,14 @@ user the child will run as. Nothing needs installing first (Linux or macOS):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | \
-  HOPLITA_SPAWN_SERVER=https://hoplita.net HOPLITA_SPAWN_HANDLE=alice-kitchen-pc \
+  HOPLITA_SPAWN_SERVER=https://hoplita.net HOPLITA_SPAWN_HANDLE=alice-server-1 \
   HOPLITA_SPAWN_TOKEN=<TOKEN> sh -s -- --child
 ```
 
 On Windows the answer gives the same in PowerShell.
 
 - It installs a HOPLITA **with no window** (no Qt, no shortcuts) into its own
-  folder, `~/hoplita-alice-kitchen-pc`. It is never your own install, which may
+  folder, `~/hoplita-alice-server-1`. It is never your own install, which may
   already be someone. Without a Python 3.11+ on the machine, it fetches one into
   that folder (see INSTALL.md, *One line*). Add `--browser` at the end if the
   child must browse the web.
@@ -619,9 +619,9 @@ On Windows the answer gives the same in PowerShell.
   user), never into the service definition. The MCP reads it at start, takes it
   out of its environment and deletes the file once the token is spent. Once
   spent it is worthless, so it does no harm in the shell's history.
-- Its log: `journalctl --user -u hoplita-alice-kitchen-pc -f` on Linux. Running
+- Its log: `journalctl --user -u hoplita-alice-server-1 -f` on Linux. Running
   the same line again updates the child. The same line with `--uninstall
-  --prefix ~/hoplita-alice-kitchen-pc` instead of `--child` removes the service
+  --prefix ~/hoplita-alice-server-1` instead of `--child` removes the service
   and the program and keeps its data.
 - What the child runs, it runs on that machine as that user. For anything you
   do not trust, use a container (7c).
@@ -675,8 +675,8 @@ agent's commands can read it too:
    [Service]
    User=<user>
    EnvironmentFile=/etc/hoplita/child.env
-   Environment=HOPLITA_HOME=/home/<user>/hoplita-alice-kitchen-pc
-   ExecStart=/home/<user>/hoplita-alice-kitchen-pc/venv/bin/python /home/<user>/hoplita-alice-kitchen-pc/hoplita-mcp.py --host 127.0.0.1 --port 9177
+   Environment=HOPLITA_HOME=/home/<user>/hoplita-alice-server-1
+   ExecStart=/home/<user>/hoplita-alice-server-1/venv/bin/python /home/<user>/hoplita-alice-server-1/hoplita-mcp.py --host 127.0.0.1 --port 9177
    Restart=on-failure
 
    [Install]
@@ -686,7 +686,7 @@ agent's commands can read it too:
    systemd reads the file as root and passes it to the MCP, which runs as
    `<user>`; neither the MCP nor the agent's commands can read it. Install
    with the line but stop its user unit before the first start
-   (`systemctl --user disable --now hoplita-alice-kitchen-pc`), then
+   (`systemctl --user disable --now hoplita-alice-server-1`), then
    `systemctl enable --now hoplita-child`. The token waits in `spawn.env` for
    that first start.
 
@@ -694,7 +694,7 @@ agent's commands can read it too:
 `spawn_kit` mints a plain token with no kit. Set `[API]` in the child's
 `config.ini` by hand, start its MCP, and enroll it with the CLI
 (`python install.py --cli` builds it):
-`cli/dist/hoplita-cli --spawn --server https://hoplita.net --token <TOKEN> --handle kitchen-pc`.
+`cli/dist/hoplita-cli --spawn --server https://hoplita.net --token <TOKEN> --handle server-1`.
 
 **Back on your machine.** The child appears in **Contacts** as an accepted
 contact with presence. Its trust is `open` both ways, because it is yours. Chat:
@@ -703,9 +703,9 @@ contact with presence. Its trust is `open` both ways, because it is yours. Chat:
 **Give it work:**
 
 - **💬 Open session** on it,
-- Chat: «ask kitchen-pc to …» (`fed_ask_agent`),
-- a plan target `child:kitchen-pc`,
-- a CRON job with target `child:kitchen-pc`. Such a job fires only while the
+- Chat: «ask server-1 to …» (`fed_ask_agent`),
+- a plan target `child:server-1`,
+- a CRON job with target `child:server-1`. Such a job fires only while the
   child is online.
 
 **Give it folders.** Sharing works as with any contact (5.1). The child has no
@@ -717,14 +717,14 @@ GUI to press **Accept**, so tell it to accept:
 **Emancipate a pack to it.**
 
 1. Open a local child's pack (7a).
-2. Set **Runs on** to the node (🖥 kitchen-pc), then **Save**.
+2. Set **Runs on** to the node (🖥 server-1), then **Save**.
 3. The pack is sent sealed to the node. The node wears it on incoming turns:
    its role and its tool list. A node only accepts a pack from its owner.
 4. Saving again re-sends the pack. Setting **Runs on** back to *here, as a
    sub-agent* brings it home.
 
 **Revoke it.** In the **Contacts** tab a federated child carries 👶; right-click
-it → **🗑 Revoke child**. Or from the chat: «revoke my child kitchen-pc»
+it → **🗑 Revoke child**. Or from the chat: «revoke my child server-1»
 (`fed_revoke_child`).
 
 - Its session dies at once, and its identity and contact are deleted.
