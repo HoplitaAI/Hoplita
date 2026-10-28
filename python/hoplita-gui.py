@@ -5374,8 +5374,8 @@ enabled = true
             _msg = t("prop.reviewed",
                      n=len(_f.get("proposals") or [])
                        + len(_d.get("proposed") or []),
-                     seen=_f.get("asked", 0),
-                     no_trace=len(_f.get("no_trace") or []),
+                     seen=_f.get("traced", _f.get("asked", 0)),
+                     no_trace=_f.get("untraced", len(_f.get("no_trace") or [])),
                      dups=_d.get("looked_at", 0),
                      merged=len(_l.get("merged") or []),
                      pending=_f.get("pending", 0))

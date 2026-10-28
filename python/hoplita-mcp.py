@@ -4339,9 +4339,11 @@ def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
     _todo = _cands[:max(1, int(limit))]
     _review_step("facts")
     _review_step(total=len(_todo), limit=_side_timeout(90))
+    traced = 0
     for _n, f in enumerate(_todo):
         _review_step(done=_n, current=f.get("text", ""))
         lines = _curate_evidence(f, window_min=window_min)
+        traced += bool(lines)
         if not lines:
             ok += 1
             v_ = _llm_call_json(_PRUNE_PROMPT.format(text=f.get("text", "")),
@@ -4425,7 +4427,8 @@ def curate_memory(limit=None, kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
             proposals.append({"id": p["id"], "fact": f.get("text", ""),
                                "action": "replace" if v == "happened"
                                          else "retire"})
-    out = {"asked": ok, "checked": ok + len(no_trace),
+    out = {"asked": ok, "checked": ok + len(no_trace), "traced": traced,
+           "untraced": len(_todo) - traced,
            "proposals": proposals, "reviewed": reviewed,
            "no_trace": no_trace[:20],
            "pool": len(_cands), "pool_stats": _pool_stats,
