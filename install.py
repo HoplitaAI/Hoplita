@@ -376,10 +376,197 @@ def _prune_stale(prefix, shipped):
 
 
 
+CHILD_MARK = ".hoplita-child.json"
+SPAWN_VARS = ("HOPLITA_SPAWN_SERVER", "HOPLITA_SPAWN_HANDLE", "HOPLITA_SPAWN_TOKEN")
+SPAWN_FILE = "spawn.env"
+
+
+def take_spawn_env():
+    return {k: os.environ.pop(k) for k in SPAWN_VARS if os.environ.get(k)}
+
+
+def child_mark(prefix):
+    try:
+        with open(os.path.join(prefix, CHILD_MARK), encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def child_prefix(handle):
+    base = os.getenv("APPDATA", "") if IS_WINDOWS else ""
+    return os.path.join(base or os.path.expanduser("~"), f"hoplita-{handle}")
+
+
+def _child_port(prefix):
+    import socket
+    had = (child_mark(prefix) or {}).get("port")
+    if had:
+        return had
+    for port in range(9177, 9277):
+        with socket.socket() as sk:
+            try:
+                sk.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise SystemExit("No free port between 9177 and 9276 for the child.")
+
+
+def child_requirements(prefix):
+    out = os.path.join(prefix, ".requirements-child.txt")
+    keep = [ln for ln in open(os.path.join(SRC_DIR, "requirements.txt"), encoding="utf-8")
+            if not ln.split("#", 1)[0].strip().lower().startswith("pyqt6")]
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.writelines(keep)
+    return out
+
+
+def _service_name(name):
+    return f"hoplita-{name}"
+
+
+def _child_argv(prefix, py, port):
+    if IS_WINDOWS:
+        pyw = os.path.join(os.path.dirname(py), "pythonw.exe")
+        py = pyw if os.path.exists(pyw) else py
+    return [py, os.path.join(prefix, "hoplita-mcp.py"), "--host", "127.0.0.1",
+            "--port", str(port)]
+
+
+def _systemd_user():
+    return bool(shutil.which("systemctl")) and subprocess.run(
+        ["systemctl", "--user", "show-environment"], capture_output=True).returncode == 0
+
+
+def install_child_service(prefix, py, name, port):
+    argv = _child_argv(prefix, py, port)
+    log = os.path.join(prefix, "hoplita-child.log")
+    svc = _service_name(name)
+    if IS_LINUX and _systemd_user():
+        unit = os.path.join(prefix, f"{svc}.service")
+        q = " ".join(f'"{a}"' for a in argv)
+        with open(unit, "w", encoding="utf-8") as fh:
+            fh.write(f"""[Unit]
+Description=HOPLITA child {name}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment="HOPLITA_HOME={prefix}" "PYTHONUNBUFFERED=1"
+ExecStart={q}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+""")
+        subprocess.run(["systemctl", "--user", "disable", "--now", f"{svc}.service"],
+                       capture_output=True)
+        r = subprocess.run(["systemctl", "--user", "enable", "--now", unit],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f"systemd would not start {svc}: {r.stderr.strip()}")
+        user = os.environ.get("USER") or os.path.basename(os.path.expanduser("~"))
+        lg = subprocess.run(["loginctl", "show-user", user, "-p", "Linger"],
+                            capture_output=True, text=True).stdout.strip()
+        if lg != "Linger=yes":
+            if subprocess.run(["loginctl", "enable-linger", user],
+                              capture_output=True).returncode == 0:
+                ok("Lingering on: the child keeps running after you log out")
+            else:
+                warn("The child stops when you log out of this machine. To keep it "
+                     f"running: sudo loginctl enable-linger {user}")
+        return f"systemd user unit {svc}", f"journalctl --user -u {svc} -f"
+    if IS_MAC:
+        label = f"net.hoplita.{svc}"
+        plist = os.path.expanduser(f"~/Library/LaunchAgents/{label}.plist")
+        os.makedirs(os.path.dirname(plist), exist_ok=True)
+        import plistlib
+        with open(plist, "wb") as fh:
+            plistlib.dump({"Label": label, "ProgramArguments": argv,
+                           "EnvironmentVariables": {"HOPLITA_HOME": prefix,
+                                                    "PYTHONUNBUFFERED": "1"},
+                           "RunAtLoad": True, "KeepAlive": {"SuccessfulExit": False},
+                           "StandardOutPath": log, "StandardErrorPath": log}, fh)
+        dom = f"gui/{os.getuid()}"
+        subprocess.run(["launchctl", "bootout", dom, plist], capture_output=True)
+        r = subprocess.run(["launchctl", "bootstrap", dom, plist], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f"launchd would not start {label}: {r.stderr.strip()}")
+        return f"LaunchAgent {label}", f"tail -f {log}"
+    if IS_WINDOWS:
+        task = f"HOPLITA {svc}"
+        tr = " ".join(f'"{a}"' if " " in a else a for a in argv)
+        subprocess.run(["schtasks", "/End", "/TN", task], capture_output=True)
+        r = subprocess.run(["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED",
+                            "/TN", task, "/TR", tr], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f"Task Scheduler would not take {task}: "
+                             f"{(r.stderr or r.stdout).strip()}")
+        subprocess.run(["schtasks", "/Run", "/TN", task], capture_output=True)
+        return f"logon task «{task}»", os.path.join(prefix, "hoplita-mcp.log")
+    env = dict(os.environ, HOPLITA_HOME=prefix, PYTHONUNBUFFERED="1")
+    with open(log, "ab") as fh:
+        p = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=fh,
+                             stderr=fh, start_new_session=True)
+    with open(os.path.join(prefix, "hoplita-child.pid"), "w") as fh:
+        fh.write(str(p.pid))
+    warn("No service manager for this user: the child runs as a detached "
+         "process and will not start again after a reboot.")
+    return f"process {p.pid}", f"tail -f {log}"
+
+
+def remove_child_service(prefix, name):
+    svc = _service_name(name)
+    if IS_LINUX and _systemd_user():
+        subprocess.run(["systemctl", "--user", "disable", "--now", f"{svc}.service"],
+                       capture_output=True)
+    elif IS_MAC:
+        label = f"net.hoplita.{svc}"
+        plist = os.path.expanduser(f"~/Library/LaunchAgents/{label}.plist")
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", plist],
+                       capture_output=True)
+        if os.path.exists(plist):
+            os.remove(plist)
+    elif IS_WINDOWS:
+        task = f"HOPLITA {svc}"
+        subprocess.run(["schtasks", "/End", "/TN", task], capture_output=True)
+        subprocess.run(["schtasks", "/Delete", "/F", "/TN", task], capture_output=True)
+    pidf = os.path.join(prefix, "hoplita-child.pid")
+    if os.path.exists(pidf):
+        try:
+            import signal
+            os.kill(int(open(pidf).read().strip()), signal.SIGTERM)
+        except Exception:
+            pass
+    ok(f"Child service {svc} stopped and removed")
+
+
+def install_child(prefix, py, spawn):
+    mark = child_mark(prefix) or {}
+    name = spawn.get("HOPLITA_SPAWN_HANDLE") or mark.get("name") \
+        or os.path.basename(prefix).removeprefix("hoplita-")
+    port = _child_port(prefix)
+    if spawn:
+        fd = os.open(os.path.join(prefix, SPAWN_FILE),
+                     os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.writelines(f"{k}={v}\n" for k, v in spawn.items())
+    with open(os.path.join(prefix, CHILD_MARK), "w", encoding="utf-8") as fh:
+        json.dump({"name": name, "port": port}, fh)
+    step(f"Starting the child {name}")
+    how, logs = install_child_service(prefix, py, name, port)
+    ok(f"Running as {how}, on 127.0.0.1:{port}")
+    return name, port, how, logs
+
+
+
 _OURS_DIRS = ("venv", "lang", "icons", "cli", "docs", "bin", "wb_canvas",
               "wb_instructions", "council_view", "__pycache__",
               "python")
-_OURS_FILES = ("config.ini.example", "README.md", "requirements.txt", MANIFEST)
+_OURS_FILES = ("config.ini.example", "README.md", "requirements.txt", MANIFEST,
+               CHILD_MARK, ".requirements-child.txt", "hoplita-child.pid", SPAWN_FILE)
 
 
 def _shortcut_paths():
@@ -456,7 +643,7 @@ def _program_entries(prefix):
         if os.path.isfile(p):
             out.append((p, False))
     for f in os.listdir(prefix):
-        if f.startswith("hoplita") and f.endswith((".png", ".ico")):
+        if f.startswith("hoplita") and f.endswith((".png", ".ico", ".service")):
             out.append((os.path.join(prefix, f), False))
     return out
 
@@ -474,6 +661,7 @@ def uninstall(prefix, purge=False, yes=False):
             "it does not look like a HOPLITA install. Nothing removed.")
         sys.exit(1)
     program = _program_entries(prefix)
+    mark = child_mark(prefix)
     shortcuts = [p for p in _shortcut_paths()
                  if os.path.exists(p) and _shortcut_is_ours(p, prefix)]
     caches = _cache_paths()
@@ -521,6 +709,8 @@ def uninstall(prefix, purge=False, yes=False):
         except Exception as e:
             failed.append(f"{p}: {e}")
 
+    if mark:
+        remove_child_service(prefix, mark.get("name", ""))
     for p, _d in program:
         _rm(p)
     for p in shortcuts + caches:
@@ -915,6 +1105,11 @@ def main():
     ap.add_argument("--system-libs", action="store_true",
                     help="install system libraries (WebEngine/tray, the hands' "
                          "packages) — asks for sudo")
+    ap.add_argument("--child", action="store_true",
+                    help="a child: no window, no shortcuts, running as a service "
+                         "of this user; its first boot enrolls with the token in "
+                         "HOPLITA_SPAWN_SERVER/_HANDLE/_TOKEN (the line its owner "
+                         "is handed). Installs into ~/hoplita-<handle> by default")
     ap.add_argument("--no-shortcuts", action="store_true",
                     help="do not create desktop shortcuts")
     ap.add_argument("--uninstall", action="store_true",
@@ -927,8 +1122,23 @@ def main():
     args = ap.parse_args()
     if args.all:
         args.browser = args.cli = args.system_libs = args.desktop = args.diffr = True
+    spawn = take_spawn_env()
+    if args.child and not args.prefix:
+        if not spawn.get("HOPLITA_SPAWN_HANDLE"):
+            err("--child needs --prefix, or the handle in HOPLITA_SPAWN_HANDLE.")
+            sys.exit(2)
+        args.prefix = child_prefix(spawn["HOPLITA_SPAWN_HANDLE"])
 
     prefix = resolve_prefix(args.prefix)
+    if child_mark(prefix) and not args.uninstall:
+        args.child = True
+    if args.child:
+        if args.update:
+            err("A child updates with the same line it was installed with, "
+                "not --update.")
+            sys.exit(2)
+        args.no_shortcuts = True
+        args.system_libs = args.desktop = False
     if os.path.exists(prefix) and os.path.samefile(prefix, SRC_DIR):
         err(f"The install folder {prefix} is this source folder "
             f"({SRC_DIR}) — on macOS, folder names ignore letter case.")
@@ -1025,6 +1235,8 @@ def main():
 
     step("Installing core dependencies")
     req = os.path.join(SRC_DIR, "requirements.txt")
+    if args.child and os.path.exists(req):
+        req = child_requirements(prefix)
     if not os.path.exists(req):
         err(f"requirements.txt not found in {SRC_DIR}")
         sys.exit(1)
@@ -1082,22 +1294,24 @@ def main():
     step("Checking the install")
     check = (
         "import importlib,sys\n"
-        "core=['PyQt6','fastapi','uvicorn','pydantic','requests',"
+        "gui='child' not in sys.argv\n"
+        "core=['fastapi','uvicorn','pydantic','requests',"
         "'cryptography','nacl','markdown','pygments','fpdf','PyPDF2',"
-        "'PIL','yaml','sqlcipher3','websocket']\n"
+        "'PIL','yaml','sqlcipher3','websocket']+(['PyQt6'] if gui else [])\n"
         "miss=[]\n"
         "for m in core:\n"
         "  try: importlib.import_module(m)\n"
         "  except Exception as e: miss.append((m,str(e).splitlines()[0]))\n"
         "try:\n"
-        "  importlib.import_module('PyQt6.QtWebEngineWidgets')\n"
+        "  gui and importlib.import_module('PyQt6.QtWebEngineWidgets')\n"
         "except ModuleNotFoundError:\n"
         "  miss.append(('PyQt6-WebEngine','pip install PyQt6-WebEngine'))\n"
         "except ImportError as e:\n"
         "  miss.append(('QtWebEngine system libs',str(e).splitlines()[0]))\n"
         "print('MISSING' if miss else 'OK')\n"
         "[print(f'  - {m}: {e}') for m,e in miss]\n")
-    r = run([py, "-c", check], capture_output=True, text=True)
+    r = run([py, "-c", check] + (["child"] if args.child else []),
+            capture_output=True, text=True)
     if "OK" in r.stdout and "MISSING" not in r.stdout:
         ok("Core check OK")
     else:
@@ -1105,6 +1319,16 @@ def main():
         print(r.stdout)
         if IS_LINUX or IS_MAC:
             warn("If it is QtWebEngine (system libraries), install the ones in the README.")
+
+    if args.child:
+        name, port, how, logs = install_child(prefix, py, spawn)
+        print("\n" + _c("32;1", f"Child {name} installed in {prefix}"))
+        print(f"It runs as {how} on 127.0.0.1:{port}, starts again at every boot, and")
+        print("appears among your children once it enrolls.")
+        print(f"Its log:   {logs}")
+        print(f"Update:    {again(f'--child --prefix {prefix}')}")
+        print(f"Uninstall: {again(f'--uninstall --prefix {prefix}')}")
+        return
 
     print("\n" + _c("32;1", "═" * 44))
     print(_c("32;1", "  Install complete"))

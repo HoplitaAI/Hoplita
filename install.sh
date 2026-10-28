@@ -13,25 +13,32 @@ main() {
     have() { command -v "$1" >/dev/null 2>&1; }
 
     have tar || die "tar is needed"
-    if have curl; then
-        fetch() { curl -fsSL --retry 2 -o "$2" "$1"; }
-    elif have wget; then
-        fetch() { wget -q -O "$2" "$1"; }
-    else
-        die "curl or wget is needed"
-    fi
+    fetch() {
+        if have curl; then
+            curl -fsSL --retry 2 -o "$2" "$1"
+        elif have wget; then
+            wget -q -O "$2" "$1"
+        else
+            die "curl or wget is needed to download $1"
+        fi
+    }
 
     prefix=""
     uninstall=0
+    child=0
     prev=""
     for a in "$@"; do
         case "$a" in
             --prefix=*) prefix="${a#--prefix=}" ;;
             --uninstall) uninstall=1 ;;
+            --child) child=1 ;;
         esac
         [ "$prev" = "--prefix" ] && prefix="$a"
         prev="$a"
     done
+    if [ -z "$prefix" ] && [ "$child" = 1 ] && [ -n "${HOPLITA_SPAWN_HANDLE:-}" ]; then
+        prefix="$HOME/hoplita-$HOPLITA_SPAWN_HANDLE"
+    fi
     if [ -z "$prefix" ]; then
         prefix="$HOME/hoplita"
         if [ ! -e "$prefix/hoplita-mcp.py" ] && [ -e /opt/hoplita/hoplita-mcp.py ]; then

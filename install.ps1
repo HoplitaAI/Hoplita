@@ -10,11 +10,17 @@ function Install-Hoplita {
 
     $prefix = $null
     $uninstall = $false
+    $child = $false
     for ($i = 0; $i -lt $args.Count; $i++) {
         $a = [string]$args[$i]
         if ($a -like '--prefix=*') { $prefix = $a.Substring(9) }
         elseif ($a -eq '--prefix' -and $i + 1 -lt $args.Count) { $prefix = [string]$args[$i + 1] }
         elseif ($a -eq '--uninstall') { $uninstall = $true }
+        elseif ($a -eq '--child') { $child = $true }
+    }
+    if (-not $prefix -and $child -and $env:HOPLITA_SPAWN_HANDLE) {
+        $base = if ($env:APPDATA) { $env:APPDATA } else { $HOME }
+        $prefix = Join-Path $base ('hoplita-' + $env:HOPLITA_SPAWN_HANDLE)
     }
     if (-not $prefix) {
         $prefix = if ($env:APPDATA) { Join-Path $env:APPDATA 'hoplita' } else { Join-Path $HOME 'hoplita' }
@@ -57,6 +63,7 @@ function Install-Hoplita {
         if ($LASTEXITCODE -ne 0) { throw "install.py ended with code $LASTEXITCODE" }
     }
     finally {
+        Remove-Item Env:HOPLITA_SPAWN_TOKEN -ErrorAction SilentlyContinue
         Set-Location $HOME
         Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
     }

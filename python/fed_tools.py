@@ -1808,11 +1808,20 @@ def _child_handle(label):
     return f"{me}-{slug or 'child'}" if me else (slug or "child")
 
 
+INSTALL_SH = "https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh"
+INSTALL_PS1 = "https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1"
+
+
 def host_command(handle, server_url, token):
-    return (f"HOPLITA_HOME=~/hoplita-{handle} "
+    return (f"curl -fsSL {INSTALL_SH} | "
             f"HOPLITA_SPAWN_SERVER={server_url} HOPLITA_SPAWN_HANDLE={handle} "
-            f"HOPLITA_SPAWN_TOKEN={token} "
-            "~/hoplita/venv/bin/python ~/hoplita/hoplita-mcp.py")
+            f"HOPLITA_SPAWN_TOKEN={token} sh -s -- --child")
+
+
+def host_command_windows(handle, server_url, token):
+    return (f"$env:HOPLITA_SPAWN_SERVER='{server_url}'; "
+            f"$env:HOPLITA_SPAWN_HANDLE='{handle}'; $env:HOPLITA_SPAWN_TOKEN='{token}'; "
+            f"& ([scriptblock]::Create((irm {INSTALL_PS1}))) --child")
 
 
 def tool_fed_spawn_child(label="", handle="", model="", base_url="",
@@ -1859,6 +1868,7 @@ def tool_fed_spawn_child(label="", handle="", model="", base_url="",
     rt = img.runtime() or "docker"
     cmd = " ".join(img.run_args(rt, handle, server_url, raw))
     host = host_command(handle, server_url, raw)
+    host_win = host_command_windows(handle, server_url, raw)
     out.update({
         "handle": handle,
         "kit": {"model": kit["api"]["model"],
@@ -1866,6 +1876,7 @@ def tool_fed_spawn_child(label="", handle="", model="", base_url="",
         "container_command": cmd,
         "build_command": f"python3 {img.__file__} build",
         "host_command": host,
+        "host_command_windows": host_win,
         "message": (f"Child '{handle}' ready to boot (token valid 60 min, single "
                     f"use). It will think with {kit['api']['model']}"
                     + (f" and search with {kit['search']['provider']}"
@@ -1874,8 +1885,9 @@ def tool_fed_spawn_child(label="", handle="", model="", base_url="",
                       "spend. Start it in a container with:\n  " + cmd
                     + f"\n(build the {img.IMAGE} image first if this machine "
                       f"lacks it: python3 {img.__file__} build)"
-                    + "\n\nOr on any machine with HOPLITA installed (a server, "
-                      "a VPS), in a folder of its own:\n  " + host),
+                    + "\n\nOr on any machine (a server, a VPS), with nothing "
+                      "installed first; it stays running as a service:\n  " + host
+                    + "\n\nOn Windows, in PowerShell:\n  " + host_win),
     })
     if launch:
         r = img.launch(handle, server_url, raw)

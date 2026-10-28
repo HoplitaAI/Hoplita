@@ -586,30 +586,43 @@ server. It boots from a token with nothing typed into it. In a container, see
 The token carries the child's **starter kit**: the model it thinks with (yours,
 a pool model, or one of its own) and optionally your web search. The kit is
 sealed to the token, so the server cannot read it (7c, *What travels*). The
-answer gives two commands, one for a container and one for a plain install.
+answer gives a command for a container and one line for any other machine.
 The token is single use and valid for 60 minutes, and it is not shown again.
 
-**On the child machine: install.** A normal install that runs only the MCP:
-download the HOPLITA source (clone github.com/HoplitaAI/Hoplita) and, from that
-folder, run `python install.py --no-shortcuts`. Add `--browser` if the child
-must browse the web.
-
-**On the child machine: start it.** Paste the plain command from the answer:
+**On the child machine: one line.** Paste the line from the answer, as the
+user the child will run as. Nothing needs installing first (Linux or macOS):
 
 ```bash
-HOPLITA_HOME=~/hoplita-alice-kitchen-pc HOPLITA_SPAWN_SERVER=https://hoplita.net \
-  HOPLITA_SPAWN_HANDLE=alice-kitchen-pc HOPLITA_SPAWN_TOKEN=<TOKEN> \
-  ~/hoplita/venv/bin/python ~/hoplita/hoplita-mcp.py
+curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | \
+  HOPLITA_SPAWN_SERVER=https://hoplita.net HOPLITA_SPAWN_HANDLE=alice-kitchen-pc \
+  HOPLITA_SPAWN_TOKEN=<TOKEN> sh -s -- --child
 ```
 
-- `HOPLITA_HOME` is the child's own data folder, created at start. It is never
-  the install's own data folder, which may already be someone.
-- Nothing is asked. The vault opens by itself (*Its vault*, below), the MCP
-  enrolls with the token, writes the kit into its `config.ini` and comes online.
-- The token is taken out of the MCP's environment. Once spent it is worthless,
-  so it does no harm in the shell's history.
-- Later starts need only `HOPLITA_HOME`. A restart sees the identity and does
-  not enroll again.
+On Windows the answer gives the same in PowerShell.
+
+- It installs a HOPLITA **with no window** (no Qt, no shortcuts) into its own
+  folder, `~/hoplita-alice-kitchen-pc`. It is never your own install, which may
+  already be someone. Without a Python 3.11+ on the machine, it fetches one into
+  that folder (see INSTALL.md, *One line*). Add `--browser` at the end if the
+  child must browse the web.
+- It leaves the child **running as a service** of that user, starting again at
+  every boot: a systemd user unit on Linux, with lingering turned on so it
+  outlives your ssh session (if the system refuses, the installer prints the
+  `sudo loginctl enable-linger` line to run); a LaunchAgent on macOS; a logon
+  task on Windows. Where there is no service manager (a container), it runs as
+  a detached process and the installer says it will not start again after a
+  reboot.
+- Nothing is asked. The vault opens by itself (*Its vault*, below), the first
+  boot enrolls with the token, writes the kit into its `config.ini` and comes
+  online.
+- The token goes to `spawn.env` in the child's folder (readable only by that
+  user), never into the service definition. The MCP reads it at start, takes it
+  out of its environment and deletes the file once the token is spent. Once
+  spent it is worthless, so it does no harm in the shell's history.
+- Its log: `journalctl --user -u hoplita-alice-kitchen-pc -f` on Linux. Running
+  the same line again updates the child. The same line with `--uninstall
+  --prefix ~/hoplita-alice-kitchen-pc` instead of `--child` removes the service
+  and the program and keeps its data.
 - What the child runs, it runs on that machine as that user. For anything you
   do not trust, use a container (7c).
 
@@ -620,35 +633,6 @@ machine with no vault yet, when `vault.key` already exists, or with
 a file next to it would protect nothing. A machine whose vault already exists
 never gets an open one because a token shows up. To lock the vault, see
 *With a password*, below.
-
-**Run it as a service.** HOPLITA does not install one. With systemd (Linux),
-as root, the unit `/etc/systemd/system/hoplita-child.service` (replace `<user>`;
-paths must be absolute):
-
-```ini
-[Unit]
-Description=HOPLITA child node
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=<user>
-Environment=HOPLITA_HOME=/home/<user>/hoplita-alice-kitchen-pc
-WorkingDirectory=/home/<user>/hoplita
-ExecStart=/home/<user>/hoplita/venv/bin/python hoplita-mcp.py
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Run the plain command once by hand to enroll, stop it, then start the service:
-
-```bash
-systemctl daemon-reload
-systemctl enable --now hoplita-child
-journalctl -u hoplita-child -f
-```
 
 **With a password (optional).** For whoever wants the vault locked at rest:
 an MCP given `HOPLITA_VAULT_PASSWORD` uses it, keeps no key file, and takes the
@@ -671,11 +655,32 @@ agent's commands can read it too:
    spaces as typed: without them systemd drops them. A password for this file
    cannot contain a single quote (`'`).
 
-2. In the unit, add `EnvironmentFile=/etc/hoplita/child.env`. systemd reads it
-   as root and passes it to the MCP, which runs as `<user>`. Neither the MCP nor
-   the agent's commands can read that file. For the first start, run the
-   service with the three `HOPLITA_SPAWN_*` variables added to that file, and
-   remove them once the child is enrolled.
+2. A system unit instead of the user one the line makes, as root, in
+   `/etc/systemd/system/hoplita-child.service` (replace `<user>`):
+
+   ```ini
+   [Unit]
+   Description=HOPLITA child node
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   User=<user>
+   EnvironmentFile=/etc/hoplita/child.env
+   Environment=HOPLITA_HOME=/home/<user>/hoplita-alice-kitchen-pc
+   ExecStart=/home/<user>/hoplita-alice-kitchen-pc/venv/bin/python /home/<user>/hoplita-alice-kitchen-pc/hoplita-mcp.py --host 127.0.0.1 --port 9177
+   Restart=on-failure
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   systemd reads the file as root and passes it to the MCP, which runs as
+   `<user>`; neither the MCP nor the agent's commands can read it. Install
+   with the line but stop its user unit before the first start
+   (`systemctl --user disable --now hoplita-alice-kitchen-pc`), then
+   `systemctl enable --now hoplita-child`. The token waits in `spawn.env` for
+   that first start.
 
 **An older server, or an MCP already running.** A server that does not list
 `spawn_kit` mints a plain token with no kit. Set `[API]` in the child's
@@ -743,7 +748,7 @@ except what you send it.
      build takes a few minutes.
    - **Token and commands** gives you the commands to run yourself: one for a
      container, here or on another Linux machine with docker or podman, and
-     one for any machine with HOPLITA installed (7b).
+     the one line for any machine, with nothing installed first (7b).
 
 From the chat: «create a container child called video and start it»
 (`fed_spawn_child` with `launch`).
@@ -784,7 +789,7 @@ docker run -d --name alice-video --restart unless-stopped -v alice-video:/data \
   identity and does not enroll again.
 
 **Without a container.** Nothing in this boot needs the container: the answer
-also gives a plain command for any machine with HOPLITA installed (7b).
+also gives the one line for any machine, with nothing installed first (7b).
 
 **Its vault.** Open by default, as in 7b: its key is `/data/vault.key`, and
 every start says so. To lock it instead, start the container with

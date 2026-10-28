@@ -11206,6 +11206,28 @@ def spawn_enroll(req: SpawnEnrollReq):
     return result
 
 
+SPAWN_FILE = "spawn.env"
+
+
+def _load_spawn_file():
+    try:
+        with open(os.path.join(hoplita_base(), SPAWN_FILE), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return
+    for ln in lines:
+        k, sep, v = ln.partition("=")
+        if sep and k in ("HOPLITA_SPAWN_SERVER", "HOPLITA_SPAWN_HANDLE", "HOPLITA_SPAWN_TOKEN"):
+            os.environ.setdefault(k, v.strip())
+
+
+def _drop_spawn_file():
+    try:
+        os.remove(os.path.join(hoplita_base(), SPAWN_FILE))
+    except OSError:
+        pass
+
+
 def _enroll_from_env():
     tok = os.environ.get("HOPLITA_SPAWN_TOKEN") or ""
     if tok:
@@ -11218,6 +11240,7 @@ def _enroll_from_env():
     import fed_tools
     if fed_tools._store().has_identity():
         print("[SPAWN] already enrolled; the token is not needed again")
+        _drop_spawn_file()
         return
     if not (server and handle):
         print("[SPAWN] ⚠ HOPLITA_SPAWN_TOKEN needs HOPLITA_SPAWN_SERVER and "
@@ -11229,12 +11252,14 @@ def _enroll_from_env():
             r = fed_tools.tool_fed_enroll_child(server, tok, handle) or {}
             if r.get("ok"):
                 print(f"[SPAWN] ✓ {r.get('message')}")
+                _drop_spawn_file()
                 if r.get("kit_applied"):
                     reload_config_endpoint()
                 return
             err = str(r.get("error") or "")
             print(f"[SPAWN] ⚠ {err}", file=sys.stderr)
             if "offline" not in err.lower() and "connect" not in err.lower():
+                _drop_spawn_file()
                 return
             time.sleep(10)
     threading.Thread(target=_go, daemon=True, name="spawn_enroll").start()
@@ -15702,6 +15727,7 @@ if __name__ == "__main__":
         os.remove(os.path.join(_hb(), "hoplita-mcp.gaveup"))
     except OSError:
         pass
+    _load_spawn_file()
     password = _get_vault_password()
 
     try:
