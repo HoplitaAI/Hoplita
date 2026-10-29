@@ -4952,8 +4952,9 @@ enabled = true
         pl = QVBoxLayout(prop_w)
         _ph = QHBoxLayout()
         from pilot_light import PilotLine
-        self.prop_count = PilotLine()
+        self.prop_count = PilotLine(lines=3)
         _ph.addWidget(self.prop_count, 1)
+        _ph.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.prop_curate = QPushButton(t("prop.curate"))
         self.prop_curate.setToolTip(t("prop.curate_tip"))
         self.prop_curate.setStyleSheet(

@@ -95,7 +95,8 @@ class PilotLine(QWidget):
              "still": "background:rgba(245,184,0,.10); border:1px solid rgba(245,184,0,.55);",
              "off": "background:transparent; border:1px solid transparent;"}
 
-    def __init__(self, parent=None, css="color:#e6edf7; font-size:14px;", hide_idle=False):
+    def __init__(self, parent=None, css="color:#e6edf7; font-size:14px;", hide_idle=False,
+                 lines=0):
         super().__init__(parent)
         self._hide_idle = hide_idle
         self._clock = None
@@ -111,16 +112,24 @@ class PilotLine(QWidget):
         h.addWidget(self.light, 0, Qt.AlignmentFlag.AlignTop)
         h.addWidget(self.label, 1)
         self._band("off")
+        if lines:
+            self.label.ensurePolished()
+            self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self.setFixedHeight(self.label.fontMetrics().lineSpacing() * lines + 14)
         if hide_idle:
             self.hide()
 
     def _band(self, st):
         self.setStyleSheet(f"#pilotLine {{ {self._BAND[st]} border-radius:8px; }}")
 
+    def _say(self, text):
+        self.label.setText(text)
+        self.label.setToolTip(text)
+
     def working(self, text):
         self.light.on()
         self._band("on")
-        self.label.setText(text)
+        self._say(text)
         self.show()
 
     def running(self, text):
@@ -139,14 +148,14 @@ class PilotLine(QWidget):
     def stalled(self, text):
         self.light.still()
         self._band("still")
-        self.label.setText(text)
+        self._say(text)
 
     def done(self, text=""):
         if self._clock is not None:
             self._clock.stop()
         self.light.off()
         self._band("off")
-        self.label.setText(text)
+        self._say(text)
         if self._hide_idle:
             self.setVisible(bool(text))
 
