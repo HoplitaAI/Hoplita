@@ -16046,6 +16046,9 @@ enabled = true
                                f"HOPLITA/{_hv.GENERATION} (build {_hv.BUILD})")
         except Exception:
             pass
+        if isinstance(payload.get("messages"), list):
+            payload["messages"] = [{k: v for k, v in m.items() if k != "ts"}
+                                   if isinstance(m, dict) else m for m in payload["messages"]]
         model = payload.get("model", "?")
         n_tools = len(payload.get("tools") or [])
         n_msgs = len(payload.get("messages") or [])

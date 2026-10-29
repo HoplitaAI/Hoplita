@@ -2775,6 +2775,11 @@ def _park_images(messages, model, why):
     return out, paths
 
 
+def _msgs_without_ts(messages):
+    return [{k: v for k, v in m.items() if k != "ts"} if isinstance(m, dict) and "ts" in m else m
+            for m in (messages or [])]
+
+
 def _llm_chat_with_tools(messages, tools, timeout=None,
                          base_url=None, api_key=None, model=None,
                          temperature=None, max_tokens=None, extra=None):
@@ -2788,6 +2793,7 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     import fed_agent as _fa
+    messages = _msgs_without_ts(messages)
     messages = _fa.single_system(messages)
     try:
         import hoplita_llmcfg as _lc
@@ -3932,23 +3938,6 @@ def log_turn_message(session, role, text, tab=""):
         return False
 
 
-def repair_relogged_messages():
-    try:
-        sql = _get_sql()
-        if sql is None or not getattr(sql, "fts", False) \
-                or sql.meta_get("msglog_copies_dropped"):
-            return 0
-        n = sql.drop_relogged_copies()
-        sql.meta_set("msglog_copies_dropped", "1")
-        if n:
-            print(f"[LOG] {n} message(s) logged twice, the later copy removed",
-                  file=sys.stderr)
-        return n
-    except Exception as e:
-        print(f"[LOG] repair: {e}", file=sys.stderr)
-        return 0
-
-
 def backfill_message_log():
     try:
         sql = _get_sql()
@@ -4180,6 +4169,7 @@ def _curate_evidence(fact, window_min=5, max_lines=24):
                 return []
             query = " ".join(rare)
         else:
+            rare = [w for w in words if len(w) >= 5]
             query = text_
         momentos = sql.search_moments(query, limit=3, window_min=window_min,
                                       roles=("user",), since=since)
@@ -4187,13 +4177,14 @@ def _curate_evidence(fact, window_min=5, max_lines=24):
         print(f"[CURATE] search failed: {e}", file=sys.stderr)
         return []
 
-    def _shares_two(m):
+    def _speaks_of_it(m):
         said = set()
         for r in sql.moment_messages(m["from_rowid"], m["to_rowid"], pad=0,
                                      roles=("user",)):
             said.update(_norm_words(r.get("text") or ""))
-        return sum(1 for w in words if any(_same_word(w, x) for x in said)) >= 2
-    momentos = [m for m in momentos if _shares_two(m)]
+        return any(w in said for w in rare) or \
+            sum(1 for w in words if any(_same_word(w, x) for x in said)) >= 2
+    momentos = [m for m in momentos if _speaks_of_it(m)]
     def _min(v):
         try:
             return datetime.fromisoformat(v).timestamp() / 60.0
@@ -9016,6 +9007,17 @@ def _chat_sessions_rows():
     return (sql.load("chat_sessions") if sql is not None else [])
 
 
+def _said_text(m):
+    if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+        return ""
+    try:
+        import fed_agent
+        return (fed_agent.user_said(m) or "")[:20000]
+    except Exception:
+        c = m.get("content")
+        return c.strip()[:20000] if isinstance(c, str) else ""
+
+
 def tool_chat_session_save(args):
     sql = _get_sql()
     if sql is None:
@@ -9034,18 +9036,46 @@ def tool_chat_session_save(args):
     sess["rev"] = int((prev or {}).get("rev", 0)) + 1
     sess.setdefault("created_at", (prev or {}).get("created_at") or _chat_now_iso())
     sess["updated_at"] = _chat_now_iso()
+    _key = str(sess.get("sync_id") or "").strip() or sid
+    _known = {}
+    try:
+        if getattr(sql, "fts", False):
+            _known = sql.said_in(_key)
+            if _key != sid:
+                for _k, _v in sql.said_in(sid).items():
+                    _known.setdefault(_k, _v)
+    except Exception as _e:
+        print(f"[LOG] session save: {_e}", file=sys.stderr)
+    _prev_had, _prev_ts = set(), {}
+    for _m in ((prev or {}).get("history") or []):
+        if isinstance(_m, dict):
+            _pk = (_m.get("role"), _said_text(_m))
+            _prev_had.add(_pk)
+            if _m.get("ts"):
+                _prev_ts.setdefault(_pk, _m["ts"])
+    for _m in (sess.get("history") or []):
+        if not isinstance(_m, dict) or _m.get("ts"):
+            continue
+        _pk = (_m.get("role"), _said_text(_m))
+        if not _pk[1]:
+            continue
+        _ts = _prev_ts.get(_pk) or (_known.get(_pk) if _pk[1] else None)
+        if not _ts and _pk not in _prev_had:
+            _ts = sess["updated_at"]
+        if _ts:
+            _m["ts"] = _ts
     sql.upsert("chat_sessions", sid, sess)
     try:
         if getattr(sql, "fts", False):
-            _ya = sql.said_in(sid)
             for _m in (sess.get("history") or []):
-                _c = _m.get("content")
-                _r = _m.get("role", "")
-                if _r in sql.SAID_ROLES and isinstance(_c, str) and _c.strip() \
-                        and (_r, _c[:20000]) not in _ya:
-                    _ya.add((_r, _c[:20000]))
-                    sql.log_message(sid, _r, _c[:20000],
-                                    ts=sess.get("updated_at", ""))
+                if not isinstance(_m, dict):
+                    continue
+                _r, _w = _m.get("role", ""), _said_text(_m)
+                if _r in sql.SAID_ROLES and _w and (_r, _w) not in _known:
+                    _known[(_r, _w)] = _m.get("ts") or ""
+                    sql.log_message(_key, _r, _w,
+                                    ts=_m.get("ts") or (prev or {}).get("updated_at")
+                                    or sess["updated_at"])
     except Exception as _e:
         print(f"[LOG] session save: {_e}", file=sys.stderr)
     return {"ok": True, "uuid": sid, "rev": sess["rev"]}
@@ -14200,6 +14230,8 @@ def _agent_turn_events(req):
     import fed_agent
 
     turn_id = req.turn_id or uuid.uuid4().hex[:12]
+    if req.messages:
+        req.messages = _msgs_without_ts(req.messages)
     if req.compact:
         req.log = False
         req.qa = "off"
@@ -16118,7 +16150,6 @@ if __name__ == "__main__":
         register_manager_map()
         _enroll_from_env()
         threading.Thread(target=backfill_message_log, daemon=True).start()
-        threading.Thread(target=repair_relogged_messages, daemon=True).start()
 
         try:
             import fed_tools
