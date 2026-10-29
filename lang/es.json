@@ -1565,7 +1565,7 @@
   "prop.reject": "No, y no me lo vuelvas a proponer",
   "prop.replace": "✏  CAMBIAR por: {new}",
   "prop.retire": "🗑  RETIRAR este hecho",
-  "prop.reviewed": "{n} propuesta(s) nueva(s) · {seen} hecho(s) de los que se volvió a hablar, {no_trace} de los que nunca más · duplicados/ruido: {dups} hechos leídos · {merged} fusión(es) de reglas abajo · {pending} esperando tu decisión",
+  "prop.reviewed": "{n} cambio(s) aplicado(s) solos, en el registro con deshacer · {seen} hecho(s) de los que se volvió a hablar, {no_trace} de los que nunca más · duplicados/ruido: {dups} hechos leídos · {merged} fusión(es) de reglas abajo · {pending} esperando tu decisión",
   "prop.undo": "↩ Deshacer lo seleccionado",
   "prop.undo_tip": "Devuelve el grupo tal y como estaba: la regla fundida desaparece y las que sustituyó vuelven a estar activas.",
   "prop.unknown": "❓  acción desconocida «{action}» — decide desde el MCP",

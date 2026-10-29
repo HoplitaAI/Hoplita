@@ -394,6 +394,35 @@ class SqlStore:
                 "SELECT count(*) FROM msgs_fts WHERE session = ?",
                 (str(session or ""),)).fetchone()[0]
 
+    def said_in(self, session):
+        if not self.fts:
+            return set()
+        with self._lock:
+            return set(self._conn.execute(
+                "SELECT role, text FROM msgs_fts WHERE session = ?",
+                (str(session or ""),)).fetchall())
+
+    def drop_relogged_copies(self, min_len=40):
+        if not self.fts:
+            return 0
+        seen, drop = set(), []
+        with self._lock:
+            for rowid, session, role, text in self._conn.execute(
+                    "SELECT rowid, session, role, text FROM msgs_fts ORDER BY rowid"):
+                if len(text or "") < min_len:
+                    continue
+                k = (session, role, text)
+                if k in seen:
+                    drop.append(rowid)
+                else:
+                    seen.add(k)
+            for i in range(0, len(drop), 500):
+                part = drop[i:i + 500]
+                self._conn.execute("DELETE FROM msgs_fts WHERE rowid IN (%s)"
+                                   % ",".join("?" * len(part)), part)
+            self._conn.commit()
+        return len(drop)
+
     def messages_count(self):
         if not self.fts:
             return 0

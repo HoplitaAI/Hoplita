@@ -1565,7 +1565,7 @@
   "prop.reject": "No, and do not propose it again",
   "prop.replace": "✏  REPLACE with: {new}",
   "prop.retire": "🗑  RETIRE this fact",
-  "prop.reviewed": "{n} new proposal(s) · {seen} fact(s) spoken of again since they were stored, {no_trace} never again · duplicates/noise: {dups} facts read · {merged} rule merge(s) below · {pending} awaiting your decision",
+  "prop.reviewed": "{n} change(s) applied on their own, in the log with undo · {seen} fact(s) spoken of again since they were stored, {no_trace} never again · duplicates/noise: {dups} facts read · {merged} rule merge(s) below · {pending} awaiting your decision",
   "prop.undo": "↩ Undo the selected one",
   "prop.undo_tip": "Puts the group back as it was: the merged rule goes and the ones it replaced are active again.",
   "prop.unknown": "❓  unknown action «{action}» — decide from the MCP",

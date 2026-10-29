@@ -3932,6 +3932,23 @@ def log_turn_message(session, role, text, tab=""):
         return False
 
 
+def repair_relogged_messages():
+    try:
+        sql = _get_sql()
+        if sql is None or not getattr(sql, "fts", False) \
+                or sql.meta_get("msglog_copies_dropped"):
+            return 0
+        n = sql.drop_relogged_copies()
+        sql.meta_set("msglog_copies_dropped", "1")
+        if n:
+            print(f"[LOG] {n} message(s) logged twice, the later copy removed",
+                  file=sys.stderr)
+        return n
+    except Exception as e:
+        print(f"[LOG] repair: {e}", file=sys.stderr)
+        return 0
+
+
 def backfill_message_log():
     try:
         sql = _get_sql()
@@ -4137,12 +4154,20 @@ def _curate_candidates(kinds=None, recheck_days=_CURATE_RECHECK_DAYS,
     return [f for _p, _e, f in out]
 
 
+_FACT_BIRTH_TALK_MIN = 120
+
+
 def _curate_evidence(fact, window_min=5, max_lines=24):
     sql = _get_sql()
     text_ = (fact.get("text") or "").strip()
     if sql is None or not text_:
         return []
     since = fact.get("ts") or ""
+    try:
+        since = (datetime.fromisoformat(since[:26])
+                 + timedelta(minutes=_FACT_BIRTH_TALK_MIN)).isoformat()
+    except Exception:
+        pass
     try:
         import math
         from hoplita_search import _norm_words, _same_word
@@ -9012,11 +9037,14 @@ def tool_chat_session_save(args):
     sql.upsert("chat_sessions", sid, sess)
     try:
         if getattr(sql, "fts", False):
-            _ya = sql.messages_in(sid)
-            for _m in (sess.get("history") or [])[_ya:]:
+            _ya = sql.said_in(sid)
+            for _m in (sess.get("history") or []):
                 _c = _m.get("content")
-                if isinstance(_c, str) and _c.strip():
-                    sql.log_message(sid, _m.get("role", ""), _c[:20000],
+                _r = _m.get("role", "")
+                if _r in sql.SAID_ROLES and isinstance(_c, str) and _c.strip() \
+                        and (_r, _c[:20000]) not in _ya:
+                    _ya.add((_r, _c[:20000]))
+                    sql.log_message(sid, _r, _c[:20000],
                                     ts=sess.get("updated_at", ""))
     except Exception as _e:
         print(f"[LOG] session save: {_e}", file=sys.stderr)
@@ -16090,6 +16118,7 @@ if __name__ == "__main__":
         register_manager_map()
         _enroll_from_env()
         threading.Thread(target=backfill_message_log, daemon=True).start()
+        threading.Thread(target=repair_relogged_messages, daemon=True).start()
 
         try:
             import fed_tools

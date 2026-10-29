@@ -5372,8 +5372,7 @@ enabled = true
                      rejected=_ps.get("rejected", 0))
         else:
             _msg = t("prop.reviewed",
-                     n=len(_f.get("proposals") or [])
-                       + len(_d.get("proposed") or []),
+                     n=len(r.get("applied") or []) if isinstance(r.get("applied"), list) else 0,
                      seen=_f.get("traced", _f.get("asked", 0)),
                      no_trace=_f.get("untraced", len(_f.get("no_trace") or [])),
                      dups=_d.get("looked_at", 0),
