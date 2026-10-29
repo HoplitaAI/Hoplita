@@ -2387,6 +2387,20 @@ def _llm_call_json(prompt, max_tokens=None, timeout=60, breaker=True,
             if _pre and not msg["content"].lstrip().startswith(_pre):
                 msg = {**msg, "content": _pre + msg["content"]}
         content_raw = msg.get("content", "") or ""
+
+        def _plain_again(why):
+            if not _json_mode or _JSON_MODE_BROKEN.get(_norm_base(base_url)):
+                return False
+            _JSON_MODE_BROKEN[_norm_base(base_url)] = str(why)[:200]
+            print(f"[{_who}] under the server's JSON mode: {why} — asked again "
+                  f"without it, and never with it again on {base_url}.")
+            return True
+
+        def _again():
+            return _llm_call_json(prompt, max_tokens=max_tokens, timeout=timeout,
+                                  breaker=breaker, _grew=_grew, _who=_who, quiet=quiet,
+                                  _follow=_follow, system=system, endpoint=endpoint,
+                                  usage_sink=usage_sink)
         reasoning = msg.get("reasoning_content", "") or msg.get("reasoning", "") or ""
 
         def _cut_retry(what):
@@ -2408,6 +2422,8 @@ def _llm_call_json(prompt, max_tokens=None, timeout=60, breaker=True,
                   f"usage={usage} other_keys={other_keys}")
             if finish == "length" and not _grew:
                 return _cut_retry("the whole budget went to reasoning: it")
+            if _plain_again(f"empty answer (finish_reason={finish})"):
+                return _again()
             _trip(f"empty answer (finish_reason={finish})")
             return None
         if not content_raw and reasoning:
@@ -2452,16 +2468,9 @@ def _llm_call_json(prompt, max_tokens=None, timeout=60, breaker=True,
             return None
 
         parsed = _extract_json_block(content)
-        if _json_mode and (_json_mode_corrupt(parsed) if parsed is not None
-                           else finish != "length" and content.lstrip().startswith("{")):
-            _JSON_MODE_BROKEN[_norm_base(base_url)] = content[:200]
-            print(f"[{_who}] the server's JSON mode mangled the object "
-                  f"({content[:80]!r}) — asked again without it, and never "
-                  f"with it again on {base_url}.")
-            return _llm_call_json(prompt, max_tokens=max_tokens, timeout=timeout,
-                                  breaker=breaker, _grew=_grew, _who=_who, quiet=quiet,
-                                  _follow=_follow, system=system, endpoint=endpoint,
-                                  usage_sink=usage_sink)
+        if parsed is not None and _json_mode_corrupt(parsed) \
+                and _plain_again(f"mangled object {content[:80]!r}"):
+            return _again()
         if parsed is not None:
             _LLM_CALL_FAILS["count"] = 0
             return parsed
@@ -2470,6 +2479,8 @@ def _llm_call_json(prompt, max_tokens=None, timeout=60, breaker=True,
         if not quiet:
             print(f"[{_who}] LLM didn't return parseable JSON "
               f"(finish_reason={finish}): {content[:200]!r}")
+        if finish != "length" and _plain_again(f"unparseable JSON: {content[:80]!r}"):
+            return _again()
         _trip(f"unparseable JSON (finish_reason={finish}): {content[:120]!r}")
         return None
     except requests.exceptions.Timeout:
@@ -4807,7 +4818,15 @@ def _review_step(phase=None, done=None, total=None, current=None, limit=None):
     _REVIEW_PROGRESS["moved"] = time.time()
 
 
+_REVIEW_LOCK = threading.Lock()
+
+
 def memory_review(facts=None):
+    with _REVIEW_LOCK:
+        return _memory_review_locked(facts)
+
+
+def _memory_review_locked(facts):
     _REVIEW_PROGRESS.update(running=True, phase="", done=0, total=0, current="",
                             since=time.time(), moved=time.time())
     try:
@@ -4928,8 +4947,9 @@ def _curate_loop():
             if on and time.time() - _expire_last[0] >= _EXPIRE_EVERY_S:
                 _expire_last[0] = time.time()
                 try:
-                    _sort_facts_life()
-                    _ex = expire_facts()
+                    with _REVIEW_LOCK:
+                        _sort_facts_life()
+                        _ex = expire_facts()
                     if _ex.get("faded") or _ex.get("asked"):
                         print(f"[MEMORY] clock: {_ex['faded']} passing fact(s) archived, "
                               f"{len(_ex['asked'])} question(s) for the person", file=sys.stderr)
