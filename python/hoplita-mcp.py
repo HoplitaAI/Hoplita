@@ -4369,7 +4369,11 @@ def expire_facts():
         quick = _fact_silence(f)
         if quick is None or quick < days:
             continue
-        silent = _fact_silence(f, _curate_evidence(f))
+        ev = _curate_evidence(f)
+        said = [r for r in ev if r.get("role") == "user"]
+        f["heard"] = ({"ts": said[-1].get("ts", ""), "text": (said[-1].get("text") or "")[:160]}
+                      if said else None)
+        silent = _fact_silence(f, ev)
         if silent is None or silent < days:
             continue
         if f["life"] == "volatile":
@@ -4382,6 +4386,9 @@ def expire_facts():
                 f["id"], "ask", f"nothing about it for {silent} days", [])
             if p_.get("proposed"):
                 asked.append({"id": p_["id"], "fact": f.get("text", ""), "days": silent})
+    if any("heard" in f for f in live):
+        with _facts_lock:
+            _save_facts_to_disk()
     applied = _apply_curator_proposals(faded) if faded else []
     return {"faded": len(applied), "asked": asked}
 
@@ -15751,15 +15758,9 @@ def facts_list():
         d = {"volatile": _vd, "relevant": _ad}.get(f.get("life"))
         if not d or not _fact_live(f) or f.get("id") in _asking:
             continue
-        try:
-            ev = _curate_evidence(f)
-        except Exception:
-            ev = []
-        quiet = _fact_silence(f, ev)
-        said = [r for r in ev if r.get("role") == "user"]
-        _left[f.get("id")] = (None if quiet is None else max(0, d - quiet),
-                              {"ts": said[-1].get("ts", ""), "text": (said[-1].get("text") or "")[:160]}
-                              if said else None)
+        _h = f.get("heard")
+        quiet = _fact_silence(f, [_h] if _h else [])
+        _left[f.get("id")] = (None if quiet is None else max(0, d - quiet), _h)
     return {"facts": [dict(f, generic=_fact_looks_generic(f.get("text", "")),
                            days_left=_left.get(f.get("id"), (None, None))[0],
                            kept_by=_left.get(f.get("id"), (None, None))[1],
