@@ -5572,7 +5572,7 @@ enabled = true
                 _life += " · " + t("mem.left_asking")
             elif f.get("days_left") is not None and not _arch_view:
                 _life += " · " + t("mem.left_volatile" if f.get("life") == "volatile"
-                                   else "mem.left_relevant", n=f["days_left"])
+                                   or f.get("until") else "mem.left_relevant", n=f["days_left"])
             _kb = f.get("kept_by") if not _arch_view else None
             if _kb:
                 _life += " · " + t("mem.talked", d=(_kb.get("ts") or "")[:10])

@@ -1699,7 +1699,7 @@ def _fact_gate(text, kind, live):
     return out
 
 
-def _add_fact(text, tags=None, kind="durable", report=None, gate=True, life=None):
+def _add_fact(text, tags=None, kind="durable", report=None, gate=True, life=None, until=None):
     report = report if isinstance(report, dict) else {}
     text, _hidden = sanitize_memory_text(text)
     if _hidden:
@@ -1787,7 +1787,8 @@ def _add_fact(text, tags=None, kind="durable", report=None, gate=True, life=None
     }
     if life in _FACT_LIVES:
         fact["life"] = life
-        fact["life_v"] = _LIFE_V
+    if _valid_until(until):
+        fact["until"] = until
     with _facts_lock:
         _facts_data.append(fact)
         _save_facts_to_disk()
@@ -1802,10 +1803,10 @@ def _add_fact(text, tags=None, kind="durable", report=None, gate=True, life=None
     return fact
 
 
-def tool_add_fact_checked(text, tags=None, kind=None, life=None):
+def tool_add_fact_checked(text, tags=None, kind=None, life=None, until=None):
     report = {}
     fact = _add_fact(text, tags, kind or "durable", report=report,
-                     life=str(life or "").strip().lower())
+                     life=str(life or "").strip().lower(), until=until)
     if fact is None:
         return {"added": False, "error": "empty fact"}
     out = {"added": report.get("action") in ("new", "supersede", None), "fact": fact,
@@ -4209,44 +4210,71 @@ def _curate_evidence(fact, window_min=5, max_lines=24):
 
 
 _FACT_LIVES = ("volatile", "relevant", "permanent")
-_LIFE_V = 2
-_LIFE_PROMPT = """Each line below is something a memory system stored about a person.
-Say how long each one stays worth knowing.
+_LIFE_V = 3
+_LIFE_PROMPT = """Each line below is something a memory system stored about a person, with
+how many times it was stored. Today is {today}. Sort each one by how long it
+is worth keeping.
 
-PERMANENT: who the person is, true for years: who they are and how to tell
-them apart, the people close to them, where they live and work, their health,
-what they own and keep, their lasting tastes and ways of working, how they
-want to be answered, what they maintain over years.
+PERMANENT is a short list: it rides in front of the model in EVERY
+conversation, about any topic, for years. A line is PERMANENT only if knowing
+it would change, for the better, an answer about almost anything months from
+now:
+- who the person is and how to tell them apart; the people close to them;
+  where they live and work;
+- their health that lasts;
+- how they want to be answered;
+- what they own and live with for years (a home, a vehicle, an animal), and
+  their long-standing roles and commitments.
 
-RELEVANT: something ongoing in their life that will matter across
-conversations for weeks or months and then end. Read the verb: an activity
-that goes on over days or weeks (planning, preparing, comparing, choosing,
-looking for, setting up, moving, migrating, learning, building, working on,
-a problem that keeps coming back) is RELEVANT, whatever its subject.
+NOT PERMANENT, whatever the wording says:
+- One act written as a trait: "uses <a tool> for <a job>", "is interested in
+  <a subject>", "is researching <a subject>", "has <a file or a document>".
+  Stored once or twice, it is that one occasion, not who they are.
+- An opinion or a judgement about a thing, said once.
+- Remarks on how they talk, write or feel.
+- Anything tied to a day, a date or a deadline.
+
+RELEVANT: something ongoing that will matter across conversations for weeks
+or months and then end. Read the verb: an activity over days or weeks
+(planning, preparing, choosing, building, learning, moving, a problem that
+keeps coming back) is RELEVANT, whatever its subject.
 
 VOLATILE: worth something only inside the conversation or the task where it
 came up. Read the verb: one act or one finding (asked, looked up, tried,
-tested, ran, got an error, found that a part or setting is so) is VOLATILE,
-whatever its subject. A part, setting or detail of something being fixed or
-built belongs to that task, not to the person.
+opened, ran, got an error, said in passing) is VOLATILE, whatever its
+subject. A part, setting or detail of something being fixed or built belongs
+to that task, not to the person.
 
-When a line could be PERMANENT, it is PERMANENT: losing who someone is costs
-more than keeping one stale line. Between RELEVANT and VOLATILE, choose
-RELEVANT: those are asked about before they go.
+When unsure whether a line is PERMANENT, it is not: it still comes in when
+its topic does. Between RELEVANT and VOLATILE, choose RELEVANT: those are
+asked about before they go.
+
+DATES: a line that names a day, a date or a deadline (an appointment, a
+trip, an exam, a delivery) also gets that day as "until", YYYY-MM-DD, read
+against today. It is forgotten after it.
 
 {lines}
 
 Answer with the numbers of each kind (a number in one list only; numbers in
-no list count as RELEVANT):
-{{"permanent": [numbers], "volatile": [numbers]}}"""
+no list count as RELEVANT), and the dates:
+{{"permanent": [numbers], "volatile": [numbers], "until": {{"number": "YYYY-MM-DD"}}}}"""
 
 
-def _classify_facts_life(texts, batch=30):
+def _valid_until(v):
+    try:
+        return bool(v) and datetime.strptime(str(v)[:10], "%Y-%m-%d") is not None and len(str(v)) == 10
+    except ValueError:
+        return False
+
+
+def _classify_facts_life(facts, batch=30):
     out = {}
-    for start in range(0, len(texts), batch):
-        chunk = texts[start:start + batch]
-        lines = "\n".join(f"{i}. {t}" for i, t in enumerate(chunk))
-        r_ = _llm_call_json(_LIFE_PROMPT.format(lines=lines),
+    today = datetime.now().strftime("%Y-%m-%d")
+    for start in range(0, len(facts), batch):
+        chunk = facts[start:start + batch]
+        lines = "\n".join(f"{i}. (stored {int(f.get('hits', 1) or 1)}×) {f.get('text', '')}"
+                          for i, f in enumerate(chunk))
+        r_ = _llm_call_json(_LIFE_PROMPT.format(lines=lines, today=today),
                             timeout=_side_timeout(300), breaker=False)
         if not isinstance(r_, dict):
             continue
@@ -4260,9 +4288,17 @@ def _classify_facts_life(texts, batch=30):
                     pass
             return got
         perm, vol = _nums("permanent"), _nums("volatile")
+        until = {}
+        for k, v in (r_.get("until") or {}).items() if isinstance(r_.get("until"), dict) else []:
+            try:
+                if _valid_until(v):
+                    until[int(k)] = str(v)
+            except (TypeError, ValueError):
+                pass
         for i in range(len(chunk)):
-            out[start + i] = ("permanent" if i in perm else
-                              "volatile" if i in vol else "relevant")
+            out[start + i] = {"life": ("permanent" if i in perm else
+                                       "volatile" if i in vol else "relevant"),
+                              "until": until.get(i)}
     return out
 
 
@@ -4282,12 +4318,16 @@ def _sort_facts_life():
                                       or f.get("life_v") != _LIFE_V)]
     if not todo:
         return 0
-    got = _classify_facts_life([f.get("text", "") for f in todo])
+    got = _classify_facts_life(todo)
     with _facts_lock:
         for i, f in enumerate(todo):
             if i in got:
-                f["life"] = got[i]
+                f["life"] = got[i]["life"]
                 f["life_v"] = _LIFE_V
+                if got[i].get("until"):
+                    f["until"] = got[i]["until"]
+                else:
+                    f.pop("until", None)
         _save_facts_to_disk()
     return len(got)
 
@@ -4308,12 +4348,21 @@ def expire_facts():
     vdays, adays = _life_days()
     rows = _proposals_rows()
     waiting = {r.get("target_id") for r in rows if r.get("status") == "pending"}
+    today = datetime.now().strftime("%Y-%m-%d")
     with _facts_lock:
         live = [f for f in _facts_data if _fact_live(f)
-                and f.get("life") in ("volatile", "relevant")
+                and (f.get("life") in ("volatile", "relevant") or f.get("until"))
                 and f.get("id") not in waiting]
     faded, asked = [], []
     for f in live:
+        if f.get("until") and str(f["until"]) < today:
+            p_ = tool_propose_memory_change(
+                f["id"], "fade", f"its day ({f['until']}) has passed", [])
+            if p_.get("proposed"):
+                faded.append(p_["id"])
+            continue
+        if f.get("life") not in ("volatile", "relevant"):
+            continue
         days = vdays if f["life"] == "volatile" else adays
         if not days:
             continue
@@ -9399,7 +9448,7 @@ def register_tools():
         "list_facts":             {"desc": "List ALL the user's facts (not by query). For periodic consolidation: see the full set and detect redundancies or obsolete facts.",
                                    "fn": lambda a: list_facts()},
         "add_fact":               {"desc": "Save a FACT confirmed by the user about themselves or their world (name, mapping, personal detail, preference, equivalence). Use it WHEN the user explicitly says 'learn that X', 'remember that Y', 'don't forget that Z'. A fact is PRINTER INK: everything said is already kept in the log and recall finds it, so a fact is only for WHO the person is (life=permanent: rides every future prompt) or something ONGOING to follow for weeks (life=relevant: found when its topic comes up, asked about after a silence). A moment of this conversation (a search, a troubleshooting step, a device detail) is NOT a fact — the log has it. Do NOT use this for technical documentation or notes — for that use add_note. Pass `kind` when it is not a permanent truth: an intention ('wants to', 'is going to') or a state ('right now X'), so it can be retired when it stops applying instead of being injected for ever. If the result lists RELATED existing facts, READ them: when the new fact supersedes one (moved cities, changed jobs), delete_fact or edit_fact the stale one NOW — two contradictory facts injected together poison every future turn.",
-                                   "fn": lambda a: tool_add_fact_checked(a["text"], a.get("tags"), a.get("kind"), a.get("life"))},
+                                   "fn": lambda a: tool_add_fact_checked(a["text"], a.get("tags"), a.get("kind"), a.get("life"), a.get("until"))},
         "session_read":           {"desc": "Read the conversation log AROUND a marker: every message a log search returns (recall's conversation drawer, session_moments, session_search) carries its `at`, and a text cut short says so with the marker to read on from. Like reading a file from a line: one message after when a sentence stops half way, several before to see what started it. Whole messages, in order, with the markers to go earlier or later.",
                                    "fn": lambda a: tool_session_read(a["at"], a.get("before", 3), a.get("after", 3))},
         "session_moments":        {"desc": "Find the MOMENTS you talked about something, not the lines that match. A conversation is a burst of messages about one thing: two common words may each appear everywhere alone, but the few minutes where BOTH appear is the conversation you want — and the answer is usually two messages later. Ranked by how many DISTINCT query terms a block covers, weighted by how rare each is in the whole log. PREFER THIS over session_search when you are looking for a past conversation rather than a single quote.",
@@ -10031,7 +10080,7 @@ def register_tool_params():
         "list_facts":             {"properties": {}, "required": []},
         "add_fact":               {"properties": {"text": {"type": "string", "description": "The fact in a clear sentence, e.g. '<someone or something> is called <name>'"},
                                                   "kind": {"type": "string", "enum": ["durable", "intencion", "estado"], "description": "durable = true from now on (a name, a relationship, a machine). intencion = something they mean to do, which stops being true once done or dropped. estado = how things are right now, which changes. Default durable."},
-                                                  "life": {"type": "string", "enum": ["permanent", "relevant"], "description": "permanent = who the person is: rides every future prompt. relevant = something ongoing: found when its topic comes up, asked about after a silence. A moment is not a fact at all."},
+                                                  "life": {"type": "string", "enum": ["permanent", "relevant"], "description": "permanent = who the person is: rides every future prompt. relevant = something ongoing: found when its topic comes up, asked about after a silence. A moment is not a fact at all."}, "until": {"type": "string", "description": "YYYY-MM-DD: the day it is over (an appointment, a trip, a deadline). It is forgotten after it."},
                                                   "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]},
         "session_read":           {"properties": {"at": {"type": "integer", "description": "A marker: the `at` a log search (recall, session_moments, session_search) returned."},
                                                   "before": {"type": "integer", "description": "Messages before it (0-20, default 3)."},
@@ -14579,7 +14628,8 @@ def _distill_facts(history):
                 _rep = {}
                 if _add_fact(text, f.get("tags") or ["auto_extract"],
                              kind=f.get("kind", "durable"), report=_rep,
-                             life=str(f.get("life") or "").strip().lower()) is not None \
+                             life=str(f.get("life") or "").strip().lower(),
+                             until=f.get("until")) is not None \
                         and _rep.get("action") != "same":
                     saved += 1
             except Exception as e:
@@ -15689,7 +15739,15 @@ def facts_list():
                if r.get("action") == "ask" and r.get("status") == "pending"}
 
     _left = {}
+    _today = datetime.now().date()
     for f in _facts_data:
+        if f.get("until") and _fact_live(f) and f.get("id") not in _asking:
+            try:
+                _left[f.get("id")] = (max(0, (datetime.strptime(f["until"], "%Y-%m-%d").date()
+                                              - _today).days + 1), None)
+                continue
+            except ValueError:
+                pass
         d = {"volatile": _vd, "relevant": _ad}.get(f.get("life"))
         if not d or not _fact_live(f) or f.get("id") in _asking:
             continue
