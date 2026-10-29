@@ -2451,7 +2451,8 @@ def _llm_call_json(prompt, max_tokens=None, timeout=60, breaker=True,
             return None
 
         parsed = _extract_json_block(content)
-        if parsed is not None and _json_mode and _json_mode_corrupt(parsed):
+        if _json_mode and (_json_mode_corrupt(parsed) if parsed is not None
+                           else finish != "length" and content.lstrip().startswith("{")):
             _JSON_MODE_BROKEN[_norm_base(base_url)] = content[:200]
             print(f"[{_who}] the server's JSON mode mangled the object "
                   f"({content[:80]!r}) — asked again without it, and never "
