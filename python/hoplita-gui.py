@@ -5573,6 +5573,9 @@ enabled = true
             elif f.get("days_left") is not None and not _arch_view:
                 _life += " · " + t("mem.left_volatile" if f.get("life") == "volatile"
                                    else "mem.left_relevant", n=f["days_left"])
+            _kb = f.get("kept_by") if not _arch_view else None
+            if _kb:
+                _life += " · " + t("mem.talked", d=(_kb.get("ts") or "")[:10])
             text = (f"{'⚠' if f.get('generic') else ' '}{pin} [{hits}×]  {_seen}  {_life}   "
                     f"{f.get('text', '')}")
             if _arch_view:
@@ -5587,6 +5590,9 @@ enabled = true
                 text += f"   ⟨{tags}⟩"
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, f)
+            if _kb:
+                item.setToolTip(t("mem.talked_tip", d=(_kb.get("ts") or "")[:16].replace("T", " "),
+                                  text=_kb.get("text") or ""))
             self.facts_table.addItem(item)
         self._filter_memory_facts()
 

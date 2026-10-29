@@ -1545,6 +1545,8 @@
   "mem.left_relevant": "asks in {n} d",
   "mem.left_asking": "❓ asking you (Proposals)",
   "mem.left_volatile": "forgotten in {n} d",
+  "mem.talked": "you said it on {d}",
+  "mem.talked_tip": "What keeps it alive, the last thing you said of it ({d}):\n{text}",
   "mem.arch_ask": "you said you were no longer on it",
   "prop.expired": "{faded} passing fact(s) forgotten · {asked} question(s) on whether you are still on something",
   "prop.ask_yes": "Yes, still on it",

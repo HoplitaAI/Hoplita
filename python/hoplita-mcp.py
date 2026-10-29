@@ -15688,14 +15688,23 @@ def facts_list():
     _asking = {r.get("target_id") for r in _proposals_rows()
                if r.get("action") == "ask" and r.get("status") == "pending"}
 
-    def _left(f):
+    _left = {}
+    for f in _facts_data:
         d = {"volatile": _vd, "relevant": _ad}.get(f.get("life"))
-        if not d or not _fact_live(f):
-            return None
-        quiet = _fact_silence(f)
-        return None if quiet is None else max(0, d - quiet)
+        if not d or not _fact_live(f) or f.get("id") in _asking:
+            continue
+        try:
+            ev = _curate_evidence(f)
+        except Exception:
+            ev = []
+        quiet = _fact_silence(f, ev)
+        said = [r for r in ev if r.get("role") == "user"]
+        _left[f.get("id")] = (None if quiet is None else max(0, d - quiet),
+                              {"ts": said[-1].get("ts", ""), "text": (said[-1].get("text") or "")[:160]}
+                              if said else None)
     return {"facts": [dict(f, generic=_fact_looks_generic(f.get("text", "")),
-                           days_left=None if f.get("id") in _asking else _left(f),
+                           days_left=_left.get(f.get("id"), (None, None))[0],
+                           kept_by=_left.get(f.get("id"), (None, None))[1],
                            asking=f.get("id") in _asking)
                       for f in _facts_data],
             "total": len(_facts_data),

@@ -1545,6 +1545,8 @@
   "mem.left_relevant": "pregunta en {n} d",
   "mem.left_asking": "❓ te está preguntando (Propuestas)",
   "mem.left_volatile": "se olvida en {n} d",
+  "mem.talked": "lo dijiste el {d}",
+  "mem.talked_tip": "Lo que lo mantiene vivo, lo último que dijiste de ello ({d}):\n{text}",
   "mem.arch_ask": "dijiste que ya no seguías",
   "prop.expired": "{faded} hecho(s) de paso olvidados · {asked} pregunta(s) de si sigues con algo",
   "prop.ask_yes": "Sí, sigo con ello",
