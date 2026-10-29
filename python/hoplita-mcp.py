@@ -1787,6 +1787,7 @@ def _add_fact(text, tags=None, kind="durable", report=None, gate=True, life=None
     }
     if life in _FACT_LIVES:
         fact["life"] = life
+        fact["life_v"] = _LIFE_V
     with _facts_lock:
         _facts_data.append(fact)
         _save_facts_to_disk()
@@ -4191,6 +4192,7 @@ def _curate_evidence(fact, window_min=5, max_lines=24):
 
 
 _FACT_LIVES = ("volatile", "relevant", "permanent")
+_LIFE_V = 2
 _LIFE_PROMPT = """Each line below is something a memory system stored about a person.
 Say how long each one stays worth knowing.
 
@@ -4259,7 +4261,8 @@ def _life_days():
 def _sort_facts_life():
     with _facts_lock:
         todo = [f for f in _facts_data
-                if _fact_live(f) and f.get("life") not in _FACT_LIVES]
+                if _fact_live(f) and (f.get("life") not in _FACT_LIVES
+                                      or f.get("life_v") != _LIFE_V)]
     if not todo:
         return 0
     got = _classify_facts_life([f.get("text", "") for f in todo])
@@ -4267,6 +4270,7 @@ def _sort_facts_life():
         for i, f in enumerate(todo):
             if i in got:
                 f["life"] = got[i]
+                f["life_v"] = _LIFE_V
         _save_facts_to_disk()
     return len(got)
 
@@ -13104,8 +13108,10 @@ def prepare_turn_messages(messages, pinned_skills=None, emit=None,
             head += "\n" + _tr("inject.facts_truncated", n=outside_n)
         out = _inject_block(out, head + "\n" + cat, stable=bool(_skey))
         _given.append(head + "\n" + cat)
+        _live_n = len(_live_facts())
         note("msg.facts_all" if not outside_n else "msg.facts_all_cut",
-             n=inside, outside_n=outside_n,
+             n=inside, outside_n=outside_n, live=_live_n,
+             rest=max(0, _live_n - inside - outside_n),
              _full=[l.strip(" •") for l in cat.split("\n")])
     try:
         _shown = set(re.findall(r"• \[([^\]]+)\]", cat or ""))
@@ -14842,6 +14848,7 @@ def memory_proposal_decide(pid: str, req: ProposalDecision):
                 for f in _facts_data:
                     if f.get("id") == row.get("target_id"):
                         f["last_seen"] = datetime.now().isoformat()
+                        f["life_v"] = _LIFE_V
                 _save_facts_to_disk()
             return {"kept": True}
         row["status"] = "rejected"
