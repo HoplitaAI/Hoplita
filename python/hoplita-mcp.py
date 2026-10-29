@@ -11890,7 +11890,7 @@ def _save_tool_uses():
 
 _ALWAYS_HOT = ("add_fact", "edit_fact", "delete_fact",
                "plan_and_orchestrate", "call_council",
-               "search_working_memory")
+               "search_working_memory", "recall", "search_web")
 
 
 _STARTER_HOT = ("run_command", "read_file", "list_dir", "search_web",
