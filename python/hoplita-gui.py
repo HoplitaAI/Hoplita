@@ -69,6 +69,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QObject, QTimer
 )
+
+_SESS_CARD_CSS = (
+    "#sesscard{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+    "stop:0 #1b2434, stop:1 #131a29);border:1px solid %s;"
+    "border-radius:11px;}"
+    "#sesscard:hover{border-color:#3b82f6;}")
 if sys.platform == "darwin" and os.environ.get("XDG_CONFIG_HOME"):
     from PyQt6.QtCore import QSettings as _QS
     _QS.setDefaultFormat(_QS.Format.IniFormat)
@@ -7519,7 +7525,7 @@ enabled = true
     def _show_sessions_dialog(self, sessions):
         dlg = QDialog(self)
         dlg.setWindowTitle(t("sess.dialog_title"))
-        dlg.resize(520, 540)
+        dlg.resize(540, 640)
         dlg.setStyleSheet("QDialog{background:#0b1220;}")
         outer = QVBoxLayout(dlg)
         outer.setContentsMargins(18, 16, 18, 14)
@@ -7554,14 +7560,12 @@ enabled = true
             "border-radius:7px;color:#cbd5e1;font-size:13px;min-height:0;"
             "padding:3px 0;}"
             "QPushButton:hover{border-color:%s;color:#f4f7fc;}")
+        cards = {}
         for s in sessions:
             row = QWidget()
             row.setObjectName("sesscard")
-            row.setStyleSheet(
-                "#sesscard{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-                "stop:0 #1b2434, stop:1 #131a29);border:1px solid #2a3547;"
-                "border-radius:11px;}"
-                "#sesscard:hover{border-color:#3b82f6;}")
+            row.setStyleSheet(_SESS_CARD_CSS % "#2a3547")
+            cards[s.get("uuid")] = row
             rl = QVBoxLayout(row)
             rl.setContentsMargins(14, 10, 14, 9)
             rl.setSpacing(3)
@@ -7601,6 +7605,8 @@ enabled = true
             il.addWidget(row)
         il.addStretch()
         scroll.setWidget(inner)
+        if sessions:
+            outer.addWidget(self._sessions_prune_bar(sessions, dlg, cards))
         outer.addWidget(scroll, 1)
         close = QPushButton(t("btn.cancel"))
         close.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -7614,6 +7620,127 @@ enabled = true
         outer.addLayout(_cl)
         close.clicked.connect(dlg.reject)
         dlg.exec()
+
+    def _sessions_prune_bar(self, sessions, dlg, cards):
+        from PyQt6.QtWidgets import QDateEdit
+        from PyQt6.QtCore import QDate, QSettings
+        keep = {getattr(c, "session_uuid", None)
+                for c in (getattr(self, "_chat_ctxs", {}) or {}).values()}
+        keep |= {x.get("uuid") for x in sessions if x.get("pinned_device")}
+        try:
+            keep.add(QSettings("hoplita", "hoplita").value("cron_session_uuid", ""))
+        except Exception:
+            pass
+        keep.discard(None)
+        keep.discard("")
+        box = QFrame()
+        box.setObjectName("prunebar")
+        box.setStyleSheet(
+            "#prunebar{background:#101827;border:1px solid #2a3547;"
+            "border-radius:10px;}"
+            "QLabel{color:#e6edf7;font-size:12px;background:transparent;border:none;}"
+            "QDateEdit{background:#131a29;border:1px solid #2a3547;"
+            "border-radius:6px;color:#f4f7fc;padding:3px 6px;}")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(12, 9, 12, 9)
+        v.setSpacing(7)
+        _btn_css = ("QPushButton{background:#131a29;border:1px solid #2a3547;"
+                    "border-radius:7px;color:#cbd5e1;padding:4px 10px;}"
+                    "QPushButton:hover{border-color:#3b82f6;color:#f4f7fc;}")
+        r1 = QHBoxLayout()
+        r1.setSpacing(6)
+        r1.addWidget(QLabel(t("sess.prune_older")))
+        today = QDate.currentDate()
+        start = QDate(2000, 1, 1)
+        d_from, d_to = QDateEdit(), QDateEdit()
+        for d in (d_from, d_to):
+            d.setCalendarPopup(True)
+            d.setDisplayFormat("yyyy-MM-dd")
+            d.setMinimumDate(start)
+            d.setMaximumDate(today)
+        d_from.setSpecialValueText(t("sess.prune_start"))
+        d_from.setDate(start)
+        d_to.setDate(today.addYears(-1))
+        for key, back in (("sess.prune_1m", lambda d: d.addMonths(-1)),
+                          ("sess.prune_6m", lambda d: d.addMonths(-6)),
+                          ("sess.prune_1y", lambda d: d.addYears(-1))):
+            b = QPushButton(t(key))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(_btn_css)
+            b.clicked.connect(lambda _=False, f=back: (
+                d_from.setDate(start), d_to.setDate(f(today))))
+            r1.addWidget(b)
+        r1.addStretch()
+        v.addLayout(r1)
+        r2 = QHBoxLayout()
+        r2.setSpacing(6)
+        r2.addWidget(QLabel(t("sess.prune_from")))
+        r2.addWidget(d_from)
+        r2.addWidget(QLabel(t("sess.prune_to")))
+        r2.addWidget(d_to)
+        r2.addStretch()
+        go = QPushButton()
+        go.setCursor(Qt.CursorShape.PointingHandCursor)
+        go.setStyleSheet(
+            "QPushButton{background:#2a1418;border:1px solid #7f1d1d;"
+            "border-radius:7px;color:#fecaca;padding:5px 12px;}"
+            "QPushButton:hover{border-color:#ef4444;color:#fff1f1;}"
+            "QPushButton:disabled{background:#131a29;border-color:#2a3547;"
+            "color:#64748b;}")
+        r2.addWidget(go)
+        v.addLayout(r2)
+        kept = QLabel()
+        kept.setStyleSheet("QLabel{color:#93a1b5;font-size:11px;}")
+        v.addWidget(kept)
+
+        def _range():
+            lo = "" if d_from.date() == start else d_from.date().toString("yyyy-MM-dd")
+            return lo, d_to.date().toString("yyyy-MM-dd")
+
+        def _refresh(*_):
+            lo, hi = _range()
+            n = msgs = held = 0
+            for x in sessions:
+                day = (x.get("updated_at") or x.get("created_at") or "")[:10]
+                inside = bool(day) and (not lo or day >= lo) and day <= hi
+                if inside and x.get("uuid") in keep:
+                    held += 1
+                    inside = False
+                n += inside
+                msgs += x.get("n", 0) if inside else 0
+                c = cards.get(x.get("uuid"))
+                if c is not None:
+                    c.setStyleSheet(_SESS_CARD_CSS % ("#7f1d1d" if inside else "#2a3547"))
+            go.setEnabled(n > 0)
+            go.setText(t("sess.prune_go", n=n, msgs=msgs) if n else t("sess.prune_none"))
+            kept.setText(t("sess.prune_kept", k=held) if held else "")
+            kept.setVisible(bool(held))
+
+        def _go():
+            lo, hi = _range()
+            go.setEnabled(False)
+
+            def work():
+                return self._mcp_call_json("chat_session_prune", {
+                    "from": lo, "to": hi, "keep": sorted(keep)})
+
+            def done(res):
+                res = res if isinstance(res, dict) else {}
+                if res.get("error"):
+                    self.add_message(t("sess.prune_fail", err=res["error"]), "system")
+                else:
+                    self.add_message(t("sess.prune_done", n=res.get("n", 0),
+                                       msgs=res.get("messages_purged", 0)), "system")
+                dlg.accept()
+                self._open_sessions_dialog()
+
+            self._bg(work, done)
+
+        d_from.dateChanged.connect(_refresh)
+        d_to.dateChanged.connect(_refresh)
+        go.clicked.connect(_go)
+        _refresh()
+        return box
 
     def _tab_by_session_uuid(self, uuid):
         for c in self._chat_ctxs.values():

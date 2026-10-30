@@ -9197,8 +9197,17 @@ def tool_chat_session_delete(args):
     if sql is None:
         return {"error": "SQL store unavailable"}
     sid = args.get("uuid")
-    _ids = [i for i in ([sid] + list(args.get("conv_ids") or [])) if i]
     prev = next((r for r in _chat_sessions_rows() if r.get("uuid") == sid), None)
+    return _chat_session_drop(sql, sid, prev, args.get("conv_ids"))
+
+
+def _chat_session_drop(sql, sid, prev, conv_ids=(), rows=None):
+    _sync = (prev or {}).get("sync_id") or ""
+    if _sync and any(r.get("sync_id") == _sync and r.get("uuid") != sid
+                     and not r.get("deleted")
+                     for r in (rows if rows is not None else _chat_sessions_rows())):
+        _sync = ""
+    _ids = [i for i in ([sid, _sync] + list(conv_ids or [])) if i]
     if prev is not None:
         prev = {"uuid": sid,
                 "deleted": True,
@@ -9216,6 +9225,39 @@ def tool_chat_session_delete(args):
             print(f"[SESSION] could not purge the log of {_sid}: {e}")
     return {"ok": True, "working_memory_dropped": _wm,
             "messages_purged": _msgs}
+
+
+def tool_chat_session_prune(args):
+    sql = _get_sql()
+    if sql is None:
+        return {"error": "SQL store unavailable"}
+    lo = str(args.get("from") or "").strip()[:10]
+    hi = str(args.get("to") or "").strip()[:10]
+    for d in (lo, hi):
+        if d and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            return {"error": f"dates are YYYY-MM-DD, got {d!r}"}
+    if not lo and not hi:
+        return {"error": "give 'from', 'to' or both: a range with no ends "
+                         "is every conversation"}
+    keep = set(args.get("keep") or [])
+    hit, rows = [], _chat_sessions_rows()
+    for r in rows:
+        day = str(r.get("updated_at") or r.get("created_at") or "")[:10]
+        if (r.get("deleted") or r.get("uuid") in keep or not day
+                or (lo and day < lo) or (hi and day > hi)):
+            continue
+        hit.append(r)
+    out = {"sessions": [r.get("uuid") for r in hit], "n": len(hit),
+           "messages": sum(len(r.get("history") or []) for r in hit)}
+    if args.get("dry_run"):
+        return out
+    out["messages_purged"] = 0
+    for r in hit:
+        res = _chat_session_drop(sql, r.get("uuid"), r, rows=[
+            x for x in rows if x not in hit])
+        out["messages_purged"] += res.get("messages_purged", 0)
+    out["ok"] = True
+    return out
 
 
 
@@ -10357,6 +10399,8 @@ def register_tool_params():
                                 "fn": lambda a: tool_chat_session_load(a)},
         "chat_session_delete": {"desc": "Delete a chat session (tombstone, syncs).",
                                 "fn": lambda a: tool_chat_session_delete(a)},
+        "chat_session_prune":  {"desc": "Delete every saved chat session last used between two dates (YYYY-MM-DD, inclusive; 'to' alone = older than). dry_run lists them first.",
+                                "fn": lambda a: tool_chat_session_prune(a)},
         "working_memory_forget": {"desc": "Drop what a conversation left in a "
                                   "folder: its WORKING MEMORY (the full texts "
                                   "of big tool results it digested). "
@@ -10389,6 +10433,7 @@ def register_tool_params():
         "chat_session_list":   {"properties": {}},
         "chat_session_load":   {"properties": {"uuid": {"type": "string"}}, "required": ["uuid"]},
         "chat_session_delete": {"properties": {"uuid": {"type": "string"}}, "required": ["uuid"]},
+        "chat_session_prune":  {"properties": {"from": {"type": "string", "description": "YYYY-MM-DD, first day included; omit for since the first one."}, "to": {"type": "string", "description": "YYYY-MM-DD, last day included."}, "keep": {"type": "array", "items": {"type": "string"}, "description": "uuids to leave alone."}, "dry_run": {"type": "boolean"}}, "required": []},
         "working_memory_forget": {"properties": {
             "session": {"type": "string",
                         "description": "One id the conversation answers to."},
