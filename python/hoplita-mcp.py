@@ -12408,6 +12408,7 @@ def _prepend_system(messages, directive):
 
 
 _SKILL_WHEN = re.compile(r"^\s*hoplita-when:\s*(\S.*?)\s*$", re.M | re.I)
+_SKILL_DECL_PROSE = 200
 
 
 def _skill_declaration(note):
@@ -12416,13 +12417,14 @@ def _skill_declaration(note):
     m = _SKILL_WHEN.search(cuerpo)
     if m:
         return f"{title_} {m.group(1)}"[:400]
-    first_ = ""
+    said = []
     for line_ in cuerpo.splitlines():
         l = line_.strip().lstrip("#").strip()
         if len(l) > 15:
-            first_ = l
-            break
-    return f"{title_} {first_}"[:400]
+            said.append(l)
+            if sum(len(x) for x in said) >= _SKILL_DECL_PROSE:
+                break
+    return f"{title_} {' '.join(said)}"[:400]
 
 
 WORKING_MEMORY = "working-memory"
@@ -12623,7 +12625,7 @@ def skills_index(extra=None, query=None):
         _seen.add(t_)
         d = _skill_declaration(n_)[len(t_):].strip(" —-:")
         rows.append({"title": t_,
-                      "line": f"{t_}" + (f" — {d[:110]}" if d else "")})
+                      "line": f"{t_}" + (f" — {d[:_SKILL_DECL_PROSE]}" if d else "")})
     rows.sort(key=lambda f: f["line"])
     whole = "; ".join(f["line"] for f in rows)
 
@@ -12631,7 +12633,7 @@ def skills_index(extra=None, query=None):
              if CONFIG else 6000)
     if _tope <= 0 or len(whole) <= _tope:
         return whole
-    _k = max(1, _tope // 140)
+    _k = max(1, int(_tope * len(rows) / len(whole)))
     _sel = []
     if (query or "").strip():
         import hoplita_search as _hs
