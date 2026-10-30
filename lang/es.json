@@ -2115,7 +2115,7 @@
   "chat.image_not_seen": "🙈 {model} no ve imágenes y no hay ningún modelo que se las describa, así que no se le ha enseñado la imagen. Está guardada en {path} y el modelo lo sabe. Para que se vean: Configuración → Modelos → «Visión (describe imágenes)».",
   "chat.image_not_seen_server": "🙈 El servidor de {model} dice que no acepta imágenes (tiene la visión apagada), así que la imagen se perdería sin avisar. No se ha enviado; está guardada en {path} y el modelo lo sabe. Activa la visión en ese servidor, o elige un modelo que vea en Configuración → Modelos → «Visión (describe imágenes)».",
   "digest.cut": "✂ Resultado grande de {tool} ({total} chars): entra el principio (líneas 1-{shown} de {lines}); el texto completo queda en la memoria de trabajo, donde el modelo puede buscar en él",
-  "qa.steps_only": "🔍 Todo lo que devolvieron las herramientas no cabe en lo que puede leer el revisor ([CHAT] qa_budget_chars): ha revisado los pasos, no sus resultados.",
+  "qa.steps_only": "🔍 Todo lo que devolvieron las herramientas no cabe en lo que puede leer el revisor (Configuración → Conversación → qa_budget_chars): ha revisado los pasos, no sus resultados.",
   "qa.view": "ver revisión ›",
   "qa.hide": "ocultar ‹",
   "qa.card_title": "Revisión · ronda {n}",

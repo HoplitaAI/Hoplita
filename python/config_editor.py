@@ -24,6 +24,9 @@ CHAT_TAB = [
     ("CHAT", "compact_threshold", "float", (0.1, 0.99)),
     ("CHAT", "compact_keep_recent", "int", (1, 100)),
     ("CHAT", "compact_timeout", "int", (0, 86400)),
+    ("CHAT", "qa_review", "choice", ["auto", "always", "off"]),
+    ("CHAT", "qa_max_rounds", "int", (1, 5)),
+    ("CHAT", "qa_budget_chars", "int", (2000, 400000)),
 ]
 
 PLANS_TAB = [
@@ -35,9 +38,6 @@ PLANS_TAB = [
     ("CHAT", "subtask_timeout", "int", (0, 86400)),
     ("CHAT", "multi_max_parallel", "int", (1, 32)),
     ("CHAT", "multi_max_retries", "int", (0, 10)),
-    ("CHAT", "qa_review", "choice", ["auto", "always", "off"]),
-    ("CHAT", "qa_max_rounds", "int", (1, 5)),
-    ("CHAT", "qa_budget_chars", "int", (2000, 400000)),
     ("CHAT", "escalate_on_stall", "bool", None),
     ("CHAT", "council_max_rounds", "int", (1, 10)),
     ("CHAT", "council_gate_timeout", "int", (30, 86400)),
