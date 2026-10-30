@@ -16578,61 +16578,6 @@ enabled = true
             self.signals.refresh_notes.emit()
         if tool_name in ("add_appointment", "add_task", "update_task_progress"):
             self.signals.refresh_todo.emit()
-        if tool_name == "scrape_url":
-            try:
-                data = json.loads(result) if isinstance(result, str) else result
-                print(f"[RAG DEBUG] scrape data type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}")
-                print(f"[RAG DEBUG] has text={bool(data.get('text') if isinstance(data, dict) else False)}")
-                if isinstance(data, dict) and data.get("text"):
-                    url = arguments.get("url", "")
-                    text = data["text"]
-                    print(f"[RAG DEBUG] text len={len(text)}, url={url}")
-                    self.rag_manager.add_raw_text(text, f"Web: {url}", {"url": url, "source": "scrape"})
-                    chunks = self.rag_manager.create_chunks(text, source=f"Web: {url}",
-                        chunk_size=200, overlap=30)
-                    print(f"[RAG DEBUG] chunks={len(chunks)}")
-                    if chunks:
-                        self.rag_manager.add_chunks_to_index(chunks, source_info=f"Web: {url}")
-                        print(f"[RAG] ✅ Saved: {url} ({len(text)} chars, {len(chunks)} chunks)")
-                    self.signals.update_rag_status.emit()
-                else:
-                    print(f"[RAG DEBUG] No text in data: {str(data)[:200]}")
-            except Exception as e:
-                import traceback
-                print(f"[RAG] ❌ Error saving scrape: {e}")
-                traceback.print_exc()
-        if tool_name == "search_web":
-            try:
-                data = json.loads(result) if isinstance(result, str) else result
-                if isinstance(data, dict):
-                    query = arguments.get("query", "")
-                    text = ""
-                    kind = data.get("kind")
-                    if kind == "sources" or ("results" in data and "result" not in data):
-                        parts = []
-                        for src in data.get("results", []) or []:
-                            title = src.get("title", "")
-                            u = src.get("url", "")
-                            c = src.get("content", "")
-                            parts.append(f"## {title}\n{u}\n{c}")
-                        text = "\n\n".join(parts)
-                    else:
-                        text = data.get("result", "") or ""
-                    if text.strip():
-                        self.rag_manager.add_raw_text(
-                            text, f"Web: {query}",
-                            {"query": query, "source": "search",
-                             "provider": data.get("provider", "")})
-                        chunks = self.rag_manager.create_chunks(
-                            text, source=f"Web: {query}", chunk_size=200, overlap=30)
-                        if chunks:
-                            self.rag_manager.add_chunks_to_index(
-                                chunks, source_info=f"Web: {query}")
-                        self.signals.update_rag_status.emit()
-                        print(f"[RAG] ✅ search_web saved: {query} "
-                              f"({len(text)} chars, provider={data.get('provider')})")
-            except Exception as e:
-                print(f"[RAG] ❌ Error saving search_web: {e}", file=sys.stderr)
         if tool_name in ("generate_image", "edit_image"):
             self._picture_result_to_canvas(result)
         return result
