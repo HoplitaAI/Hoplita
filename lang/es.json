@@ -1410,7 +1410,7 @@
   "notes.to_personal": "🏠 Mover a Personales",
   "notes.to_skills": "🧠 Añadir a skills",
   "notes.unlocked": "🌐 «{cat}» vuelve a ser federable: podrá compartirse y viajar en el snapshot.",
-  "orch.serial_code": "🔒 Proyecto abierto: las sub-tareas van de una en una (eran {n} a la vez). Un solo agente tocando el árbol hasta que existan los worktrees.",
+  "orch.serial_code": "🔒 Hay un proyecto abierto: las sub-tareas del plan van de una en una en vez de {n} a la vez, porque todas trabajan sobre la misma carpeta del proyecto y a la vez se pisarían (mismos ficheros, misma compilación, mismos tests). El plan es el mismo; solo tarda más.",
   "ph.user_email": "usuario o email",
   "pin.cleared": "📍 Pestaña suelta: vuelve a ejecutarse donde estés.",
   "pin.current": "📍 Atada a «{name}» ({id}). Sus turnos se ejecutan allí, escribas desde donde escribas.",

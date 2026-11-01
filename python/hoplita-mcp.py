@@ -14086,7 +14086,7 @@ def tool_plan_and_orchestrate(task, solo_single=False):
     _par = _int("multi_max_parallel", 4)
     _ctx_proj = getattr(ctx, "code_project", "")
     if _ctx_proj and _par > 1:
-        progress_fn({"type": "note", "key": "orch.serial_code", "n": _par})
+        progress_fn({"type": "note", "key": "orch.serial_code", "args": {"n": _par}})
         _par = 1
     orch = Orchestrator(
         llm_fn, agent_fn, progress_fn,

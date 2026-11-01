@@ -1410,7 +1410,7 @@
   "notes.to_personal": "🏠 Move to Personal",
   "notes.to_skills": "🧠 Add to skills",
   "notes.unlocked": "🌐 \"{cat}\" is federable again: it can be shared and ride the snapshot.",
-  "orch.serial_code": "🔒 Project open: sub-tasks run one at a time (was {n} at once). One agent on the tree until worktrees exist.",
+  "orch.serial_code": "🔒 A project is open: the plan's sub-tasks run one at a time instead of {n} at once, because they all work in the same project folder and at once they would step on each other (same files, same build, same tests). The plan is the same; it just takes longer.",
   "ph.user_email": "username or email",
   "pin.cleared": "📍 Tab untied: it runs wherever you are again.",
   "pin.current": "📍 Tied to \"{name}\" ({id}). Its turns run there, wherever you type from.",
