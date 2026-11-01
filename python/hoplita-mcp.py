@@ -13672,6 +13672,14 @@ def _pool_alias(name):
     return None
 
 
+def _pool_label_of(base_url, model):
+    for alias, m in _model_pool().items():
+        if (str(m.get("model") or "") == str(model or "")
+                and str(m.get("base_url") or "").rstrip("/") == str(base_url or "").rstrip("/")):
+            return alias
+    return model
+
+
 def _orch_model_endpoint(alias, ctx):
     alias = _pool_alias(alias)
     if alias:
@@ -14098,8 +14106,9 @@ def tool_plan_and_orchestrate(task, solo_single=False):
         model_alias=_pool_alias,
         subtask_timeout=_int("subtask_timeout", 1800),
         should_stop=ctx.cancel,
-        base_model_label=((ctx.endpoint or {}).get("model")
-                          or _resolve_endpoint("API")[2]))
+        base_model_label=_pool_label_of(
+            (ctx.endpoint or {}).get("base_url") or _resolve_endpoint("API")[0],
+            (ctx.endpoint or {}).get("model") or _resolve_endpoint("API")[2]))
     try:
         final, _subs = orch.execute(task, approve_fn=approve_fn,
                                     on_expand=on_expand)
