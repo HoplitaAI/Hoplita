@@ -2840,6 +2840,13 @@ class ChatAssistantWindow(QMainWindow):
                 ev = item.get("event", {}) or {}
                 if not peer:
                     continue
+                if ev.get("event") == "session_refused":
+                    _why = str(ev.get("why") or "no_permission")
+                    if self._active_tab_id:
+                        self._append_html_to_tab(self._active_tab_id, self._chat_frag(
+                            t("fed.session_refused_" + _why, peer=peer),
+                            "#f59e0b", t("label.system")))
+                    continue
                 if ev.get("event") == "session_closed":
                     self.signals.session_closed.emit(peer, direction)
                     continue

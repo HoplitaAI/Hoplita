@@ -583,27 +583,43 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
     session_id = (env.get("meta") or {}).get("session_id") or uuid.uuid4().hex[:12]
     sender = env.get("sender", "")
 
+    def _refused_here(why):
+        if local_sink is not None:
+            try:
+                local_sink({"event": "session_refused", "why": why})
+            except Exception:
+                pass
+
+    def _decline_to_server_key(text):
+        try:
+            _raw = fed.server_get_key(server_url, token, sender).get("public_key")
+            if _raw:
+                _send(server_url, token, my_priv, sender, _raw, T_EVENT,
+                      {"event": "error", "code": "declined", "retryable": False,
+                       "error": text}, session_id)
+        except Exception as e:
+            print(f"[SESSION-IN] the decline to {sender!r} could not be sent: {e}",
+                  file=sys.stderr)
+
     try:
         if sender and sender == store.data.get("handle"):
             sender_pub = my_pub
         else:
             sender_pub = _inbound_pubkey(server_url, token, sender)
     except Exception as e:
-        try:
-            _raw = fed.server_get_key(server_url, token, sender).get("public_key")
-            if _raw:
-                _send(server_url, token, my_priv, sender, _raw, T_EVENT,
-                      {"event": "error", "code": "declined", "retryable": False,
-                       "error": f"'{store.data.get('handle', '')}' does not take "
-                                f"sessions from you: not a contact of theirs."},
-                      session_id)
-        except Exception:
-            pass
+        _decline_to_server_key(f"'{store.data.get('handle', '')}' does not take "
+                               f"sessions from you: not a contact of theirs.")
+        _refused_here("not_contact")
         return {"ok": False, "reason": f"no key for '{sender}': {e}"}
 
     try:
         dec = crypto.unbox(my_priv, sender_pub, env["ciphertext"])
     except Exception:
+        _decline_to_server_key(f"'{store.data.get('handle', '')}' could not verify "
+                               f"that this request comes from you: the key it holds "
+                               f"for you does not match. If you reinstalled or changed "
+                               f"keys, they need to accept you again.")
+        _refused_here("unverified")
         return {"ok": False, "reason": "authorship not verified (possible spoofing)"}
     payload = dec.get("payload", {})
     message = payload.get("message", "")
@@ -623,8 +639,10 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
                    "error": f"'{store.data['handle']}' does not allow you to "
                             f"open remote sessions (permission 'no')."},
                   session_id)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[SESSION-IN] the decline to {sender!r} could not be sent: {e}",
+                  file=sys.stderr)
+        _refused_here("no_permission" if trust == "reject" else "not_contact")
         return {"ok": False, "reason": f"'{sender}' has no session permission"}
     _first = not has_inbound_session(sender)
 
