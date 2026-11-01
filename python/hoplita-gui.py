@@ -2887,6 +2887,11 @@ class ChatAssistantWindow(QMainWindow):
         if tab is None:
             return
         menu = QMenu(self)
+        if tab.get("kind") in ("green", "red"):
+            act_close = menu.addAction(t("chat.tab_close"))
+            if menu.exec(gpos) is act_close:
+                self._close_chat_tab(tab_id)
+            return
         pin = getattr(ctx, "pinned_device", None) if ctx is not None else None
         act_pin = act_unpin = act_why = None
         if pin:
