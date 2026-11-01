@@ -207,6 +207,96 @@ def _range_hint(name):
             "need, or re-call with narrower arguments")
 
 
+_LINE_WINDOW_SHARE = 0.15
+_LINE_CHARS_PER_TOKEN = 3
+_LINE_CAP_MAX = 100000
+
+
+def line_cap(window):
+    try:
+        w = int(window or 0)
+    except (TypeError, ValueError):
+        w = 0
+    return max(_RESULT_CAP, min(_LINE_CAP_MAX,
+                                int(w * _LINE_CHARS_PER_TOKEN * _LINE_WINDOW_SHARE)))
+
+
+def line_cap_for_tool():
+    return int(getattr(_tool_emit, "line_cap", 0) or 0) or _RESULT_CAP
+
+
+_FILE_READERS = ("read_file", "code_read_range")
+
+
+def _cut_text_field(name, args, result, cap):
+    try:
+        obj = json.loads(result)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    texts = [(k, v) for k, v in obj.items() if isinstance(v, str)]
+    if not texts:
+        return None
+    key, text = max(texts, key=lambda kv: len(kv[1]))
+    lines = text[:-1].split("\n") if text.endswith("\n") else text.split("\n")
+    first = 1
+    total = len(lines)
+    if name == "code_read_range":
+        try:
+            first = int(str(obj.get("range", "1")).split("-")[0])
+            total = int(obj.get("total_lines") or total)
+        except (TypeError, ValueError):
+            first = 1
+    rest = dict(obj)
+    rest[key] = ""
+    budget = max(400, cap - len(json.dumps(rest, ensure_ascii=False)) - 600)
+    kept, size = [], 0
+    for ln in lines:
+        w = len(json.dumps(ln, ensure_ascii=False))
+        if kept and size + w > budget:
+            break
+        kept.append(ln)
+        size += w
+    if len(kept) == 1 and size > budget:
+        kept = [kept[0][:budget]]
+    last = first + len(kept) - 1
+    obj[key] = "\n".join(kept)
+    obj["cut"] = (f"lines {first}-{last} of {total}. The rest EXISTS and is "
+                  f"not here. Never fill it in from memory.")
+    path = (args or {}).get("path")
+    if name in _FILE_READERS and path and last < total:
+        obj["next"] = (f"code_read_range(path={json.dumps(path)}, "
+                       f"start_line={last + 1}, end_line={min(total, last + len(kept))})")
+    else:
+        obj["next"] = _range_hint(name)
+    return json.dumps(obj, ensure_ascii=False), first, last, total
+
+
+def _lines_seen(name, args, result):
+    path = (args or {}).get("path")
+    if name not in _FILE_READERS or not path:
+        return None
+    try:
+        obj = json.loads(result)
+    except Exception:
+        return None
+    if not isinstance(obj, dict) or obj.get("error"):
+        return None
+    m = re.match(r"lines (\d+)-(\d+) of (\d+)", str(obj.get("cut") or ""))
+    if m:
+        a, b, n = (int(x) for x in m.groups())
+        return path, a, b, n
+    if name == "code_read_range":
+        try:
+            a, b = (int(x) for x in str(obj.get("range", "")).split("-"))
+            return path, a, b, int(obj.get("total_lines") or b)
+        except (TypeError, ValueError):
+            return None
+    n = len(str(obj.get("result") or "").splitlines())
+    return path, 1, n, n
+
+
 def set_result_cap(n):
     global _RESULT_CAP
     try:
@@ -1273,9 +1363,22 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                      given="",
                      council=False,
                      qa_self=False):
-    emit = on_event or (lambda ev: None)
+    _emit_out = on_event or (lambda ev: None)
+    _partial = {}
+
+    def emit(ev):
+        if ev.get("event") == "reply" and _partial:
+            for _r in _partial.values():
+                if len(_r["seen"]) < _r["total"] and not _r.get("consulted"):
+                    _emit_out({"event": "tool_progress", "key": "read.partial",
+                               "args": {"path": str(_r["path"]),
+                                        "read": str(len(_r["seen"])),
+                                        "lines": str(_r["total"])}})
+            _partial.clear()
+        _emit_out(ev)
     is_cancelled = cancel or (lambda: False)
     chat = llm_chat or _llm_chat
+    _window = 0
     delegate_all = "*" in (delegate_names or ())
 
     if chat is None:
@@ -1607,6 +1710,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
             msg = raw.get("message") or {}
             usage = raw.get("usage") or {}
             finish_reason = raw.get("finish_reason", "")
+            _window = int(raw.get("window") or 0) or _window
         else:
             msg, usage, finish_reason = (raw or {}), {}, ""
 
@@ -2081,12 +2185,14 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 _tool_emit.fn = emit
                 _tool_emit.tail = _conversation_tail(messages)[-8:]
                 _tool_emit.messages = messages
+                _tool_emit.line_cap = line_cap(_window)
                 try:
                     result = _execute_tool(name, args)
                 finally:
                     _tool_emit.fn = None
                     _tool_emit.tail = []
                     _tool_emit.messages = []
+                    _tool_emit.line_cap = 0
             if name == "load_tools":
                 if _heavy_cut:
                     try:
@@ -2144,7 +2250,10 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                         result = json.dumps(_shot, ensure_ascii=False)
                 except Exception:
                     pass
-            if len(result) > _RESULT_CAP:
+            _cap = (line_cap(_window) if name in _LINE_ORIENTED_TOOLS
+                    else _RESULT_CAP)
+            _cut_here = False
+            if len(result) > _cap:
                 _full_len = len(result)
                 _verbatim = _take_verbatim(result)
                 _dig = ("" if name in _LINE_ORIENTED_TOOLS
@@ -2177,10 +2286,28 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                                  " If something you need is missing, re-call "
                                  "the tool, narrower.")
                               + "]")
+                elif (_struct := _cut_text_field(name, args, result, _cap)):
+                    _txt, _a, _b, _n = _struct
+                    _cut_here = True
+                    _loc = ""
+                    if _spill_fn is not None:
+                        try:
+                            _loc = _spill_fn(name, result) or ""
+                        except Exception:
+                            _loc = ""
+                    emit({"event": "tool_progress", "key": "digest.cut",
+                          "args": {"tool": name, "total": str(_full_len),
+                                   "first": str(_a), "shown": str(_b),
+                                   "lines": str(_n)}})
+                    if _loc:
+                        _o = json.loads(_txt)
+                        _o["full_text"] = f"kept and searchable: {_loc}"
+                        _txt = json.dumps(_o, ensure_ascii=False)
+                    result = _verbatim + _txt
                 else:
-                    _kept = result[:_RESULT_CAP]
+                    _kept = result[:_cap]
                     _nl = _kept.rfind("\n")
-                    if _nl > _RESULT_CAP // 2:
+                    if _nl > _cap // 2:
                         _kept = _kept[:_nl]
                     _loc = ""
                     if _spill_fn is not None:
@@ -2192,7 +2319,8 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                     _total = result.count("\n") + 1
                     emit({"event": "tool_progress", "key": "digest.cut",
                           "args": {"tool": name, "total": str(_full_len),
-                                   "shown": str(_shown), "lines": str(_total)}})
+                                   "first": "1", "shown": str(_shown),
+                                   "lines": str(_total)}})
                     result = (_verbatim + _kept
                               + f"\n...[CUT: lines 1-{_shown} of {_total} "
                                 f"({len(_kept)} of {_full_len} chars). The "
@@ -2201,6 +2329,19 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                                  f"{_loc}." if _loc else "")
                               + f" Or: {_range_hint(name)}. "
                                 "Never fill it in from memory.]")
+            if _partial and not _cut_here:
+                _argtxt = json.dumps(args, ensure_ascii=False, default=str)
+                for _k2, _r2 in _partial.items():
+                    if name not in _FILE_READERS and (
+                            str(_r2["path"]) in _argtxt or _k2 in _argtxt):
+                        _r2["consulted"] = True
+            _seen = _lines_seen(name, args, result)
+            if _seen:
+                _p, _a, _b, _n = _seen
+                _k = os.path.normpath(os.path.expanduser(str(_p)))
+                if _k in _partial or _cut_here:
+                    _r = _partial.setdefault(_k, {"path": _p, "total": _n, "seen": set()})
+                    _r["seen"].update(range(_a, _b + 1))
             dur = round(time.time() - t0, 2)
             _firma = f"{name}:{json.dumps(args, sort_keys=True, default=str)[:600]}"
             _raw = result[:600]

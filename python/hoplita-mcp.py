@@ -2913,7 +2913,24 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
     _count_tokens(data.get("model") or model, usage, sent=model)
     return {"message": choice.get("message", {}) or {},
             "usage": usage,
-            "finish_reason": choice.get("finish_reason", "") or ""}
+            "finish_reason": choice.get("finish_reason", "") or "",
+            "window": _window_known(base_url, api_key, model)}
+
+
+_WINDOW_SEEN = {}
+
+
+def _window_known(base_url, api_key, model):
+    key = f"{base_url}|{model}"
+    hit = _WINDOW_SEEN.get(key)
+    if hit and time.time() - hit[1] < 60:
+        return hit[0]
+    try:
+        n = int(agent_context_limit(base_url, api_key or "", model).get("limit", 0) or 0)
+    except Exception:
+        n = 0
+    _WINDOW_SEEN[key] = (n, time.time())
+    return n
 
 
 def _estimate_prompt_tokens(messages, tools=None):
@@ -3881,7 +3898,15 @@ def tool_read_file(path):
         p = os.path.expanduser(path)
         with open(p, "r", encoding="utf-8", errors="replace") as f:
             c = f.read()
-        return {"result": c[:100000], "size": os.path.getsize(p)}
+        if len(c) <= 100000:
+            return {"result": c, "size": os.path.getsize(p)}
+        head = c[:100000]
+        head = head[:head.rfind("\n") + 1] or head
+        shown, total = head.count("\n"), len(c.splitlines())
+        return {"result": head, "size": os.path.getsize(p),
+                "cut": f"lines 1-{shown} of {total}. The rest EXISTS and is not here.",
+                "next": f"code_read_range(path={json.dumps(path)}, start_line={shown + 1}, "
+                        f"end_line={min(total, shown + 2000)})"}
     except Exception as e:
         _hit = _path_is_a_note(path)
         if _hit:
@@ -7577,6 +7602,11 @@ def _note_window_chars():
         cap = int(CONFIG.getint("AGENTIC", "tool_result_max_chars", fallback=8000)) if CONFIG else 8000
     except Exception:
         cap = 8000
+    try:
+        import fed_agent
+        cap = max(cap, fed_agent.line_cap_for_tool())
+    except Exception:
+        pass
     return max(1000, cap - 600)
 
 
