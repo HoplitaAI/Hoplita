@@ -842,7 +842,7 @@ def unwrap_call_envelope(name, arguments):
     return arguments
 
 
-def _execute_tool(name, arguments):
+def _execute_tool(name, arguments, consented=False):
     if _on_tool_used is not None and name != "load_tools":
         try:
             _on_tool_used(name)
@@ -853,7 +853,7 @@ def _execute_tool(name, arguments):
         return json.dumps({"error": f"tool '{name}' does not exist. Do not guess "
                                     "names: use one from the catalogue."})
     arguments = unwrap_call_envelope(name, arguments)
-    if _consent is not None:
+    if _consent is not None and not consented:
         try:
             refusal = _consent(name, arguments)
         except Exception as e:
@@ -1443,6 +1443,13 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 return json.dumps(
                     {"error": f"🛡 FIREWALL: '{name}' is blocked"},
                     ensure_ascii=False)
+            if _consent is not None:
+                try:
+                    _ref = _consent(name, args)
+                except Exception as e:
+                    _ref = {"error": f"the person's consent could not be asked: {e}"}
+                if _ref:
+                    return json.dumps(_ref, ensure_ascii=False)
             cid = call_id or f"verify_{verify_runs}"
             emit({"event": "client_tool_call", "call_id": cid,
                   "tool": name, "args": args})
@@ -2169,6 +2176,23 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                                  "content": result})
                 _sterile_tools += 1
                 continue
+            _refusal = None
+            if _consent is not None:
+                try:
+                    _refusal = _consent(name, args)
+                except Exception as e:
+                    _refusal = {"error": f"the person's consent could not be asked: {e}"}
+            if _refusal:
+                result = json.dumps(_refusal, ensure_ascii=False)
+                emit({"event": "tool_result", "tool": name, "delegated": False,
+                      "result_preview": result, "duration_s": 0.0})
+                tool_trace.append({"tool": name, "args": args,
+                                   "result": result})
+                messages.append({"role": "tool",
+                                 "tool_call_id": tc.get("id", name),
+                                 "content": result})
+                _sterile_tools += 1
+                continue
             if delegated:
                 emit({"event": "client_tool_call", "call_id": call_id,
                       "tool": name, "args": args})
@@ -2200,7 +2224,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 _tool_emit.messages = messages
                 _tool_emit.line_cap = line_cap(_window)
                 try:
-                    result = _execute_tool(name, args)
+                    result = _execute_tool(name, args, consented=True)
                 finally:
                     _tool_emit.fn = None
                     _tool_emit.tail = []
