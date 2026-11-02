@@ -243,8 +243,9 @@ of your own data.
 What signing cannot cover on its own is the first contact: the key you sign
 is the one the server hands you then. To close that, compare safety codes.
 Right-click the contact → **🔐 Verify safety code…** shows twelve groups of
-digits made from your key and the one you signed for them; they open the same
-window on their machine. Compare the numbers in person or on a call where you
+digits made from your key and the one you signed for them. On their own
+machine, they right-click YOU in their Contacts and do the same: both of you
+get the same number when nobody stands between you. Compare the numbers in person or on a call where you
 recognise each other. The same numbers mean nobody stands between you: press
 **They match: mark as verified**, and the contact reads *✓ verified* on every
 machine of yours (it is signed into your attestation, so the server cannot set

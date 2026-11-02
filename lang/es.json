@@ -2263,7 +2263,7 @@
   "fed.not_verified": "sin verificar",
   "fed.verify_menu": "Verificar código de seguridad…",
   "fed.verify_title": "Código de seguridad con {handle}",
-  "fed.verify_body": "Abrid esta misma ventana en la máquina de {handle} y comparad los números por otro canal: en persona, o en una llamada en la que os reconozcáis. Si son iguales, nadie está entre vosotros. Si no coinciden, no lo marques: puede haber alguien en medio.",
+  "fed.verify_body": "Pide a {handle} que abra, en su propia máquina, Contactos → clic derecho sobre TI → Verificar código de seguridad. Los dos obtenéis un número hecho con las claves de ambos. Comparadlos por otro canal: en persona, o en una llamada en la que os reconozcáis. Si es el mismo, nadie está entre vosotros. Si es distinto, puede haber alguien en medio: no lo marques.",
   "fed.verify_is_verified": "Marcaste este contacto como verificado.",
   "fed.verify_not_yet": "Aún sin verificar.",
   "fed.verify_mark": "Coinciden: marcar como verificado",

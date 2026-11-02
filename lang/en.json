@@ -2263,7 +2263,7 @@
   "fed.not_verified": "not verified",
   "fed.verify_menu": "Verify safety code…",
   "fed.verify_title": "Safety code with {handle}",
-  "fed.verify_body": "Open this same window on {handle}'s machine, with you, and compare the numbers over another channel: in person, or on a call where you recognise each other. If they are the same, nobody stands between you. If they differ, do not mark it: somebody may be in the middle.",
+  "fed.verify_body": "Ask {handle} to open, on their own machine, Contacts → right-click YOU → Verify safety code. You both get a number made from both your keys. Compare them over another channel: in person, or on a call where you recognise each other. The same number means nobody stands between you. A different one means somebody may be in the middle: do not mark it.",
   "fed.verify_is_verified": "You marked this contact as verified.",
   "fed.verify_not_yet": "Not verified yet.",
   "fed.verify_mark": "They match: mark as verified",
