@@ -2384,10 +2384,14 @@ class ChatAssistantWindow(QMainWindow):
         except Exception:
             pass
         self._switch_chat_tab(tid)
+        _kids = {(c.get("handle") or "").lower()
+                 for c in ((getattr(self, "_fed_cache", {}) or {}).get("children") or [])
+                 if isinstance(c, dict)}
+        key = ("fed.child_opened_chat" if self._is_local_child(peer)
+               else "fed.child_remote_opened_chat" if peer.lower() in _kids
+               else "fed.session_tab_ready")
         self._append_html_to_tab(tid, self._chat_frag(
-            t("fed.child_opened_chat" if self._is_local_child(peer)
-              else "fed.session_tab_ready", peer=peer),
-            "#94a3b8", t("label.system")))
+            t(key, peer=peer), "#94a3b8", t("label.system")))
 
     def _session_command(self, active, msg):
         _cmd = msg.strip().split()[0].lower()
