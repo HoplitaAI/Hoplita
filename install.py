@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 
 IS_WINDOWS = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"
@@ -517,6 +518,7 @@ WantedBy=default.target
                              f"{(r.stderr or r.stdout).strip()}")
         subprocess.run(["schtasks", "/Run", "/TN", task], capture_output=True)
         return f"logon task «{task}»", os.path.join(prefix, "hoplita-mcp.log")
+    _stop_detached_child(prefix)
     env = dict(os.environ, HOPLITA_HOME=prefix, PYTHONUNBUFFERED="1")
     with open(log, "ab") as fh:
         p = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=fh,
@@ -526,6 +528,37 @@ WantedBy=default.target
     warn("No service manager for this user: the child runs as a detached "
          "process and will not start again after a reboot.")
     return f"process {p.pid}", f"tail -f {log}"
+
+
+def _stop_detached_child(prefix, wait=15):
+    import signal
+    pidf = os.path.join(prefix, "hoplita-child.pid")
+    try:
+        pid = int(open(pidf).read().strip())
+    except Exception:
+        return
+    cmdline = f"/proc/{pid}/cmdline"
+    if os.path.exists("/proc"):
+        try:
+            if prefix not in open(cmdline, "rb").read().decode(errors="replace"):
+                return
+        except OSError:
+            return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except Exception:
+        return
+    end = time.time() + wait
+    while time.time() < end:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(0.3)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass
 
 
 def remove_child_service(prefix, name):
@@ -544,13 +577,7 @@ def remove_child_service(prefix, name):
         task = f"HOPLITA {svc}"
         subprocess.run(["schtasks", "/End", "/TN", task], capture_output=True)
         subprocess.run(["schtasks", "/Delete", "/F", "/TN", task], capture_output=True)
-    pidf = os.path.join(prefix, "hoplita-child.pid")
-    if os.path.exists(pidf):
-        try:
-            import signal
-            os.kill(int(open(pidf).read().strip()), signal.SIGTERM)
-        except Exception:
-            pass
+    _stop_detached_child(prefix)
     ok(f"Child service {svc} stopped and removed")
 
 
@@ -1265,7 +1292,10 @@ def main():
         ok("config.ini already exists (left alone)")
     elif os.path.exists(example):
         shutil.copy(example, cfg)
-        warn("Created config.ini from the example. Edit it ([API] and [MCP]).")
+        if args.child:
+            ok("Created config.ini; the starter kit fills it in when the child enrolls")
+        else:
+            warn("Created config.ini from the example. Edit it ([API] and [MCP]).")
     if os.path.exists(example):
         shutil.copy(example, os.path.join(prefix, "config.ini.example"))
 
@@ -1334,7 +1364,8 @@ def main():
     if args.child:
         name, port, how, logs = install_child(prefix, py, spawn)
         print("\n" + _c("32;1", f"Child {name} installed in {prefix}"))
-        print(f"It runs as {how} on 127.0.0.1:{port}, starts again at every boot, and")
+        boots = "" if how.startswith("process ") else " starts again at every boot,"
+        print(f"It runs as {how} on 127.0.0.1:{port},{boots} and")
         print("appears among your children once it enrolls.")
         print(f"Its log:   {logs}")
         print(f"Update:    {again(f'--child --prefix {prefix}')}")

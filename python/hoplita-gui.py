@@ -2059,6 +2059,7 @@ class ChatAssistantWindow(QMainWindow):
                 self._clear_push_mark()
             if pull and isinstance(res, dict) and res.get("merged", 0) > 0:
                 self.refresh_all_views()
+                self._reopen_pinned()
                 if manual:
                     self.add_message(t("fed.sync_merged", n=res['merged'],
                                        v=res.get('version', '?')), "system")
@@ -2756,14 +2757,9 @@ class ChatAssistantWindow(QMainWindow):
         h = (peer or "").split(":", 1)[-1].strip().lower()
         if not h:
             return False
-        for ch in (cache.get("children") or []):
-            _hd = ch.get("handle") if isinstance(ch, dict) else str(ch)
-            if (_hd or "").strip().lower() == h:
-                return True
-        for c in (cache.get("contacts") or []):
-            if isinstance(c, dict) and (c.get("handle") or "").strip().lower() == h:
-                return bool(c.get("local"))
-        return False
+        return any(isinstance(c, dict) and c.get("local")
+                   and (c.get("handle") or "").strip().lower() == h
+                   for c in (cache.get("contacts") or []))
 
     def _feed_me262_from_session(self, peer, direction, ev):
         panel = getattr(self, "agents_panel", None)
@@ -18473,9 +18469,11 @@ enabled = true
         combo.clear()
         combo.addItem(t("cron.target_local"), "local")
         cache = getattr(self, "_fed_cache", {}) or {}
+        _kids = {(ch.get("handle") or "") for ch in (cache.get("children") or [])
+                 if isinstance(ch, dict)}
         for c in (cache.get("contacts") or []):
             h = c.get("handle", "")
-            if not h:
+            if not h or (h in _kids and not c.get("local")):
                 continue
             if c.get("local"):
                 combo.addItem(t("cron.target_local_child", name=h), f"child:{h}")

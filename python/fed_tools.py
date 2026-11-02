@@ -3725,7 +3725,10 @@ def tool_fed_shared_overview():
     return {"ok": True, "folders": out["folders"], "projects": out["projects"],
             "public": _fresp.get("public") or [],
             "contacts": [{"handle": c.get("handle"),
-                          "status": c.get("status")} for c in contacts],
+                          "status": c.get("status")} for c in contacts]
+                        + [{"handle": p["name"], "status": "local", "local": True,
+                            "kind": "local_child"}
+                           for p in hoplita_children.load_all()],
             "children": [{"handle": c.get("handle"),
                           "status": c.get("status")} for c in children]}
 
@@ -4910,18 +4913,22 @@ FED_TOOLS = {
             a.get("base_url", ""), a.get("model_id", ""), a.get("api_key", ""),
             bool(a.get("search")), bool(a.get("launch")))},
     "fed_list_children": {
-        "desc": "List your children (headless agents you have enrolled) with "
-                "their online/offline presence. Use it to see which machines you "
-                "have running and which you can send tasks to.",
+        "desc": "List your FEDERATED children (headless agents you have "
+                "enrolled on other machines) with their online/offline presence. "
+                "Your LOCAL children (packs that run here as sub-agents) are not "
+                "here: child_list has them. Both kinds take work the same way, "
+                "by name: fed_ask_agent, or 'child:<name>' as a plan or cron target.",
         "fn": lambda a: tool_fed_list_children()},
     "fed_ask_agent": {
-        "desc": "Ask a REMOTE agent for help: a child of yours or a friend's "
-                "(contact's) agent. The task runs on the remote's MACHINE with "
-                "THEIR LLM and THEIR tools, and returns the result to you. Use it "
-                "to delegate work to a child (e.g. check a server) or to leverage "
-                "a friend's agent. If it's a friend, they may have to approve the "
-                "task depending on the trust they give you. Pass 'handle' (the "
-                "child/friend) and 'message' (the task).",
+        "desc": "Ask another agent for help: a child of yours or a friend's "
+                "(contact's) agent, and get the result back. A federated child or "
+                "a friend runs it on THEIR machine with THEIR model and tools; a "
+                "LOCAL child (child_list) runs it here, with the role, model and "
+                "tools of its pack. Use it to delegate work to a child (e.g. "
+                "check a server, review a file) or to leverage a friend's agent. "
+                "If it's a friend, they may have to approve the task depending on "
+                "the trust they give you. Pass 'handle' (the child's name or the "
+                "friend's handle) and 'message' (the task).",
         "fn": lambda a: tool_fed_ask_agent(a["handle"], a["message"],
                                            a.get("max_iterations"),
                                            a.get("device", ""),
