@@ -1,4 +1,5 @@
 
+import os
 import json
 import time
 import base64
@@ -7,7 +8,7 @@ from nacl.public import PrivateKey, PublicKey, SealedBox, Box
 from nacl.encoding import Base64Encoder
 
 
-ENVELOPE_VERSION = 1
+ENVELOPE_VERSION = 3
 
 
 
@@ -19,12 +20,15 @@ def generate_identity():
 
 
 
-def make_envelope(resource_type, payload, sender_pub_b64=None, meta=None):
+def make_envelope(resource_type, payload, *, frm, to, rid="", meta=None):
     return {
         "v": ENVELOPE_VERSION,
         "type": resource_type,
+        "from": frm,
+        "to": to,
+        "rid": rid or "",
+        "nonce": os.urandom(16).hex(),
         "ts": int(time.time()),
-        "sender_pub": sender_pub_b64,
         "meta": meta or {},
         "payload": payload,
     }

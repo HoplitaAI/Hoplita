@@ -11318,23 +11318,18 @@ def tool_read_my_docs(query=None, section=None, file=None):
                    "read_my_docs(section=<title>, file=<file>) to read one"}
 
 
-def _selfcfg_gate(ctx, change):
-    refusal = {"error": "changing the configuration needs the person's yes",
-               "change": change,
-               "hint": "tell the user the exact change so they can make it, "
-                       "or ask again from an interactive chat"}
+def _ask_person(ctx, event):
     if ctx is None or getattr(ctx, "unattended", False) \
+            or getattr(ctx, "remote", False) \
             or getattr(ctx, "ack_mode", "") != "stream":
-        refusal["why"] = "nobody can answer on this turn"
-        return refusal
+        return "nobody can answer on this turn"
     ack_id = uuid.uuid4().hex[:12]
     waiter = _queue.Queue(maxsize=1)
     with _PLAN_ACKS_LOCK:
         _PLAN_ACKS[ack_id] = {"q": waiter, "subtasks": [], "mode": ctx.ack_mode,
-                              "kind": "config"}
+                              "kind": event.get("event", "")}
     try:
-        ctx.emit(dict({"event": "config_consent", "ack_id": ack_id,
-                       "turn_id": ctx.turn_id}, **change))
+        ctx.emit(dict(event, ack_id=ack_id, turn_id=ctx.turn_id))
         wait_s = (CONFIG.getint("CHAT", "plan_ack_timeout",
                                 fallback=_PLAN_ACK_TIMEOUT_S)
                   if CONFIG else _PLAN_ACK_TIMEOUT_S)
@@ -11342,8 +11337,7 @@ def _selfcfg_gate(ctx, change):
         answer = None
         while time.time() < deadline:
             if ctx.cancel():
-                refusal["why"] = "the turn was cancelled while asking"
-                return refusal
+                return "the turn was cancelled while asking"
             try:
                 answer = waiter.get(timeout=1.0)
                 break
@@ -11353,12 +11347,42 @@ def _selfcfg_gate(ctx, change):
         with _PLAN_ACKS_LOCK:
             _PLAN_ACKS.pop(ack_id, None)
     if answer is None:
-        refusal["why"] = "the question timed out"
-        return refusal
-    if (answer.get("decision") or "") == "run":
+        return "the question timed out"
+    return None if (answer.get("decision") or "") == "run" else "the person said no"
+
+
+def _selfcfg_gate(ctx, change):
+    why = _ask_person(ctx, dict({"event": "config_consent"}, **change))
+    if why is None:
         return None
-    refusal["why"] = "the person said no"
-    return refusal
+    return {"error": "changing the configuration needs the person's yes",
+            "change": change, "why": why,
+            "hint": "tell the user the exact change so they can make it, "
+                    "or ask again from an interactive chat"}
+
+
+FED_CONSENT_TOOLS = frozenset((
+    "fed_share", "fed_share_note", "fed_share_skill", "fed_share_folder",
+    "fed_share_project", "fed_share_code", "fed_share_appointment",
+    "fed_publish_folder", "fed_subscribe_folder",
+    "fed_accept_folder", "fed_accept_project", "fed_accept_code",
+    "fed_accept_note", "fed_accept_skill", "fed_accept_appointment",
+    "fed_add_contact", "fed_accept_contact", "fed_set_permissions",
+    "fed_spawn_child", "fed_delete_shared_folder", "fed_delete_shared_project",
+))
+
+
+def _fed_consent(name, args):
+    if name not in FED_CONSENT_TOOLS:
+        return None
+    why = _ask_person(_selfcfg_ctx(), {"event": "share_consent", "tool": name,
+                                       "args": args if isinstance(args, dict) else {}})
+    if why is None:
+        return None
+    return {"error": "sharing, accepting or changing who may do what needs the "
+                     "person's click", "tool": name, "why": why,
+            "hint": "tell the user what you meant to do: they can do it from "
+                    "the window, or answer the question in an interactive chat"}
 
 
 def _detach_external_mcp(name):
@@ -16398,6 +16422,7 @@ if __name__ == "__main__":
                                             model=_mo, max_tokens=max_tokens)
             _side_chat.label = _background_model_name
             fed_agent.configure_side_chat(_side_chat)
+            fed_agent.configure_consent(_fed_consent)
             if CONFIG.getboolean("AGENTIC", "defer_tool_schemas", fallback=True):
                 _load_tool_uses()
                 fed_agent.configure_deferred(hot=hot_tools,

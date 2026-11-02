@@ -78,7 +78,7 @@ def _api(server_url):
     return server_url.rstrip("/") + "/api/fed"
 
 
-PROTO = 3
+PROTO = 4
 CAPS = ("live", "sync_parts")
 
 
@@ -87,6 +87,22 @@ def _proto_headers(token=None):
     if token:
         headers["Authorization"] = f"Token {token}"
     return headers
+
+
+SERVER_TOO_OLD = "server_too_old"
+
+
+def _server_proto_ok(r):
+    try:
+        theirs = int(r.headers.get("X-Hoplita-Proto") or 0)
+    except (TypeError, ValueError):
+        theirs = 0
+    if theirs < PROTO:
+        raise FedServerError(
+            f"The federation server speaks protocol {theirs or 'unknown'}, "
+            f"older than this HOPLITA's {PROTO}: it has to be updated before "
+            f"this machine talks to it.",
+            data={"error": SERVER_TOO_OLD, "server_proto": theirs, "proto": PROTO})
 
 
 def _post(server_url, path, payload, token=None, timeout=15):
@@ -98,6 +114,7 @@ def _post(server_url, path, payload, token=None, timeout=15):
     except requests.exceptions.RequestException as e:
         raise FedServerError(f"Could not connect to server: {e}",
                              data={"error": "offline"})
+    _server_proto_ok(r)
     if r.status_code not in (200, 201):
         _raise_from(r)
     return r.json()
@@ -111,6 +128,7 @@ def _get(server_url, path, token=None, timeout=15):
     except requests.exceptions.RequestException as e:
         raise FedServerError(f"Could not connect to server: {e}",
                              data={"error": "offline"})
+    _server_proto_ok(r)
     if r.status_code not in (200, 201):
         _raise_from(r)
     return r.json()
@@ -317,6 +335,20 @@ class FedWS:
                     time.sleep(_jittered(backoff)); backoff = min(backoff * 2, 30)
                     continue
                 _hello = first.get("data") or {}
+                if int(_hello.get("proto") or 0) < PROTO:
+                    self._set_state(SERVER_TOO_OLD,
+                                    f"the server speaks protocol "
+                                    f"{_hello.get('proto') or 'unknown'}, older "
+                                    f"than this HOPLITA's {PROTO}")
+                    self.authenticated = False
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    with self._lock:
+                        self._ws = None
+                    time.sleep(_jittered(backoff)); backoff = min(backoff * 2, 30)
+                    continue
                 self.server = {k: _hello[k] for k in
                                ("proto", "min_proto", "caps", "live_max_bytes")
                                if k in _hello}

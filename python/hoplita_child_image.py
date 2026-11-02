@@ -104,12 +104,26 @@ def stage(dst, code=None):
     return ""
 
 
+LABEL = "hoplita.build"
+
+
+def _this_build():
+    try:
+        import hoplita_version
+        return hoplita_version.BUILD
+    except Exception:
+        return ""
+
+
 def image_exists(rt):
     try:
-        return subprocess.run([rt, "image", "inspect", IMAGE],
-                              capture_output=True, timeout=30).returncode == 0
+        r = subprocess.run([rt, "image", "inspect", "--format",
+                            "{{index .Config.Labels \"" + LABEL + "\"}}", IMAGE],
+                           capture_output=True, text=True, timeout=30,
+                           **__import__("hoplita_paths").no_console())
     except Exception:
         return False
+    return r.returncode == 0 and (r.stdout or "").strip() == _this_build()
 
 
 def build(rt=None, code=None, timeout=1800):
@@ -122,8 +136,10 @@ def build(rt=None, code=None, timeout=1800):
         if err:
             return False, err
         try:
-            r = subprocess.run([rt, "build", "-t", IMAGE, tmp],
-                               capture_output=True, text=True, timeout=timeout)
+            r = subprocess.run([rt, "build", "-t", IMAGE,
+                                "--label", f"{LABEL}={_this_build()}", tmp],
+                               capture_output=True, text=True, timeout=timeout,
+                               **__import__("hoplita_paths").no_console())
         except subprocess.TimeoutExpired:
             return False, f"The image build took over {timeout} s and was stopped."
         out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
@@ -155,7 +171,8 @@ def launch(handle, server_url, token, rt=None):
         built = True
     try:
         r = subprocess.run(run_args(rt, handle, server_url, token),
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=120,
+                           **__import__("hoplita_paths").no_console())
     except subprocess.TimeoutExpired:
         return {"error": f"{rt} run did not answer in 120 s."}
     if r.returncode != 0:

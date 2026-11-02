@@ -6,6 +6,7 @@ import sys as _sys
 import time as _time
 
 import hoplita_crypto as crypto
+import fed_inbound as inbound
 import hoplita_federation as fed
 import fed_sync as fs
 import fed_adapters as fa
@@ -190,7 +191,6 @@ def _code_join(parts_b64, out_path):
 
 def _code_send(handle, etype, cat, branch, base, tip, bundle_path):
     store, server_url, token = _require_session()
-    my_pub = store.data.get("public_key_b64")
     recipient_pub, err = _trusted_pub(server_url, token, handle)
     if err:
         raise RuntimeError(err)
@@ -201,8 +201,7 @@ def _code_send(handle, etype, cat, branch, base, tip, bundle_path):
         payload = {"project": cat, "branch": branch, "base": base or "",
                    "tip": tip, "xfer": xfer, "part": i,
                    "parts": len(chunks), "data": chunk}
-        envelope = crypto.make_envelope(etype, payload, sender_pub_b64=my_pub)
-        blob = _seal(_store(), recipient_pub, envelope)
+        blob = inbound.seal(handle, recipient_pub, etype, payload, rid=cat)
         try:
             r = _with_relogin(lambda b=blob: fed.server_send_envelope(
                 server_url, token, handle, etype, b, {}))
@@ -220,34 +219,45 @@ def _code_send(handle, etype, cat, branch, base, tip, bundle_path):
 
 def _code_send_one(handle, etype, payload):
     store, server_url, token = _require_session()
-    my_pub = store.data.get("public_key_b64")
     recipient_pub, err = _trusted_pub(server_url, token, handle)
     if err:
         raise RuntimeError(err)
-    env = crypto.make_envelope(etype, payload, sender_pub_b64=my_pub)
-    blob = _seal(_store(), recipient_pub, env)
+    blob = inbound.seal(handle, recipient_pub, etype, payload,
+                        rid=payload.get("project", ""))
     return _with_relogin(lambda: fed.server_send_envelope(
         server_url, token, handle, etype, blob, {}))
 
 
-def _code_fetch_type(etype, ack_ids=None):
+def _code_fetch_type(etype, ack_ids=None, refused=None):
     store, server_url, token = _require_session()
     if ack_ids:
-        fed.server_ack_envelopes(server_url, token, ack_ids)
+        inbound.ack(ack_ids)
         return []
     resp = fed.server_fetch_inbox_types(server_url, token, [etype], peek=True)
-    my_priv = store.data.get("private_key_b64")
-    out = []
-    for env in resp.get("envelopes", []):
-        try:
-            dec = _unsealed(env)
-            p = dec.get("payload", {})
-        except Exception:
-            continue
-        sender = (env.get("sender") or env.get("from")
-                  or dec.get("sender_handle") or "?")
-        out.append((env.get("id"), sender, p))
-    return out
+    taken, dropped, _w = inbound.open_batch(resp.get("envelopes", []), [etype],
+                                            refused=refused)
+    inbound.ack(dropped)
+    return [(o.id, o.sender, o.payload if isinstance(o.payload, dict) else {})
+            for o in taken]
+
+
+@inbound.rule("code_offer", "code_offer_ok", "code_invite")
+def _code_offer_rule(o):
+    p = o.payload if isinstance(o.payload, dict) else {}
+    return inbound.TAKE if p.get("project") and o.rid == p.get("project") \
+        else inbound.DROP
+
+
+@inbound.rule("code_pack")
+def _code_pack_rule(o):
+    p = o.payload if isinstance(o.payload, dict) else {}
+    cat = p.get("project") or ""
+    if not cat or o.rid != cat:
+        return inbound.DROP
+    awaited = _code_meta(f"code_await:{cat}") or ""
+    if awaited:
+        return inbound.TAKE if o.sender == awaited else inbound.DROP
+    return inbound.TAKE if o.sender in _code_peers(cat) else inbound.DROP
 
 
 def _code_xfers(rows):
@@ -832,23 +842,21 @@ def tool_fed_code_pull():
 
 def _code_pull_once():
     served = _code_serve_offers()
+    refused = []
     try:
-        rows = _code_fetch_type("code_pack")
+        rows = _code_fetch_type("code_pack", refused=refused)
     except Exception as e:
         return {"error": str(e)}
     applied, left = [], 0
+    for _o, _why in refused:
+        _cat = (_o.payload or {}).get("project", "") if isinstance(_o.payload, dict) else ""
+        if (_cat, _o.sender) not in {(a["project"], a["from"]) for a in applied}:
+            applied.append({"project": _cat, "from": _o.sender,
+                            "dropped": "not a peer of this project"})
     for x in _code_xfers(rows).values():
         cat = x["project"]
         path = _code_meta(f"code_path:{cat}") or ""
         _awaited = _code_meta(f"code_await:{cat}")
-        if _awaited and x["sender"] != _awaited:
-            applied.append({"project": cat, "from": x["sender"],
-                            "dropped": f"awaiting this project from {_awaited}"})
-            try:
-                _code_fetch_type("code_pack", ack_ids=x["ids"])
-            except Exception:
-                pass
-            continue
         if path and _awaited \
                 and not os.path.isdir(os.path.join(path, ".git")):
             import tempfile as _tmpf
@@ -1377,52 +1385,35 @@ def inbound_contact_pub(server_url, token, handle):
     return srv_pub
 
 
-def _seal(st, recipient_pub, envelope):
-    return crypto.box_for(st.data.get("private_key_b64"), recipient_pub, envelope)
-
-
-def _open_from(st, server_url, token, env, keys=None):
-    sender = env.get("sender") or ""
-    keys = {} if keys is None else keys
-    if sender not in keys:
-        if sender and sender == st.data.get("handle"):
-            keys[sender] = st.data.get("public_key_b64")
-        else:
-            try:
-                keys[sender] = inbound_contact_pub(server_url, token, sender)
-            except Exception as e:
-                print(f"[FED] envelope {env.get('id')} from {sender!r} not opened: {e}",
-                      file=_sys.stderr)
-                keys[sender] = None
-    pub = keys.get(sender)
-    if not pub:
-        return sender, None
-    try:
-        dec = crypto.unbox(st.data.get("private_key_b64"), pub, env.get("ciphertext") or "")
-    except Exception:
-        print(f"[FED] envelope {env.get('id')} does not open with {sender!r}'s key: "
-              f"not theirs", file=_sys.stderr)
-        return sender, None
-    rtype = env.get("resource_type")
-    if rtype and dec.get("type") and dec.get("type") != rtype:
-        return sender, None
-    return sender, dec
-
-
 _OPEN_KEYS = {}
 _OPEN_KEYS_TTL = 30
 
 
-def _unsealed(env):
-    st, server_url, token = _require_session()
+def _inbound_identity():
+    st = _store()
+    d = st.data
+    return d.get("handle") or "", d.get("private_key_b64"), d.get("public_key_b64")
+
+
+def _inbound_key_for(handle, fresh=False):
     now = _time.time()
-    keys = {h: p for h, (t, p) in list(_OPEN_KEYS.items()) if now - t < _OPEN_KEYS_TTL}
-    sender, dec = _open_from(st, server_url, token, env, keys)
-    if sender not in _OPEN_KEYS or now - _OPEN_KEYS[sender][0] >= _OPEN_KEYS_TTL:
-        _OPEN_KEYS[sender] = (now, keys.get(sender))
-    if dec is None:
-        raise ValueError(f"not shown to come from {sender!r}")
-    return dec
+    _st, server_url, token = _require_session()
+    key = (_st.data.get("handle") or "", handle)
+    got = _OPEN_KEYS.get(key)
+    if got and not fresh and now - got[0] < _OPEN_KEYS_TTL:
+        return got[1]
+    pub = inbound_contact_pub(server_url, token, handle)
+    _OPEN_KEYS[key] = (now, pub)
+    return pub
+
+
+def _inbound_ack(ids):
+    _st, server_url, token = _require_session()
+    fed.server_ack_envelopes(server_url, token, ids)
+
+
+inbound.configure(_inbound_identity, _inbound_key_for, lambda: _sql(),
+                  _inbound_ack)
 
 
 def tool_fed_register(handle, email, server_url, invite=""):
@@ -1598,6 +1589,10 @@ def _ws_state_block():
         s["consequence"] = ("the server no longer serves this version of "
                             "HOPLITA: nothing federated works until it is "
                             "updated (install.py --update)")
+    elif s.get("phase") == fed.SERVER_TOO_OLD:
+        s["consequence"] = ("the federation server runs an older protocol than "
+                            "this HOPLITA and is not spoken to: nothing "
+                            "federated works until the server is updated")
     elif not s.get("up") and s.get("phase") not in ("idle",):
         s["consequence"] = ("your contacts see YOU offline and pushes do not "
                             "arrive; everything else works over REST")
@@ -2023,7 +2018,17 @@ def tool_fed_enroll_child(server_url, spawn_token, handle):
 
 
 
+SHAREABLE_TYPES = ("note", "skill")
+
+
 def tool_fed_share(handle, resource_type, payload):
+    if resource_type not in SHAREABLE_TYPES:
+        return {"error": f"'{resource_type}' is not something to share by hand: "
+                         f"only {', '.join(SHAREABLE_TYPES)}."}
+    return _send_resource(handle, resource_type, payload)
+
+
+def _send_resource(handle, resource_type, payload, rid=""):
     try:
         store, server_url, token = _require_session()
     except Exception as e:
@@ -2032,11 +2037,8 @@ def tool_fed_share(handle, resource_type, payload):
     recipient_pub, kerr = _trusted_pub(server_url, token, handle)
     if kerr:
         return {"error": kerr}
-
-    my_pub = store.data.get("public_key_b64")
-    envelope = crypto.make_envelope(resource_type, payload, sender_pub_b64=my_pub)
     try:
-        blob = _seal(_store(), recipient_pub, envelope)
+        blob = inbound.seal(handle, recipient_pub, resource_type, payload, rid=rid)
     except Exception as e:
         return {"error": f"Encryption failed: {e}"}
 
@@ -2076,42 +2078,25 @@ def tool_fed_inbox(resource_type=None):
     except fed.FedServerError as e:
         return {"error": f"Could not fetch the inbox: {e}"}
 
-    envelopes = resp.get("envelopes", [])
-    items = []
-    errors = []
-    for env in envelopes:
-        rtype = env.get("resource_type")
-        if resource_type and rtype != resource_type:
-            continue
-        try:
-            decrypted = _unsealed(env)
-            items.append({
-                "from": env.get("sender"),
-                "resource_type": rtype,
-                "payload": decrypted.get("payload"),
-                "envelope_id": env.get("id"),
-            })
-        except Exception as e:
-            errors.append({"envelope_id": env.get("id"), "error": str(e)})
-
-    result = {
+    want = [resource_type] if resource_type else ["note"]
+    taken, dropped, _w = inbound.open_batch(resp.get("envelopes", []), want)
+    inbound.ack(dropped)
+    items = [{"from": o.sender, "resource_type": o.type, "payload": o.payload,
+              "envelope_id": o.id} for o in taken]
+    return {
         "ok": True,
         "count": len(items),
         "items": items,
         "message": (f"{len(items)} resource(s) received." if items
                     else "Nothing new in your inbox."),
     }
-    if errors:
-        result["decrypt_errors"] = errors
-    return result
 
 
 def _consume_envelope(envelope_id):
     if not envelope_id:
         return False
     try:
-        _store_, server_url, token = _require_session()
-        fed.server_ack_envelopes(server_url, token, [envelope_id])
+        inbound.ack([envelope_id])
         return True
     except Exception:
         return False
@@ -2222,6 +2207,17 @@ def tool_fed_accept_note(envelope_index=0):
 SHARED_SKILLS_CATEGORY = "shared-skills"
 SKILLS_MARK_TYPE = "folder.skills"
 CHILD_PACK_TYPE = "child.pack"
+
+
+@inbound.rule("note", "skill", SKILLS_MARK_TYPE)
+def _offered_rule(o):
+    return inbound.TAKE if isinstance(o.payload, dict) else inbound.DROP
+
+
+@inbound.rule(CHILD_PACK_TYPE)
+def _child_pack_rule(o):
+    owner = my_owner()
+    return inbound.TAKE if owner and o.sender == owner else inbound.DROP
 _MY_PACK_KEY = "my_pack"
 
 
@@ -2240,9 +2236,8 @@ def tool_fed_share_appointment(handle, title, date, description="", urgency="Nor
         "description": description,
         "urgency": urgency,
     }
-    env = crypto.make_envelope("calendar_event", payload, sender_pub_b64=my_pub)
     try:
-        blob = _seal(_store(), peer_pub, env)
+        blob = inbound.seal(handle, peer_pub, "calendar_event", payload)
         _with_relogin(lambda: fed.server_send_envelope(
             server_url, _store().data["token"], handle, "calendar_event", blob, {}))
     except Exception as e:
@@ -2269,23 +2264,20 @@ def tool_fed_list_incoming_appointments():
             server_url, _store().data["token"], ["calendar_event"], peek=True))
     except fed.FedServerError as e:
         return {"error": f"Could not query the inbox: {e}"}
+    taken, dropped, _w = inbound.open_batch(resp.get("envelopes", []),
+                                            ["calendar_event"])
+    inbound.ack(dropped)
     incoming = []
-    for env in resp.get("envelopes", []):
-        if env.get("resource_type") != "calendar_event":
-            continue
-        try:
-            dec = _unsealed(env)
-            p = dec.get("payload", {})
-            incoming.append({
-                "from": env.get("sender", "?"),
-                "title": p.get("title", "(untitled)"),
-                "date": p.get("date", ""),
-                "description": p.get("description", ""),
-                "urgency": p.get("urgency", "Normal"),
-                "envelope_id": env.get("id"),
-            })
-        except Exception:
-            continue
+    for o in taken:
+        p = o.payload if isinstance(o.payload, dict) else {}
+        incoming.append({
+            "from": o.sender,
+            "title": p.get("title", "(untitled)"),
+            "date": p.get("date", ""),
+            "description": p.get("description", ""),
+            "urgency": p.get("urgency", "Normal"),
+            "envelope_id": o.id,
+        })
     return {
         "ok": True,
         "count": len(incoming),
@@ -2305,23 +2297,21 @@ def tool_fed_list_appointment_bounces():
         resp = fed.server_fetch_inbox_types(server_url, token, ["cita_denied"], peek=True)
     except fed.FedServerError as e:
         return {"error": str(e)}
-    out, acked = [], []
-    for env in resp.get("envelopes", []):
-        if env.get("resource_type") != "cita_denied":
-            continue
-        try:
-            p = _unsealed(env).get("payload", {})
-        except Exception:
-            acked.append(env.get("id")); continue
-        out.append({"from": env.get("sender", "?"),
-                    "reason": p.get("reason", "you don't have permission")})
-        acked.append(env.get("id"))
-    if acked:
-        try:
-            fed.server_ack_envelopes(server_url, token, acked)
-        except fed.FedServerError:
-            pass
+    taken, dropped, _w = inbound.open_batch(resp.get("envelopes", []), ["cita_denied"])
+    out = [{"from": o.sender,
+            "reason": (o.payload or {}).get("reason", "you don't have permission")}
+           for o in taken]
+    try:
+        inbound.ack(dropped + [o.id for o in taken])
+    except fed.FedServerError:
+        pass
     return {"ok": True, "count": len(out), "bounces": out}
+
+
+@inbound.rule("calendar_event", "cita_denied")
+def _appointment_rule(o):
+    p = o.payload if isinstance(o.payload, dict) else None
+    return inbound.TAKE if p is not None else inbound.DROP
 
 
 def _auto_accept_appointments():
@@ -2351,11 +2341,12 @@ def _auto_accept_appointments():
                   for h, t in signed.items()}
     existing = {(a.get("date"), a.get("title", "").strip().lower()) for a in todo.get_appointments()}
     tombs = (todo.get_deleted_appointments() if hasattr(todo, "get_deleted_appointments") else {})
-    acked, added, denied = [], 0, 0
-    for env in envs:
-        sender = env.get("sender")
+    taken, acked, _w = inbound.open_batch(envs, ["calendar_event"])
+    added, denied = 0, 0
+    for o in taken:
+        sender = o.sender
         if sender not in contact_handles:
-            acked.append(env.get("id")); continue
+            acked.append(o.id); continue
         level = appt_level.get(sender, "no")
         if level == "review":
             continue
@@ -2363,28 +2354,28 @@ def _auto_accept_appointments():
             try:
                 spub, _kerr = _trusted_pub(server_url, token, sender)
                 if spub:
-                    b = _seal(_store(), spub, crypto.make_envelope(
-                        "cita_denied", {"reason": "you don't have permission"}, sender_pub_b64=my_pub))
+                    b = inbound.seal(sender, spub, "cita_denied",
+                                     {"reason": "you don't have permission"})
                     fed.server_send_envelope(server_url, token, sender, "cita_denied", b, {})
             except Exception:
                 pass
-            acked.append(env.get("id")); denied += 1; continue
+            acked.append(o.id); denied += 1; continue
         try:
-            p = _unsealed(env).get("payload", {})
+            p = o.payload if isinstance(o.payload, dict) else {}
             key = (p.get("date", ""), p.get("title", "").strip().lower())
             if f"{key[0]}|{key[1]}" in tombs:
-                acked.append(env.get("id")); continue
+                acked.append(o.id); continue
             if key in existing:
-                acked.append(env.get("id")); continue
+                acked.append(o.id); continue
             todo.add_appointment(p.get("date", ""), p.get("title", "(untitled)"),
                                  p.get("description", ""), rag_urls="",
                                  urgency=p.get("urgency", "Normal"))
-            existing.add(key); added += 1; acked.append(env.get("id"))
+            existing.add(key); added += 1; acked.append(o.id)
         except Exception:
             continue
     if acked:
         try:
-            fed.server_ack_envelopes(server_url, token, acked)
+            inbound.ack(acked)
         except fed.FedServerError:
             pass
     if added or denied:
@@ -2424,9 +2415,7 @@ def tool_fed_accept_appointment(title=None, from_handle=None):
         pass
     try:
         if apt.get("envelope_id"):
-            _with_relogin(lambda: fed.server_ack_envelopes(
-                _store().data["server_url"], _store().data["token"],
-                [apt["envelope_id"]]))
+            _with_relogin(lambda: inbound.ack([apt["envelope_id"]]))
     except Exception:
         pass
     return {
@@ -2819,9 +2808,17 @@ def tool_fed_accept_project(project_name=None, handle=None):
     }
 
 
+def _forget_pushed(kind, name, peer):
+    with _PUSHED_LOCK:
+        for k in [k for k in _PUSHED if k[:3] == (kind, name, peer)]:
+            _PUSHED.pop(k, None)
+
+
 def tool_fed_share_project(project_name, handle):
     if _is_local_only(project_name):
         return _local_only_refusal(project_name)
+    _forget_pushed("project", project_name, handle)
+    _forget_pushed("whiteboard", project_name, handle)
     todo = _todo()
     if todo is None:
         return {"error": "TODO/projects not available in this session."}
@@ -2881,6 +2878,7 @@ def tool_fed_share_project(project_name, handle):
 def tool_fed_share_folder(handle, folder_name):
     if _is_local_only(folder_name):
         return _local_only_refusal(folder_name)
+    _forget_pushed("folder", folder_name, handle)
     try:
         store, server_url, token = _require_session()
     except Exception as e:
@@ -2913,7 +2911,7 @@ def tool_fed_share_folder(handle, folder_name):
         pass
     if _skills_flag:
         try:
-            tool_fed_share(handle, SKILLS_MARK_TYPE, {"folder": folder_name})
+            _send_resource(handle, SKILLS_MARK_TYPE, {"folder": folder_name})
         except Exception as e:
             print(f"[FED] skills mark not sent for {folder_name!r}: {e}",
                   file=_sys.stderr)
@@ -3169,13 +3167,18 @@ def _granted_peers(st, server_url, token, name, kind):
         resp = fed.server_list_folders(server_url, token)
     except fed.FedServerError:
         return None, [], []
+    my_handle = st.data.get("handle")
+    id_for = _folder_id_for if kind == "folder" else _project_id_for
     rows = [f for f in resp.get("folders", [])
             if f.get("folder_name") == name
-            and f.get("kind", "folder") == kind]
+            and f.get("kind", "folder") == kind
+            and ((f.get("role") == "owner"
+                  and f.get("folder_id") == id_for(my_handle, name))
+                 or (f.get("role") != "owner" and f.get("status") == "accepted"
+                     and f.get("folder_id") == id_for(f.get("with"), name)))]
     if not rows:
         return None, [], []
     folder_id = rows[0].get("folder_id")
-    my_handle = st.data.get("handle")
     my_pub = st.data.get("public_key_b64")
     _priv, my_sign_pub = _signing_keys(st)
     public = resp.get("public", [])
@@ -3237,7 +3240,7 @@ def _granted_peers(st, server_url, token, name, kind):
     return folder_id, peers, errors
 
 
-def _allowed_senders(st, server_url, token, kind):
+def _share_links(st, server_url, token, kind):
     try:
         resp = fed.server_list_folders(server_url, token)
     except fed.FedServerError:
@@ -3249,28 +3252,88 @@ def _allowed_senders(st, server_url, token, kind):
     out = {}
     for row in resp.get("folders", []):
         name, ph, fid = row.get("folder_name"), row.get("with"), row.get("folder_id")
-        if (row.get("kind", "folder") != kind or row.get("status") != "accepted"
-                or not (name and ph and fid)):
+        if row.get("kind", "folder") != kind or not (name and ph and fid):
+            continue
+        owner = my_handle if row.get("role") == "owner" else ph
+        if fid != id_for(owner, name):
+            continue
+        link = out.setdefault(fid, {"name": name, "owner": owner,
+                                    "senders": set(), "pending": False})
+        if row.get("status") != "accepted":
+            if row.get("role") != "owner":
+                link["pending"] = True
             continue
         if row.get("role") == "owner":
-            if fid != id_for(my_handle, name) or row.get("readonly"):
+            if row.get("readonly"):
                 continue
             pub, kerr = _trusted_pub(server_url, token, ph)
             payload = None if kerr else _open_grant(
                 my_sign_pub, row.get("grant") or "", fid, peer=ph, owner=my_handle)
             if not payload or payload.get("peer_pub") != pub:
                 continue
-        else:
-            if fid != id_for(ph, name):
+        elif not row.get("readonly"):
+            payload = _open_grant(_peer_sign_pub(st, server_url, token, ph),
+                                  row.get("grant") or "", fid,
+                                  peer=my_handle, owner=ph)
+            if not payload or payload.get("peer_pub") != my_pub:
                 continue
-            if not row.get("readonly"):
-                payload = _open_grant(_peer_sign_pub(st, server_url, token, ph),
-                                      row.get("grant") or "", fid,
-                                      peer=my_handle, owner=ph)
-                if not payload or payload.get("peer_pub") != my_pub:
-                    continue
-        out.setdefault(name, set()).add(ph)
+        link["senders"].add(ph)
     return out
+
+
+_LINKS_CACHE = {}
+_LINKS_TTL = 10
+
+
+def _links_now(kind, fresh=False):
+    now = _time.time()
+    st, server_url, token = _require_session()
+    key = (st.data.get("handle") or "", kind)
+    got = _LINKS_CACHE.get(key)
+    if got and not fresh and now - got[0] < _LINKS_TTL:
+        return got[1]
+    links = _share_links(st, server_url, token, kind)
+    _LINKS_CACHE[key] = (now, links)
+    return links
+
+
+def _shared_item_rule(kind):
+    def judge(o, links):
+        p = o.payload if isinstance(o.payload, dict) else {}
+        link = links.get(o.rid)
+        if link is None or p.get("name") != link["name"]:
+            return inbound.DROP
+        if o.sender in link["senders"]:
+            return inbound.TAKE
+        if link["pending"] and o.sender == link["owner"]:
+            return inbound.WAIT
+        return inbound.DROP
+
+    def check(o):
+        verdict = judge(o, _links_now(kind))
+        if verdict == inbound.TAKE:
+            return verdict
+        return judge(o, _links_now(kind, fresh=True))
+    return check
+
+
+def _shared_dissolve_rule(kind):
+    def check(o):
+        p = o.payload if isinstance(o.payload, dict) else {}
+        id_for = _folder_id_for if kind == "folder" else _project_id_for
+        name = p.get("name", "")
+        if not name or o.rid != id_for(o.sender, name):
+            return inbound.DROP
+        return (inbound.TAKE
+                if _code_meta(f"share_origin:{kind}:{name}") == o.sender
+                else inbound.DROP)
+    return check
+
+
+inbound.rule("folder_note")(_shared_item_rule("folder"))
+inbound.rule("project_task", "project_board")(_shared_item_rule("project"))
+inbound.rule("folder_del")(_shared_dissolve_rule("folder"))
+inbound.rule("project_del")(_shared_dissolve_rule("project"))
 
 
 def _find_shared_folder(server_url, token, folder_name, require_accepted=False,
@@ -3315,7 +3378,7 @@ def push_child_pack(pack):
     body = {k: pack.get(k) for k in hoplita_children.FIELDS if k != "node"}
     body["rev"] = pack.get("rev", 1)
     try:
-        return tool_fed_share(node, CHILD_PACK_TYPE, body)
+        return _send_resource(node, CHILD_PACK_TYPE, body)
     except Exception as e:
         return {"error": str(e)}
 
@@ -3361,7 +3424,7 @@ def _collect_child_packs():
     ids = [i for i in acked if i]
     if ids:
         try:
-            fed.server_ack_envelopes(server_url, token, ids)
+            inbound.ack(ids)
         except Exception:
             pass
     return taken
@@ -3405,7 +3468,7 @@ def _collect_skills_marks():
     ids = [i for i in acked if i]
     if ids:
         try:
-            fed.server_ack_envelopes(server_url, token, ids)
+            inbound.ack(ids)
         except Exception:
             pass
     return applied
@@ -3433,35 +3496,29 @@ def _fed_push(kind, name, store):
                                               cfg["share"])
     if folder_id is None:
         return {"error": f"'{name}' is not shared as {kind}."}
-    my_pub = st.data.get("public_key_b64")
     if not peers:
         return {"error": "No member with a usable key AND a valid signed "
                          "grant — nothing sent.", "errors": errors}
     items = fa.push_shared(store, name, st.data.get("handle", ""))
     sigs = {it.get("uuid"): _item_sig(it) for it in items}
-    envs = {}
     sent = 0
     unchanged = 0
     for ph, ppub in peers:
         with _PUSHED_LOCK:
-            had = dict(_PUSHED.get((kind, name, ph)) or {})
+            had = dict(_PUSHED.get((kind, name, ph, ppub)) or {})
         for it in items:
             uid = it.get("uuid")
             if had.get(uid) == sigs[uid]:
                 unchanged += 1
                 continue
-            env = envs.get(uid)
-            if env is None:
-                env = envs[uid] = crypto.make_envelope(
-                    cfg["etype"], {"name": name, "item": it},
-                    sender_pub_b64=my_pub)
             try:
-                blob = _seal(_store(), ppub, env)
+                blob = inbound.seal(ph, ppub, cfg["etype"],
+                                    {"name": name, "item": it}, rid=folder_id)
                 fed.server_send_envelope(server_url, token, ph, cfg["etype"], blob,
                                          {"folder_id": folder_id, cfg["metakey"]: name})
                 sent += 1
                 with _PUSHED_LOCK:
-                    _PUSHED.setdefault((kind, name, ph), {})[uid] = sigs[uid]
+                    _PUSHED.setdefault((kind, name, ph, ppub), {})[uid] = sigs[uid]
             except Exception as e:
                 errors.append({"item": uid, "peer": ph, "error": str(e)})
     who = ", ".join(ph for ph, _ in peers)
@@ -3500,26 +3557,16 @@ def _fed_pull(kind, name, store):
         resp = fed.server_fetch_inbox_types(server_url, token, types, peek=True)
     except fed.FedServerError as e:
         return {"error": f"Could not fetch the inbox: {e}"}
-    all_env = resp.get("envelopes", [])
-    accepted = _accepted_names(server_url, token, cfg["share"])
-    known = _known_names(server_url, token, cfg["share"])
+    accepted = _accepted_names(cfg["share"])
     for _rn in ([name] if name else list(accepted)):
         if _rn and _rn in accepted:
             _fed_ensure_container(kind, _rn, store)
-    id_for = _folder_id_for if kind == "folder" else _project_id_for
-    acked, deleted = [], 0
+    taken, acked, _waiting = inbound.open_batch(resp.get("envelopes", []), types)
+    deleted = 0
 
-    for env in [e for e in all_env if e.get("resource_type") == del_type
-                and cfg.get("dissolve", True)]:
-        try:
-            p = _unsealed(env).get("payload", {})
-        except Exception:
-            continue
-        sender = env.get("sender", "")
-        rname = p.get("name", "")
-        acked.append(env.get("id"))
-        if id_for(sender, rname) != p.get("folder_id"):
-            continue
+    for o in [o for o in taken if o.type == del_type]:
+        rname = (o.payload or {}).get("name", "")
+        acked.append(o.id)
         try:
             if kind == "folder" and hasattr(store, "delete_category") and rname in store.get_categories():
                 store.delete_category(rname); deleted += 1
@@ -3528,29 +3575,18 @@ def _fed_pull(kind, name, store):
         except Exception:
             pass
 
-    by_name = {}
-    allowed = None
-    for env in [e for e in all_env if e.get("resource_type") == cfg["etype"]]:
-        try:
-            p = _unsealed(env).get("payload", {})
-        except Exception:
-            acked.append(env.get("id")); continue
+    by_name, said_by = {}, {}
+    for o in [o for o in taken if o.type == cfg["etype"]]:
+        p = o.payload if isinstance(o.payload, dict) else {}
         rname = p.get("name") or ""
         if name and rname != name:
             continue
-        if rname not in accepted:
-            if known is not None and rname not in known:
-                acked.append(env.get("id"))
-            continue
-        if allowed is None:
-            allowed = _allowed_senders(st, server_url, token, cfg["share"])
-        if env.get("sender") not in allowed.get(rname, ()):
-            print(f"[FED] {cfg['etype']} for {rname!r} from {env.get('sender')!r}, "
-                  f"who is not in it: not applied", file=_sys.stderr)
-            continue
-        acked.append(env.get("id"))
+        acked.append(o.id)
         it = p.get("item")
-        if it:
+        if isinstance(it, dict):
+            link = _links_now(cfg["share"]).get(o.rid) or {}
+            if o.sender != link.get("owner") and it.get("uuid"):
+                said_by[it["uuid"]] = o.sender
             by_name.setdefault(rname, []).append(it)
 
     applied = 0
@@ -3559,7 +3595,7 @@ def _fed_pull(kind, name, store):
                            title_key=cfg.get("title_key", "title"))
         applied += len(r.get("changed", []))
         for d in (r.get("details") or []):
-            who = d.get("editor") or ""
+            who = said_by.get(d.get("uuid")) or d.get("editor") or ""
             if not who or who == my_handle:
                 continue
             _k = cfg.get("act") or ("note" if kind == "folder" else "task")
@@ -3569,7 +3605,7 @@ def _fed_pull(kind, name, store):
 
     if acked:
         try:
-            fed.server_ack_envelopes(server_url, token, acked)
+            inbound.ack(acked)
         except fed.FedServerError:
             pass
     if applied or deleted:
@@ -3720,8 +3756,7 @@ def after_local_mutation(manager_name, method, args, kwargs, result):
             elif method == "delete_task":
                 try:
                     store = _store()
-                    for pn in _accepted_names(store.data["server_url"],
-                                              store.data["token"], "project"):
+                    for pn in _accepted_names("project"):
                         _autopush_schedule("project", pn)
                 except Exception:
                     pass
@@ -3846,8 +3881,7 @@ def tool_fed_delete_shared(kind, name):
             if kerr:
                 continue
             payload = {"kind": kind, "name": name, "folder_id": fid}
-            env = crypto.make_envelope(rtype, payload, sender_pub_b64=my_pub)
-            blob = _seal(_store(), pub, env)
+            blob = inbound.seal(m["handle"], pub, rtype, payload, rid=fid)
             fed.server_send_envelope(server_url, token, m["handle"], rtype,
                                      blob, {"folder_id": fid})
             notified += 1
@@ -3893,23 +3927,15 @@ def _unshare(kind, name, peer=None):
         return {"error": f"Could not unshare: {e}"}
     purged = 0
     try:
-        types = (["project_task", "project_tomb", "project_board"] if kind == "project"
-                 else ["folder_note", "folder_tomb"])
+        types = (["project_task", "project_board"] if kind == "project"
+                 else ["folder_note"])
         resp = fed.server_fetch_inbox_types(server_url, token, types,
                                             peek=True)
-        my_priv = store.data.get("private_key_b64")
-        ids = []
-        for env in resp.get("envelopes", []):
-            try:
-                dec = _unsealed(env)
-                p = dec.get("payload", {})
-            except Exception:
-                continue
-            res_name = p.get("name") or p.get("project") or p.get("folder") or ""
-            if res_name == name:
-                ids.append(env.get("id"))
+        _LINKS_CACHE.pop((store.data.get("handle") or "", kind), None)
+        taken, ids, _w = inbound.open_batch(resp.get("envelopes", []), types)
+        ids += [o.id for o in taken if (o.payload or {}).get("name") == name]
         if ids:
-            fed.server_ack_envelopes(server_url, token, ids)
+            inbound.ack(ids)
             purged = len(ids)
     except fed.FedServerError:
         pass
@@ -3928,23 +3954,12 @@ def tool_fed_unshare_project(project_name, peer=None):
     return _unshare("project", project_name, peer=peer)
 
 
-def _known_names(server_url, token, kind):
+def _accepted_names(kind):
     try:
-        folders = fed.server_list_folders(server_url, token).get("folders", [])
-    except fed.FedServerError:
-        return None
-    return {f.get("folder_name") for f in folders
-            if f.get("kind", "folder") == kind}
-
-
-def _accepted_names(server_url, token, kind):
-    try:
-        folders = fed.server_list_folders(server_url, token).get("folders", [])
-    except fed.FedServerError:
+        return {l["name"] for l in _links_now(kind, fresh=True).values()
+                if l["senders"]}
+    except Exception:
         return set()
-    return {f.get("folder_name") for f in folders
-            if f.get("status") == "accepted"
-            and f.get("kind", "folder") == kind}
 
 
 def tool_fed_folder_pull(folder_name=None):
@@ -4110,7 +4125,7 @@ def _sync_loop(interval):
                         if not name:
                             continue
                         try:
-                            if _has("folder_note", "folder_tomb", "folder_del"):
+                            if _has("folder_note", "folder_del"):
                                 tool_fed_folder_pull(name)
                         except Exception as e:
                             errs.append({"folder": name, "op": "notes_pull", "error": str(e)})
@@ -4119,7 +4134,7 @@ def _sync_loop(interval):
                         except Exception as e:
                             errs.append({"folder": name, "op": "notes_push", "error": str(e)})
                         try:
-                            if _has("project_task", "project_tomb", "project_del",
+                            if _has("project_task", "project_del",
                                     "project_board"):
                                 tool_fed_project_pull(name)
                         except Exception as e:
@@ -4247,18 +4262,24 @@ def _bridge_approver(peer, message, analyze, session_id=""):
             _PENDING_APPROVALS.pop(aid, None)
 
 
-def withdraw_approval(session_id):
+def withdraw_approval(session_id, peer):
     if not session_id:
         return False
     with _PENDING_LOCK:
         for aid, v in list(_PENDING_APPROVALS.items()):
-            if v.get("session_id") == session_id:
+            if v.get("session_id") == session_id and v.get("peer") == peer:
                 try:
                     v["queue"].put_nowait(None)
                 except Exception:
                     pass
                 return True
     return False
+
+
+def has_pending_approval(session_id, peer):
+    with _PENDING_LOCK:
+        return any(v.get("session_id") == session_id and v.get("peer") == peer
+                   for v in _PENDING_APPROVALS.values())
 
 
 def list_pending_approvals():
@@ -4497,9 +4518,11 @@ def _dispatch_session_envelope(env):
         return
     rtype = env.get("resource_type")
     if rtype == fed_session.T_STOP:
-        fed_session.handle_incoming_stop(env)
-        withdraw_approval((env.get("meta") or {}).get("session_id"))
-        _sender = env.get("sender", "")
+        r = fed_session.handle_incoming_stop(env)
+        if not r.get("verified"):
+            return
+        withdraw_approval(r.get("session_id"), r.get("sender"))
+        _sender = r.get("sender", "")
         if _sender:
             _push_inbound_session_event(
                 _sender, {"event": "session_closed", "by": "peer"})
@@ -4593,7 +4616,7 @@ def _ws_event(event, data):
     fed.invalidate_inbox()
     rtype = (data or {}).get("resource_type")
     if rtype not in ("calendar_event", "project_task", "folder_note",
-                     "project_tomb", "folder_tomb", "project_del", "folder_del",
+                     "project_del", "folder_del",
                      "project_board",
                      fed_session.T_EVENT, fed_session.T_CLIENT_TOOL_CALL,
                      fed_session.T_TURN, fed_session.T_STOP):
@@ -4602,10 +4625,10 @@ def _ws_event(event, data):
         _threading.Thread(target=_auto_accept_appointments, daemon=True,
                           name="fed-auto-appt").start()
         return
-    if rtype in ("project_task", "folder_note", "project_tomb", "folder_tomb",
+    if rtype in ("project_task", "folder_note",
                  "project_del", "folder_del", "project_board"):
         pull = (tool_fed_project_pull
-                if rtype in ("project_task", "project_tomb", "project_del",
+                if rtype in ("project_task", "project_del",
                              "project_board")
                 else tool_fed_folder_pull)
         _threading.Thread(target=lambda: pull(), daemon=True,
@@ -4629,9 +4652,7 @@ def _ws_event(event, data):
                   f"another device", file=_sys.stderr)
         if _pushed:
             try:
-                fed.server_ack_envelopes(
-                    store.data["server_url"], store.data["token"],
-                    [e.get("id") for e in _pushed if e.get("id")])
+                inbound.ack([e.get("id") for e in _pushed if e.get("id")])
             except Exception as _ae:
                 print(f"[FED-WS] ack failed: {_ae}", file=_sys.stderr)
         print(f"[FED-WS] push → fetched {len(_pushed)} session envelope(s) via REST",
@@ -4680,9 +4701,8 @@ def _session_loop(interval):
                         _envs = _mine_by_device(resp.get("envelopes", []))
                         if _envs:
                             try:
-                                fed.server_ack_envelopes(
-                                    server_url, token,
-                                    [e.get("id") for e in _envs if e.get("id")])
+                                inbound.ack([e.get("id") for e in _envs
+                                             if e.get("id")])
                             except Exception as _ae:
                                 print(f"[SESSION-LOOP] ack failed: {_ae}",
                                       file=_sys.stderr)
@@ -4699,10 +4719,10 @@ def _session_loop(interval):
                                 prefix and any(str(x).startswith(prefix)
                                                for x in _pending))
                         try:
-                            if _due_for("project_task", "project_tomb",
+                            if _due_for("project_task",
                                         "project_del", "project_board"):
                                 tool_fed_project_pull()
-                            if _due_for("folder_note", "folder_tomb",
+                            if _due_for("folder_note",
                                         "folder_del"):
                                 tool_fed_folder_pull()
                             if _due_for("calendar_event"):
@@ -5101,15 +5121,17 @@ FED_TOOLS = {
         "desc": "Share a resource with a federation contact, end-to-end "
                 "ENCRYPTED. The content is encrypted with the recipient's public "
                 "key: the server only sees a blob, never the content. Pass "
-                "'resource_type' (e.g. 'note') and 'payload' (the content as an "
-                "object).",
+                "'resource_type' ('note' or 'skill') and 'payload' (the content "
+                "as an object).",
         "fn": lambda a: tool_fed_share(a["handle"], a["resource_type"], a["payload"])},
     "fed_inbox": {
         "desc": "Collect the resources others have shared with you and decrypt "
                 "them with your private key. Optionally filter by type "
                 "(resource_type, e.g. 'note'). Returns the contents in clear "
                 "(only for you; they traveled encrypted).",
-        "fn": lambda a: tool_fed_inbox(a.get("resource_type"))},
+        "fn": lambda a: (tool_fed_inbox(a.get("resource_type"))
+                         if (a.get("resource_type") or "note") in SHAREABLE_TYPES
+                         else {"error": "only note or skill can be read here"})},
     "fed_set_permissions": {
         "desc": "Configure granular permissions over a contact for a resource "
                 "type. Typical example (calendar): give someone permission to add "
@@ -5561,8 +5583,8 @@ FED_TOOL_PARAMS = {
         "properties": {
             "handle": {"type": "string", "description": "The contact to share "
                        "with, e.g. 'alice@example.org'."},
-            "resource_type": {"type": "string", "description": "Resource type: "
-                              "'note', 'skill', 'project', etc."},
+            "resource_type": {"type": "string", "enum": ["note", "skill"],
+                              "description": "Resource type: 'note' or 'skill'."},
             "payload": {"type": "object", "description": "The content to share "
                         "as an object."},
         },
@@ -5884,6 +5906,7 @@ _SYNC_STORES = ("notes", "tasks", "appointments", "jobs", "credentials",
                 _ACTIVITY_STORE,
                 hoplita_children.STORE,
                 hs.TOMBSTONE_STORE,
+                inbound.NONCE_STORE,
                 "project_events",
                 "todo__blob", "notes__blob", "cred__blob", "cron__blob")
 
@@ -5955,6 +5978,13 @@ def _sync_fp(p):
 
 
 _SYNC_PUSHED_FP = "sync_pushed_fp"
+_SYNC_SNAP_TS = "sync_snap_ts"
+SNAPSHOT_TYPE = "sync.snapshot"
+
+
+@inbound.rule(SNAPSHOT_TYPE)
+def _snapshot_rule(o):
+    return inbound.DROP
 
 
 def _sync_row_stores():
@@ -6125,7 +6155,8 @@ def _fed_sync_push():
             "stores": _sync_row_stores()}
     pad = (-len(_json.dumps(snap, ensure_ascii=False))) % 65536
     snap["_pad"] = "0" * pad
-    sealed = _seal(_store(), my_pub, snap)
+    sealed = inbound.seal(st.data.get("handle") or "", my_pub, SNAPSHOT_TYPE, snap)
+    _pushed_at = _time.time()
     _t0 = _time.time()
     try:
         resp = fed.server_sync_push(server_url, token, sealed, base)
@@ -6145,6 +6176,7 @@ def _fed_sync_push():
         return {"error": f"Sync push failed: {e}"}
     sql.meta_set("sync_version", resp.get("version", base + 1))
     sql.meta_set(_SYNC_PUSHED_FP, f"{resp.get('version', base + 1)}:{_fp}")
+    sql.meta_set(_SYNC_SNAP_TS, str(int(_pushed_at)))
     try:
         _row_stores = set(_sync_row_stores())
         _sync_known_save(sql, [(s, p) for s in _row_stores for p in sql.load(s)
@@ -6221,17 +6253,19 @@ def _fed_sync_pull():
     if not blob:
         sql.meta_set(_SYNC_PUSHED_FP, "")
         return {"ok": True, "merged": 0, "message": "Nothing on the server yet."}
-    try:
-        snap = crypto.unbox(my_priv, st.data.get("public_key_b64"), blob)
-    except Exception:
-        try:
-            crypto.unseal(my_priv, blob)
-        except Exception:
-            return {"error": "decrypt_failed"}
+    o = inbound.open_own(blob)
+    if o is None or o.type != SNAPSHOT_TYPE or not isinstance(o.payload, dict):
         sql.meta_set("sync_version", str(version))
         return {"ok": True, "merged": 0, "unsigned_replaced": True,
                 "message": "The copy on the server was not sealed by this "
                            "identity: not merged; the next upload replaces it."}
+    if o.ts + inbound.FUTURE_SKEW_S < int(sql.meta_get(_SYNC_SNAP_TS) or 0):
+        print(f"[SYNC] the server handed back an older snapshot "
+              f"(sealed {o.ts}): not merged", file=_sys.stderr)
+        return {"ok": True, "merged": 0, "stale_refused": True,
+                "message": "The copy on the server is older than one this "
+                           "machine already has: not merged."}
+    snap = o.payload
     global _snap_merging
     _snap_merging = True
     local = {}
@@ -6306,6 +6340,8 @@ def _fed_sync_pull():
     finally:
         _snap_merging = False
     sql.meta_set("sync_version", version)
+    sql.meta_set(_SYNC_SNAP_TS, str(max(o.ts, int(sql.meta_get(_SYNC_SNAP_TS) or 0))))
+    inbound.forget_loaded()
     if merged and _get_reload is not None:
         try:
             _get_reload()

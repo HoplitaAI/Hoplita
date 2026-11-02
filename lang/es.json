@@ -2253,5 +2253,10 @@
   "wbc.commits_hint": "Del más reciente al primero. Cada uno enseña su diff; la explicación se dibuja solo cuando la pides.",
   "wbc.more_commits": "Más commits",
   "wbc.no_changes_now": "Ahora mismo no hay nada sin commit.",
-  "wbc.no_files": "Este commit no cambia ningún fichero."
+  "wbc.no_files": "Este commit no cambia ningún fichero.",
+  "fed.consent_title": "Federación: tu clic",
+  "fed.consent_head": "El agente quiere hacer esto con tu federación:",
+  "fed.consent_ask": "No se comparte, acepta ni cambia nada si no dices que sí.",
+  "fed.consent_yes": "Sí, hazlo",
+  "fed.consent_no": "No"
 }

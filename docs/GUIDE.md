@@ -966,12 +966,15 @@ what each may do (trust level and permissions) are signed by you into each
 contact's attestation; a contact planted in the server's database, or one
 raised there to «auto», is a stranger. Everything that travels — folder and
 project content, a folder's dissolution, code, notes, skills, a child's pack,
-appointments, session turns, your own snapshot — is sealed by its sender and
-opened only with the key you signed for that sender (your own, for your
-machines). What does not open with it is refused, and a snapshot you did not
-seal is not merged. A HOPLITA from before this scheme (federation protocol 3)
-cannot share with this one, and a server set to require it tells such a client
-in words to update ([FEDERATION.md](FEDERATION.md)).
+appointments, session turns, your own snapshot — is sealed by its sender,
+says inside who wrote it, to whom, about what, when and with a one-time
+number, and comes in by one door: opened only with the key you signed for
+that sender (your own, for your machines), taken only if its sender has the
+right to that very folder, project or session, and never twice. A snapshot
+you did not seal, or an older one than you already have, is not merged. A
+HOPLITA from before this scheme (federation protocol 4) cannot share with
+this one, and a server set to require it tells such a client in words to
+update ([FEDERATION.md](FEDERATION.md)).
 
 ## Children: local packs and remote nodes
 

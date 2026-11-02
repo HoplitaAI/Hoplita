@@ -580,6 +580,12 @@ USE_TOOL = {
 }
 
 _on_tool_used = None
+_consent = None
+
+
+def configure_consent(fn):
+    global _consent
+    _consent = fn
 
 _TURN_GOALS = {}
 _TURN_GOALS_LOCK = threading.Lock()
@@ -847,6 +853,13 @@ def _execute_tool(name, arguments):
         return json.dumps({"error": f"tool '{name}' does not exist. Do not guess "
                                     "names: use one from the catalogue."})
     arguments = unwrap_call_envelope(name, arguments)
+    if _consent is not None:
+        try:
+            refusal = _consent(name, arguments)
+        except Exception as e:
+            refusal = {"error": f"the person's consent could not be asked: {e}"}
+        if refusal:
+            return json.dumps(refusal, ensure_ascii=False)
     try:
         result = tools[name]["fn"](arguments)
         if isinstance(result, str):

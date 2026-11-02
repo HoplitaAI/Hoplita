@@ -4258,6 +4258,9 @@ class ChatAssistantWindow(QMainWindow):
         if et == "config_changed":
             self.reload_config(push_to_mcp=False)
             return
+        if et == "share_consent":
+            self._on_share_consent(ev)
+            return
         if et != "config_consent":
             return
         body = (t("selfcfg.consent_head") + "\n\n"
@@ -4271,6 +4274,22 @@ class ChatAssistantWindow(QMainWindow):
         box.setIcon(QMessageBox.Icon.Question)
         yes = box.addButton(t("selfcfg.consent_yes"), QMessageBox.ButtonRole.AcceptRole)
         no = box.addButton(t("selfcfg.consent_no"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(no)
+        box.exec()
+        self._hands_answer_consent(ev.get("ack_id", ""),
+                                   "run" if box.clickedButton() is yes else "cancel")
+
+    def _on_share_consent(self, ev):
+        args = ev.get("args") or {}
+        lines = "\n".join(f"  {k}: {str(v)[:200]}" for k, v in args.items())
+        body = (t("fed.consent_head") + "\n\n" + str(ev.get("tool", ""))
+                + ("\n" + lines if lines else "") + "\n\n" + t("fed.consent_ask"))
+        box = QMessageBox(self)
+        box.setWindowTitle(t("fed.consent_title"))
+        box.setText(body)
+        box.setIcon(QMessageBox.Icon.Question)
+        yes = box.addButton(t("fed.consent_yes"), QMessageBox.ButtonRole.AcceptRole)
+        no = box.addButton(t("fed.consent_no"), QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(no)
         box.exec()
         self._hands_answer_consent(ev.get("ack_id", ""),
@@ -17584,7 +17603,7 @@ enabled = true
                             self._office_view_to_canvas(ev.get("args") or {})
                         if ev.get("key") == "image.generated":
                             self._canvas_show_image(ev.get("args") or {})
-                    elif et in ("config_consent", "config_changed"):
+                    elif et in ("config_consent", "config_changed", "share_consent"):
                         self.signals.config_event.emit(tab, ev)
                         if et == "config_changed":
                             self.thread_msg(t("selfcfg.changed", what=", ".join(

@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 
-import hoplita_crypto as crypto
+import fed_inbound as inbound
 import hoplita_federation as fed
 
 
@@ -110,8 +110,8 @@ def _send(server_url, token, my_priv, recipient, recipient_pub, rtype,
     meta = {"session_id": session_id}
     if device:
         meta["device"] = device
-    env = crypto.make_envelope(rtype, payload, meta=meta)
-    blob = crypto.box_for(my_priv, recipient_pub, env)
+    blob = inbound.seal(recipient, recipient_pub, rtype, payload,
+                        rid=session_id, meta=meta)
     fed.server_send_envelope(server_url, token, recipient, rtype, blob,
                              meta=meta)
 
@@ -301,12 +301,11 @@ class SessionOriginator:
                     _hand_over(sid, e)
             got_terminal = False
             for env in sorted(mine, key=lambda e: e.get("created_at", "")):
-                try:
-                    dec = crypto.unbox(my_priv, peer_pub, env["ciphertext"])
-                except Exception:
+                verdict, o, _why = inbound.open_env(env)
+                if verdict != inbound.TAKE or o.rid != self.session_id:
                     continue
-                ev = dec.get("payload", {})
-                rtype = env["resource_type"]
+                ev = o.payload if isinstance(o.payload, dict) else {}
+                rtype = o.type
                 deadline = time.time() + self.overall_timeout
                 if isinstance(ev, dict):
                     ev.setdefault("t_recv", time.time())
@@ -349,14 +348,10 @@ class SessionOriginator:
             except queue.Empty:
                 d = None
             if d is not None:
-                try:
-                    env = crypto.unbox(my_priv, self._peer_pub, d.get("box", ""))
-                except Exception:
-                    env = None
-                if (env and env.get("type") == T_EVENT
-                        and (env.get("meta") or {}).get("session_id") == self.session_id
-                        and isinstance(env.get("payload"), dict)):
-                    ev = env["payload"]
+                o = inbound.open_live(self.peer, T_EVENT, d.get("box", ""))
+                if (o is not None and o.rid == self.session_id
+                        and isinstance(o.payload, dict)):
+                    ev = o.payload
                     ev.setdefault("t_recv", time.time())
                     ev["via"] = "live"
                     self._deliver(ev)
@@ -512,9 +507,9 @@ class LiveTx:
         if not limit:
             return False
         try:
-            env = crypto.make_envelope(T_EVENT, ev,
-                                       meta={"session_id": self.session_id})
-            blob = crypto.box_for(self.my_priv, self.peer_pub, env)
+            blob = inbound.seal(self.peer, self.peer_pub, T_EVENT, ev,
+                                rid=self.session_id,
+                                meta={"session_id": self.session_id})
         except Exception:
             return False
         data = {"k": T_EVENT, "sid": self.session_id, "box": blob}
@@ -537,9 +532,8 @@ def send_live_stop(peer, peer_pub, my_priv, session_id):
     if not fed.ws_live_ok():
         return False
     try:
-        env = crypto.make_envelope(T_STOP, {"reason": "user_stop"},
-                                   meta={"session_id": session_id})
-        blob = crypto.box_for(my_priv, peer_pub, env)
+        blob = inbound.seal(peer, peer_pub, T_STOP, {"reason": "user_stop"},
+                            rid=session_id, meta={"session_id": session_id})
     except Exception:
         return False
     return fed.ws_live(peer, {"k": T_STOP, "sid": session_id, "box": blob})
@@ -561,8 +555,7 @@ def mirror_live(tab, ev):
     try:
         store, _url, _tok, my_priv, my_pub = _session_ctx()
         me = store.data.get("handle") or ""
-        env = crypto.make_envelope(T_EVENT, ev, meta={"tab": tab})
-        blob = crypto.box_for(my_priv, my_pub, env)
+        blob = inbound.seal(me, my_pub, MIRROR_KIND, ev, rid=tab, meta={"tab": tab})
     except Exception:
         return False
     limit = fed.ws_live_max()
@@ -572,20 +565,12 @@ def mirror_live(tab, ev):
 
 
 def _on_mirror(sender, d):
-    try:
-        store, _url, _tok, my_priv, my_pub = _session_ctx()
-    except Exception:
+    o = inbound.open_live(sender, MIRROR_KIND, d.get("box", ""))
+    if o is None:
         return
-    if sender.lower() != str(store.data.get("handle") or "").lower():
-        return
-    try:
-        env = crypto.unbox(my_priv, my_pub, d.get("box", ""))
-    except Exception:
-        return
-    tab = (env.get("meta") or {}).get("tab")
-    ev = env.get("payload")
-    if (env.get("type") != T_EVENT or not tab or tab != d.get("sid")
-            or not isinstance(ev, dict) or _mirror_sink is None):
+    tab, ev = o.rid, o.payload
+    if (not tab or tab != d.get("sid") or not isinstance(ev, dict)
+            or _mirror_sink is None):
         return
     try:
         _mirror_sink(dict(ev, tab=tab, mirror=True))
@@ -614,12 +599,8 @@ def on_live(data):
             sess = _INBOUND_SESSIONS.get(sender)
         if not sess or sess.get("session_id") != sid:
             return
-        try:
-            store, _url, _tok, my_priv, _pub = _session_ctx()
-            env = crypto.unbox(my_priv, sess["sender_pub"], d.get("box", ""))
-        except Exception:
-            return
-        if env.get("type") != T_STOP or (env.get("meta") or {}).get("session_id") != sid:
+        o = inbound.open_live(sender, T_STOP, d.get("box", ""))
+        if o is None or o.rid != sid:
             return
         with _CANCELS_LOCK:
             ev = _CANCELS.get(sid)
@@ -663,16 +644,16 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
         _refused_here("not_contact")
         return {"ok": False, "reason": f"no key for '{sender}': {e}"}
 
-    try:
-        dec = crypto.unbox(my_priv, sender_pub, env["ciphertext"])
-    except Exception:
+    verdict, _o, _why = inbound.open_env(env)
+    if verdict != inbound.TAKE:
         _decline_to_server_key(f"'{store.data.get('handle', '')}' could not verify "
                                f"that this request comes from you: the key it holds "
                                f"for you does not match. If you reinstalled or changed "
                                f"keys, they need to accept you again.")
         _refused_here("unverified")
-        return {"ok": False, "reason": "authorship not verified (possible spoofing)"}
-    payload = dec.get("payload", {})
+        return {"ok": False, "reason": f"not verified: {_why}"}
+    session_id = _o.rid or session_id
+    payload = _o.payload if isinstance(_o.payload, dict) else {}
     message = payload.get("message", "")
     max_iter = payload.get("max_iterations")
 
@@ -812,11 +793,10 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
             for e in resp.get("envelopes", []):
                 if (e.get("meta") or {}).get("session_id") != session_id:
                     continue
-                try:
-                    d = crypto.unbox(my_priv, sender_pub, e["ciphertext"])
-                except Exception:
+                verdict, o, _w = inbound.open_env(e)
+                if verdict != inbound.TAKE or o.rid != session_id:
                     continue
-                pl = d.get("payload", {})
+                pl = o.payload if isinstance(o.payload, dict) else {}
                 if pl.get("call_id") == call_id:
                     return pl.get("result", "")
             time.sleep(1.0)
@@ -1006,11 +986,10 @@ def inject_local_turn(peer, message, local_sink=None):
             for e in resp.get("envelopes", []):
                 if (e.get("meta") or {}).get("session_id") != session_id:
                     continue
-                try:
-                    d = crypto.unbox(my_priv, sender_pub, e["ciphertext"])
-                except Exception:
+                verdict, o, _w = inbound.open_env(e)
+                if verdict != inbound.TAKE or o.rid != session_id:
                     continue
-                pl = d.get("payload", {})
+                pl = o.payload if isinstance(o.payload, dict) else {}
                 if pl.get("call_id") == call_id:
                     return pl.get("result", "")
             time.sleep(1.0)
@@ -1054,12 +1033,60 @@ def _unregister_cancel(session_id):
 
 
 def handle_incoming_stop(env):
-    session_id = (env.get("meta") or {}).get("session_id")
-    if not session_id:
-        return {"ok": False}
+    verdict, o, why = inbound.open_env(env)
+    if verdict != inbound.TAKE:
+        return {"ok": False, "reason": why}
     with _CANCELS_LOCK:
-        ev = _CANCELS.get(session_id)
+        ev = _CANCELS.get(o.rid)
     if ev is not None:
         ev.set()
-        return {"ok": True, "cancelled": session_id}
-    return {"ok": False, "reason": "session not active here"}
+    return {"ok": True, "verified": True, "session_id": o.rid,
+            "sender": o.sender, "cancelled": ev is not None}
+
+
+
+def _my_handle():
+    try:
+        return str(_session_ctx()[0].data.get("handle") or "").lower()
+    except Exception:
+        return ""
+
+
+@inbound.rule(T_TURN, max_age=inbound.LIVE_MAX_AGE_S, consume_on_open=True)
+def _turn_rule(o):
+    return inbound.TAKE if o.rid else inbound.DROP
+
+
+@inbound.rule(T_EVENT, T_CLIENT_TOOL_CALL, max_age=inbound.LIVE_MAX_AGE_S,
+              consume_on_open=True)
+def _event_rule(o):
+    with _LIVE_LOCK:
+        owner = _LIVE.get(o.rid)
+    return (inbound.TAKE if owner is not None
+            and owner.peer.lower() == o.sender.lower() else inbound.DROP)
+
+
+def _session_with(sender, sid):
+    with _INBOUND_LOCK:
+        sess = _INBOUND_SESSIONS.get(sender)
+    return bool(sess and sess.get("session_id") == sid)
+
+
+@inbound.rule(T_TOOL_RESULT, max_age=inbound.LIVE_MAX_AGE_S, consume_on_open=True)
+def _tool_result_rule(o):
+    return inbound.TAKE if _session_with(o.sender, o.rid) else inbound.DROP
+
+
+@inbound.rule(T_STOP, max_age=inbound.LIVE_MAX_AGE_S, consume_on_open=True)
+def _stop_rule(o):
+    if _session_with(o.sender, o.rid):
+        return inbound.TAKE
+    import fed_tools
+    return (inbound.TAKE if fed_tools.has_pending_approval(o.rid, o.sender)
+            else inbound.DROP)
+
+
+@inbound.rule(MIRROR_KIND, max_age=inbound.LIVE_MAX_AGE_S, consume_on_open=True)
+def _mirror_rule(o):
+    return (inbound.TAKE if o.sender.lower() == _my_handle() and o.rid
+            else inbound.DROP)

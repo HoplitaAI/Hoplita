@@ -221,11 +221,27 @@ identity.
 
 Everything that travels is sealed by its sender for its recipient: notes,
 folders, projects, code, appointments, sessions, and your own sync copy,
-which you seal for yourself. Each item is opened with the sender's key you
-signed, and one that does not open with it is not accepted: the server, which
-holds every public key, can neither read what you send nor write in anybody's
-name. An older HOPLITA, which sealed anonymously, can no longer share with
-this one: both sides need to be updated.
+which you seal for yourself. Inside the seal it says who wrote it, to whom,
+what it is, which folder, project or session it is about, when, and a
+one-time number. All of it comes in by one door, which takes it only when:
+
+- it opens with the key you signed for its sender (your own key, for your
+  own machines);
+- what is inside matches what the server says on the outside, and it is
+  addressed to you;
+- it is not older than its kind allows (a session order, a quarter of an
+  hour), and the same one has not been taken before, on this machine or on
+  another of yours;
+- its sender has the right to it: a member of that very folder or project
+  (by its identity, not its name), the contact a session is with, your owner
+  for a child's pack.
+
+So the server, which holds every public key, can neither read what you send,
+write in anybody's name, replay an old message nor hand you back an old copy
+of your own data. A folder or project is not accepted under a name you
+already have: it would merge into yours. An older HOPLITA (federation
+protocol 3 or earlier) cannot share with this one: both sides need to be
+updated.
 
 ### Presence
 
