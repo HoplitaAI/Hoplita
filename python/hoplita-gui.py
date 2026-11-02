@@ -2853,6 +2853,8 @@ class ChatAssistantWindow(QMainWindow):
                 _own = self._tab_by_sync_id(ev.get("tab"))
                 _mine = bool(ev.get("tab") and direction == "in"
                              and peer and peer == self._fed_handle())
+                if ev.get("mirror") and not _own:
+                    continue
                 if (not _own and _mine
                         and (not getattr(self, "_pinned_listed", False)
                              or getattr(self, "_pinned_waiting", None))):
@@ -7769,9 +7771,11 @@ enabled = true
         if not uuid:
             return
 
+        _url = self._tab_url(ctx)
+
         def work():
             return self._mcp_call_json("chat_session_load", {"uuid": uuid},
-                                       url=self._mcp_url)
+                                       url=_url)
 
         def done(res):
             sess = (res or {}).get("session") if isinstance(res, dict) else None
@@ -7783,7 +7787,7 @@ enabled = true
             if self._active_tab_id == tab_id and getattr(self, "_chat_stack", None) \
                     and self._chat_stack.currentIndex() == 0:
                 self.chat_display.setHtml(tab["html"])
-                self._chat_scroll_bottom()
+                self._chat_scroll_bottom(force=True)
 
         self._bg(work, done)
 
@@ -17431,6 +17435,12 @@ enabled = true
                 self.thread_msg(f"❌ tool_result → MCP: {e}", "error")
 
         try:
+            try:
+                _pin, _remote = self._tab_runs_remotely(_c)
+                if _pin and not _remote and getattr(_c, "sync_id", ""):
+                    payload["mirror_tab"] = _c.sync_id
+            except Exception:
+                pass
             with requests.post(f"{self._tab_url(_c)}/agent/turn", json=payload,
                                headers=self._tab_headers(_c),
                                stream=True, timeout=(10, timeout + 60)) as r:

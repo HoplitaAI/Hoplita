@@ -507,7 +507,14 @@ This works between machines that share your identity (step 2).
    conversation, the project's files, git, checkpoints and diff, and the
    whiteboards. Only what is drawn on the screen (canvas, the sticky note,
    alerts) comes back to the window you are at.
-3. `/pin ?` says which machine the tab is tied to. `/pin off` unties it.
+3. Both windows see the same conversation as it happens. What you type on
+   another machine runs on the tied one and its window shows it live; what
+   you type at the tied machine itself shows live in the other windows that
+   have the tab open, and each of them reloads the whole conversation from
+   the tied machine when the turn ends. A window that is closed sees it the
+   next time the tab opens. A tab tied elsewhere arrives in a **⇊ Pull**
+   too, not only when the window starts.
+4. `/pin ?` says which machine the tab is tied to. `/pin off` unties it.
 
 The tied machine must be running and logged in to the federation. If it is
 not, the tab says *Could not reach "…"*.

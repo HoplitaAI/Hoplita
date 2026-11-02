@@ -49,6 +49,7 @@ paint as it happens.
 | `session` | `""` | Which conversation this turn belongs to, so the searchable message log can group it. Every turn is logged verbatim here in the MCP — not in the face — because the GUI, the CLI, cron and turns arriving from another machine all come through this door. Empty still logs, just ungrouped. |
 | `session_uuid` | `""` | The SAVED conversation this turn belongs to (a `chat_sessions` uuid). NOT the same as `session` above: that one only groups the log, this one is the row. It is what lets a tool point at «THIS conversation» — `add_cron(context_session="this")` — without the model having to know the tab's title, which a fresh tab does not have. Empty when the tab has never been saved, and then attaching it says so instead of guessing. |
 | `job_id` | `""` | The cron job whose own tab this turn runs in, in a run and in what the person types there between runs. `update_cron` and the `*_current_cron_job` tools act on it when no job is named, so a worker told to change its task changes its own job. |
+| `mirror_tab` | `""` | The tab's `sync_id`, sent by the window when the tab is tied to THIS machine and the turn is typed here. Its events go by the live lane, sealed to your own key, to your other machines; one that has the tab open paints them as they happen and, when the tab is saved, reloads it from this machine. |
 
 ### Events
 

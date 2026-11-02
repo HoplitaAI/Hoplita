@@ -545,6 +545,54 @@ def send_live_stop(peer, peer_pub, my_priv, session_id):
     return fed.ws_live(peer, {"k": T_STOP, "sid": session_id, "box": blob})
 
 
+MIRROR_KIND = "agent.mirror"
+MIRROR_EVENTS = {"user_message", "tool_call", "reply", "error", "cancelled", "tab_saved"}
+_mirror_sink = None
+
+
+def set_mirror_sink(fn):
+    global _mirror_sink
+    _mirror_sink = fn
+
+
+def mirror_live(tab, ev):
+    if not tab or ev.get("event") not in MIRROR_EVENTS or not fed.ws_live_ok():
+        return False
+    try:
+        store, _url, _tok, my_priv, my_pub = _session_ctx()
+        me = store.data.get("handle") or ""
+        env = crypto.make_envelope(T_EVENT, ev, meta={"tab": tab})
+        blob = crypto.box_for(my_priv, my_pub, env)
+    except Exception:
+        return False
+    limit = fed.ws_live_max()
+    if not me or not limit or len(blob) + 120 > limit:
+        return False
+    return bool(fed.ws_live(me, {"k": MIRROR_KIND, "sid": tab, "box": blob}))
+
+
+def _on_mirror(sender, d):
+    try:
+        store, _url, _tok, my_priv, my_pub = _session_ctx()
+    except Exception:
+        return
+    if sender.lower() != str(store.data.get("handle") or "").lower():
+        return
+    try:
+        env = crypto.unbox(my_priv, my_pub, d.get("box", ""))
+    except Exception:
+        return
+    tab = (env.get("meta") or {}).get("tab")
+    ev = env.get("payload")
+    if (env.get("type") != T_EVENT or not tab or tab != d.get("sid")
+            or not isinstance(ev, dict) or _mirror_sink is None):
+        return
+    try:
+        _mirror_sink(dict(ev, tab=tab, mirror=True))
+    except Exception as e:
+        print(f"[MIRROR] could not paint a mirrored event: {e}", file=sys.stderr)
+
+
 def on_live(data):
     data = data or {}
     sender = str(data.get("from") or "")
@@ -552,6 +600,9 @@ def on_live(data):
     if not isinstance(d, dict):
         return
     kind, sid = d.get("k"), d.get("sid")
+    if kind == MIRROR_KIND:
+        _on_mirror(sender, d)
+        return
     if kind == T_EVENT:
         with _LIVE_LOCK:
             owner = _LIVE.get(sid)

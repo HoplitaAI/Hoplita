@@ -9184,6 +9184,15 @@ def tool_chat_session_save(args):
                                     or sess["updated_at"])
     except Exception as _e:
         print(f"[LOG] session save: {_e}", file=sys.stderr)
+    try:
+        _pin = sess.get("pinned_device") or {}
+        if (isinstance(_pin, dict) and sess.get("sync_id")
+                and _pin.get("id") == sess.get("writer_device")):
+            import fed_session as _fs
+            _fs.mirror_live(sess["sync_id"], {"event": "tab_saved", "uuid": sid,
+                                              "sync_id": sess["sync_id"]})
+    except Exception:
+        pass
     return {"ok": True, "uuid": sid, "rev": sess["rev"]}
 
 
@@ -14338,6 +14347,7 @@ class AgentTurnReq(BaseModel):
     session: Optional[str] = ""
     session_uuid: Optional[str] = ""
     job_id: Optional[str] = ""
+    mirror_tab: Optional[str] = ""
     log: bool = True
     endpoint: Optional[Dict[str, Any]] = None
     compact: bool = False
@@ -14645,10 +14655,24 @@ def _agent_turn_events(req):
     threading.Thread(target=_heartbeat, daemon=True,
                      name=f"hb-{turn_id}").start()
 
+    _mirror = (req.mirror_tab or "").strip() if not req.compact else ""
+    if _mirror:
+        try:
+            import fed_session as _fs
+        except Exception:
+            _mirror = ""
+
     def _stream():
         try:
+            if _mirror and _said:
+                _fs.mirror_live(_mirror, {"event": "user_message", "text": _said})
             while True:
                 ev = events.get()
+                if _mirror:
+                    try:
+                        _fs.mirror_live(_mirror, ev)
+                    except Exception:
+                        pass
                 yield json.dumps(ev, ensure_ascii=False) + "\n"
                 if ev.get("event") in fed_agent.TERMINAL_EVENTS:
                     break
@@ -16410,6 +16434,9 @@ if __name__ == "__main__":
                 session_tools_getter=_session_pack_tools,
                 orchestration_ctx=lambda **kw: _orchestration_ctx(
                     OrchestrationCtx(remote=True, **kw)))
+            fed_session.set_mirror_sink(
+                lambda ev: fed_tools._push_inbound_session_event(
+                    fed_store.data.get("handle", ""), ev))
             fed_tools.start_session_engine()
             print("[MCP] ✓ Federated sessions active (ask remote agent)")
         except Exception as _e:
