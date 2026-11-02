@@ -8137,7 +8137,10 @@ enabled = true
         if tid is not None:
             return self._job_feed(tid, job)
         uuid = ((job.get("context") or {}).get("session") or "").strip()
-        if uuid:
+        _taken = uuid and any(getattr(c, "session_uuid", None) == uuid
+                              and getattr(c, "job_id", "") != jid
+                              for c in self._chat_ctxs.values())
+        if uuid and not _taken:
             self._restore_session(uuid, quiet=True,
                                   then=lambda t_: self._job_feed(t_, job))
             return
@@ -18807,6 +18810,11 @@ enabled = true
             self.cron_manager.update_job(job["id"], enabled=not job.get("enabled", True))
             self.refresh_cron_list()
         elif action == run_now:
+            if job.get("own_tab") and job.get("target", "local") == "local":
+                self._run_job_in_tab(dict(job))
+                self.cron_manager.log_execution(job["id"], "ok", "started in its tab")
+                self.refresh_cron_list()
+                return
             threading.Thread(target=self._run_cron_job_now, args=(job,), daemon=True).start()
         elif action == clear_log:
             self.cron_manager.clear_job_log(job["id"]); self.refresh_cron_list()
