@@ -13290,11 +13290,19 @@ enabled = true
                 lines = txt.split("\n")
                 out = []
                 bullet = _re.compile(r'^\s*[-*+]\s+|^\s*\d+\.\s+')
+                delim = _re.compile(r'^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$')
+                fence = False
                 for i, ln in enumerate(lines):
+                    if ln.lstrip().startswith("```"):
+                        fence = not fence
                     is_item = bool(bullet.match(ln))
                     prev = lines[i-1] if i > 0 else ""
                     prev_item = bool(bullet.match(prev))
                     if is_item and not prev_item and prev.strip() != "":
+                        out.append("")
+                    elif (not fence and ln.lstrip().startswith("|")
+                          and prev.strip() and not prev.lstrip().startswith("|")
+                          and i + 1 < len(lines) and delim.match(lines[i + 1])):
                         out.append("")
                     out.append(ln)
                 return "\n".join(out)
@@ -13337,7 +13345,7 @@ enabled = true
                     f'<td bgcolor="{_CODE_HEAD_BG}" style="padding:5px 10px;'
                     f'border:1px solid {_CODE_BORDER};border-right:none;">'
                     f'<span style="color:#8296b1;font-family:monospace;'
-                    f'font-size:12px;">{lang or "texto"}</span></td>'
+                    f'font-size:12px;">{lang or t("chat.code_plain")}</span></td>'
                     f'<td bgcolor="{_CODE_HEAD_BG}" align="right" '
                     f'style="padding:5px 10px;border:1px solid {_CODE_BORDER};'
                     f'border-left:none;">'

@@ -235,6 +235,7 @@
   "chat.clear_confirm_title": "Borrar la conversación",
   "chat.code_copied": "Código copiado al portapapeles",
   "chat.completed": "✅ Completado en {n} iter",
+  "chat.code_plain": "texto",
   "chat.copy_code": "Copiar",
   "chat.ctx_absurd": "⚠ [CHAT] context_length = {n} no es una ventana de contexto (menos de {min} tokens). Lo ignoro y detecto la real del servidor — con ese valor cada turno se compactaba solo. Corrige o borra la línea en config.ini.",
   "chat.ctx_alias_dead": "⚠ [{sec}] num_ctx está en tu config.ini y YA NO SE LEE. Había un ajuste con dos nombres; ahora hay uno: renómbralo a context_length, o bórralo y la ventana real se le pregunta al servidor.",
