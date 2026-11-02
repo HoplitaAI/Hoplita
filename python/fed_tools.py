@@ -4281,6 +4281,13 @@ def _push_wake(kind, data=None):
         _WAKE_EVENTS.append({"kind": kind, "data": data or {}})
 
 
+def _pull_and_tell(pull):
+    r = pull()
+    if isinstance(r, dict) and (r.get("applied") or r.get("deleted")):
+        _push_wake("content", {})
+    return r
+
+
 def drain_wake_events():
     with _WAKE_LOCK:
         out = list(_WAKE_EVENTS)
@@ -4527,7 +4534,7 @@ def _ws_event(event, data):
                 if rtype in ("project_task", "project_tomb", "project_del",
                              "project_board")
                 else tool_fed_folder_pull)
-        _threading.Thread(target=lambda: pull(), daemon=True,
+        _threading.Thread(target=lambda: _pull_and_tell(pull), daemon=True,
                           name="fed-auto-pull").start()
         return
     if rtype in (fed_session.T_EVENT, fed_session.T_CLIENT_TOOL_CALL):

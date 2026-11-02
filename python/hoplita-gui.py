@@ -2085,6 +2085,8 @@ class ChatAssistantWindow(QMainWindow):
                 getattr(self, fn, lambda: None)()
             except Exception:
                 pass
+        if getattr(self, "selected_category", None):
+            self.refresh_notes_display()
 
     def _check_notices(self):
         def work():
@@ -2828,6 +2830,8 @@ class ChatAssistantWindow(QMainWindow):
                     self._schedule_wake_refresh("notices")
                 if kinds & {"contacts", "resync"}:
                     self._schedule_wake_refresh("cache")
+                if "content" in kinds:
+                    self._schedule_wake_refresh("content")
             _fresh = list(payload.get("events", []) or [])
             _items = list(getattr(self, "_own_events_waiting", None) or []) + _fresh
             self._own_events_waiting = []
@@ -3152,6 +3156,8 @@ class ChatAssistantWindow(QMainWindow):
         self._wake_pending = set()
         now = time.time()
         last = getattr(self, "_wake_last", {})
+        if "content" in what:
+            self.refresh_all_views()
         for key, fn in (("notices", self._check_notices),
                         ("cache", self._fed_cache_refresh)):
             if key not in what:
@@ -14582,8 +14588,9 @@ enabled = true
             return
         self._notes_disp_cat = cat
         sel = self.notes_list.currentItem()
-        sel_id = (sel.data(Qt.ItemDataRole.UserRole) or {}).get("id") \
-            if sel and isinstance(sel.data(Qt.ItemDataRole.UserRole), dict) else None
+        sel_note = sel.data(Qt.ItemDataRole.UserRole) \
+            if sel and isinstance(sel.data(Qt.ItemDataRole.UserRole), dict) else {}
+        sel_uuid, sel_id = sel_note.get("uuid"), sel_note.get("id")
         self.notes_list.blockSignals(True)
         self.notes_list.clear()
         restore_row = -1
@@ -14592,11 +14599,21 @@ enabled = true
             text = f"📄 {note['title']}{att}"
             item = QListWidgetItem(text); item.setData(Qt.ItemDataRole.UserRole, note)
             self.notes_list.addItem(item)
-            if sel_id and note.get("id") == sel_id:
+            if (sel_uuid and note.get("uuid") == sel_uuid) \
+                    or (not sel_uuid and sel_id and note.get("id") == sel_id):
                 restore_row = i
         if restore_row >= 0:
             self.notes_list.setCurrentRow(restore_row)
         self.notes_list.blockSignals(False)
+        if restore_row >= 0:
+            new = notes[restore_row]
+            _pane = (self.note_raw_text
+                     if self.note_editor_stack.currentIndex() == 1
+                     else self.note_content_text)
+            _editing = _pane.document().isModified()
+            if not _editing and (new.get("content") != sel_note.get("content")
+                                 or new.get("rev") != sel_note.get("rev")):
+                self._on_note_selected(restore_row)
         self.notes_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         try: self.notes_list.customContextMenuRequested.disconnect()
         except: pass
