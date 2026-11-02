@@ -11797,6 +11797,17 @@ def agent_pending_approvals():
             "expired": sorted(fed_tools._EXPIRED_APPROVALS)}
 
 
+class ContactVerifiedReq(BaseModel):
+    handle: str
+    verified: bool
+
+
+@app.post("/fed/contact-verified")
+def fed_contact_verified(req: ContactVerifiedReq):
+    import fed_tools
+    return fed_tools.set_contact_verified(req.handle, req.verified)
+
+
 @app.get("/agent/session-events")
 def agent_session_events():
     import fed_tools

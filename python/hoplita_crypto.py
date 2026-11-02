@@ -99,6 +99,19 @@ def fingerprint(pub_b64):
     return " ".join(groups)
 
 
+def safety_code(a_handle, a_pub, a_sign, b_handle, b_pub, b_sign):
+    import hashlib
+    halves = sorted(f"{h.lower()}|{p}|{s}" for h, p, s in
+                    ((a_handle, a_pub, a_sign or ""), (b_handle, b_pub, b_sign or "")))
+    digest = hashlib.sha512(("hoplita-safety-1\n" + "\n".join(halves)).encode()).digest()
+    n = int.from_bytes(digest, "big")
+    groups = []
+    for _ in range(12):
+        groups.append(f"{n % 100000:05d}")
+        n //= 100000
+    return " ".join(groups)
+
+
 
 def generate_signing_identity():
     from nacl.signing import SigningKey

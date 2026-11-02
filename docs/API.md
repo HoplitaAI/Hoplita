@@ -467,6 +467,10 @@ vault (identity and keys) lives there.
 - `GET /agent/pending-approvals` → `{pending: [{id, peer, message, analyze}]}`:
   incoming requests waiting for your yes; `POST /agent/resolve-approval
   {peer, approved}` answers one.
+- `POST /fed/contact-verified {handle, verified}` marks a contact as checked
+  (or not) after the person compared the safety code with them
+  (`fed_safety_code`). For the window only: it is not a tool, so no model can
+  vouch for a key. Signed into the contact's attestation.
 
 Besides the loop's own events, session events include `session_open`
 (`peer`, `session_id`), `user_message` (`from`, `text`: what the other side
@@ -618,7 +622,7 @@ identity; `/shutdown` and a second hop are refused (403), and a request over
 **Federated sessions** — `POST /agent/session-send` · `POST /agent/session-inject` ·
 `POST /agent/session-stop` · `POST /agent/session-close-inbound` ·
 `GET /agent/session-events` · `GET /agent/pending-approvals` ·
-`POST /agent/resolve-approval` (see above).
+`POST /agent/resolve-approval` · `POST /fed/contact-verified` (see above).
 
 **Whiteboard** — `GET /wb/app` · `GET /wb/host/{action}` · `GET /wb/static/{name}` ·
 `GET /wb/api/strings` · `GET /wb/api/list` · `GET /wb/api/find` ·

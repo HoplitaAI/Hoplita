@@ -238,7 +238,20 @@ one-time number. All of it comes in by one door, which takes it only when:
 
 So the server, which holds every public key, can neither read what you send,
 write in anybody's name, replay an old message nor hand you back an old copy
-of your own data. A folder or project is not accepted under a name you
+of your own data.
+
+What signing cannot cover on its own is the first contact: the key you sign
+is the one the server hands you then. To close that, compare safety codes.
+Right-click the contact → **🔐 Verify safety code…** shows twelve groups of
+digits made from your key and the one you signed for them; they open the same
+window on their machine. Compare the numbers in person or on a call where you
+recognise each other. The same numbers mean nobody stands between you: press
+**They match: mark as verified**, and the contact reads *✓ verified* on every
+machine of yours (it is signed into your attestation, so the server cannot set
+or undo it). Different numbers mean somebody may be in the middle: do not mark
+it. A contact whose key changes starts *not verified* again. Marking is yours
+alone: no tool lets the agent do it, though it can show you the code
+(`fed_safety_code`). A folder or project is not accepted under a name you
 already have: it would merge into yours. An older HOPLITA (federation
 protocol 3 or earlier) cannot share with this one: both sides need to be
 updated.

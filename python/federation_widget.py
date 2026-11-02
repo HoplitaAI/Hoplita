@@ -693,6 +693,9 @@ class _ContactDelegate(QStyledItemDelegate):
         else:
             painter.setPen(QColor("#94a3b8"))
             sub = t("fed.online") if online else t("fed.offline")
+            if kind != "child":
+                sub += " · " + (t("fed.verified") if c.get("verified")
+                                else t("fed.not_verified"))
         painter.drawText(tx, card.top() + 42, sub)
 
         perms = c.get("permissions") or {}
@@ -1082,6 +1085,10 @@ class FederationWidget(QWidget):
             act_session.triggered.connect(
                 lambda: self.open_session_requested.emit(c.get("handle", "")))
             menu.addAction(act_session)
+            if c.get("kind") != "child":
+                act_verify = QAction("🔐 " + t("fed.verify_menu"), self)
+                act_verify.triggered.connect(lambda: self._verify(c))
+                menu.addAction(act_verify)
             act_pub = QAction("🌍 " + t("fed.browse_public"), self)
             act_pub.triggered.connect(lambda: self._browse_public(c))
             menu.addAction(act_pub)
@@ -1202,6 +1209,50 @@ class FederationWidget(QWidget):
         QMessageBox.information(self, t("fed.msg_add_title"),
                                data.get("message", t("fed.request_sent")))
         self.refresh()
+
+    def _verify(self, c):
+        handle = c.get("handle", "")
+        self._run("fed_safety_code", {"handle": handle},
+                  lambda data, h=handle: self._on_safety_code(h, data))
+
+    def _on_safety_code(self, handle, data):
+        data = data if isinstance(data, dict) else {}
+        if data.get("error"):
+            QMessageBox.warning(self, t("fed.verify_title", handle=handle), data["error"])
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle(t("fed.verify_title", handle=handle))
+        box.setText(t("fed.verify_body", handle=handle) + "\n\n"
+                    + str(data.get("safety_code", "")) + "\n\n"
+                    + (t("fed.verify_is_verified") if data.get("verified")
+                       else t("fed.verify_not_yet")))
+        box.setIcon(QMessageBox.Icon.Information)
+        if data.get("verified"):
+            act = box.addButton(t("fed.verify_unmark"), QMessageBox.ButtonRole.DestructiveRole)
+        else:
+            act = box.addButton(t("fed.verify_mark"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+        if box.clickedButton() is not act:
+            return
+        verified = not data.get("verified")
+
+        def work():
+            try:
+                import requests as _rq
+                r = _rq.post(f"{self._mcp_url}/fed/contact-verified",
+                             json={"handle": handle, "verified": verified}, timeout=30)
+                return r.json() if r.status_code == 200 else {"error": f"[{r.status_code}]"}
+            except Exception as e:
+                return {"error": str(e)}
+        w = _McpWorker(lambda _tool, _args: work(), "", {})
+        w.done.connect(lambda res: (QMessageBox.warning(self, t("fed.verify_title", handle=handle),
+                                                        res.get("error"))
+                                    if isinstance(res, dict) and res.get("error")
+                                    else self.refresh()))
+        w.done.connect(lambda *_: self._workers.remove(w) if w in self._workers else None)
+        self._workers.append(w)
+        w.start()
 
     def _accept(self, c):
         self._run("fed_accept_contact", {"handle": c["handle"]}, self._on_generic)

@@ -2258,5 +2258,14 @@
   "fed.consent_head": "The agent wants to do this with your federation:",
   "fed.consent_ask": "Nothing is shared, accepted or changed unless you say yes.",
   "fed.consent_yes": "Yes, do it",
-  "fed.consent_no": "No"
+  "fed.consent_no": "No",
+  "fed.verified": "✓ verified",
+  "fed.not_verified": "not verified",
+  "fed.verify_menu": "Verify safety code…",
+  "fed.verify_title": "Safety code with {handle}",
+  "fed.verify_body": "Open this same window on {handle}'s machine, with you, and compare the numbers over another channel: in person, or on a call where you recognise each other. If they are the same, nobody stands between you. If they differ, do not mark it: somebody may be in the middle.",
+  "fed.verify_is_verified": "You marked this contact as verified.",
+  "fed.verify_not_yet": "Not verified yet.",
+  "fed.verify_mark": "They match: mark as verified",
+  "fed.verify_unmark": "Mark as not verified"
 }

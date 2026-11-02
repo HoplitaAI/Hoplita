@@ -1112,17 +1112,67 @@ def _signing_keys(st):
         return None, None
 
 
-def _sign_contact(st, peer, peer_pub, peer_sign_pub="", trust=None):
+def _sign_contact(st, peer, peer_pub, peer_sign_pub="", trust=None,
+                  verified=False):
     priv, _pub = _signing_keys(st)
     if not priv:
         return ""
     payload = {
         "typ": "contact", "me": st.data.get("handle"), "peer": peer,
         "peer_pub": peer_pub, "peer_sign_pub": peer_sign_pub or "",
-        "ts": int(_time.time())}
+        "verified": bool(verified), "ts": int(_time.time())}
     if trust is not None:
         payload["trust"] = trust
     return crypto.sign_attestation(priv, payload)
+
+
+def _contact_keys(st, server_url, token, handle):
+    try:
+        rows = fed.server_list_contacts(server_url, token).get("contacts", [])
+    except fed.FedServerError:
+        rows = []
+    row = next((c for c in rows if c.get("handle") == handle), None)
+    return _my_contact_att(st, handle, row)
+
+
+def tool_fed_safety_code(handle):
+    try:
+        st, server_url, token = _require_session()
+    except Exception as e:
+        return {"error": str(e)}
+    payload, _att = _contact_keys(st, server_url, token, handle)
+    if not payload:
+        return {"error": f"'{handle}' is not a contact I signed."}
+    _priv, my_sign = _signing_keys(st)
+    code = crypto.safety_code(st.data.get("handle") or "", st.data.get("public_key_b64") or "",
+                              my_sign or "", handle, payload.get("peer_pub", ""),
+                              payload.get("peer_sign_pub", ""))
+    return {"ok": True, "handle": handle, "safety_code": code,
+            "verified": bool(payload.get("verified")),
+            "how": "both sides open this on their own machine and compare the "
+                   "numbers over another channel (in person, a call): equal "
+                   "means nobody stands between you"}
+
+
+def set_contact_verified(handle, verified):
+    try:
+        st, server_url, token = _require_session()
+    except Exception as e:
+        return {"error": str(e)}
+    payload, _att = _contact_keys(st, server_url, token, handle)
+    if not payload:
+        return {"error": f"'{handle}' is not a contact I signed."}
+    att = _sign_contact(st, handle, payload.get("peer_pub", ""),
+                        payload.get("peer_sign_pub", ""),
+                        trust=payload.get("trust"), verified=bool(verified))
+    if not att:
+        return {"error": "no signing key"}
+    _pin_contact(st, handle, payload.get("peer_pub", ""), att)
+    try:
+        fed.server_attest_contact(server_url, token, handle, att)
+    except fed.FedServerError:
+        pass
+    return {"ok": True, "handle": handle, "verified": bool(verified)}
 
 
 def _sign_grant(st, folder_id, peer, peer_pub):
@@ -1312,7 +1362,8 @@ def _adopt_unsigned_trust(st, server_url, token, rows):
         trust = {"level": c.get("trust_level") or "accept",
                  "permissions": c.get("permissions") or {}}
         att = _sign_contact(st, h, payload.get("peer_pub", ""),
-                            payload.get("peer_sign_pub", ""), trust=trust)
+                            payload.get("peer_sign_pub", ""), trust=trust,
+                            verified=bool(payload.get("verified")))
         if not att:
             return
         _pin_contact(st, h, payload.get("peer_pub", ""), att)
@@ -1350,7 +1401,8 @@ def _resign_trust(st, server_url, token, handle, trust):
     if not payload:
         return ""
     att = _sign_contact(st, handle, payload.get("peer_pub", ""),
-                        payload.get("peer_sign_pub", ""), trust=trust)
+                        payload.get("peer_sign_pub", ""), trust=trust,
+                        verified=bool(payload.get("verified")))
     if not att:
         return ""
     _pin_contact(st, handle, payload.get("peer_pub", ""), att)
@@ -1732,10 +1784,16 @@ def tool_fed_list_contacts():
                  if isinstance(k, dict)}
     except Exception:
         _kids = set()
+    _st = _store()
     for c in contacts:
         c["presence"] = "🟢 online" if c.get("online") else "⚫ offline"
         if c.get("handle") in _kids:
             c["kind"] = "child"
+        try:
+            _p, _a = _my_contact_att(_st, c.get("handle"), c)
+        except Exception:
+            _p = None
+        c["verified"] = bool(_p and _p.get("verified"))
     _ws_note = ""
     try:
         _s = fed.ws_state()
@@ -4986,6 +5044,13 @@ FED_TOOLS = {
         "desc": "Accept an incoming contact request from another handle. "
                 "Optionally sets the trust_level you grant them.",
         "fn": lambda a: tool_fed_accept_contact(a["handle"], a.get("trust_level"))},
+    "fed_safety_code": {
+        "desc": "The safety code to compare with a contact over another channel "
+                "(in person, a call): the same twelve groups of digits on both "
+                "sides means nobody stands between you. Also says whether the "
+                "person already marked that contact as checked. Marking it is "
+                "the person's, from the Contacts tab: no tool does it.",
+        "fn": lambda a: tool_fed_safety_code(a["handle"])},
     "fed_list_contacts": {
         "desc": "List your federation contacts with their status "
                 "(pending/accepted), trust level, and whether they are online or "
@@ -5483,6 +5548,8 @@ FED_TOOL_PARAMS = {
                             "level you grant them."},
         },
         "required": ["handle"]},
+    "fed_safety_code": {"properties": {"handle": {"type": "string",
+        "description": "The contact."}}, "required": ["handle"]},
     "fed_list_contacts": {"properties": {}, "required": []},
     "fed_spawn_child": {
         "properties": {
