@@ -16,6 +16,12 @@ IS_LINUX = platform.system() == "Linux"
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 _TTY = sys.stdout.isatty()
 def _c(code, s):
     return f"\033[{code}m{s}\033[0m" if _TTY else s
@@ -1094,6 +1100,24 @@ def run(cmd, **kw):
     return subprocess.run(cmd, **kw)
 
 
+def align_qt(py):
+    probe = ("import importlib.metadata as m\n"
+             "for n in ('PyQt6', 'PyQt6-WebEngine'):\n"
+             "    try: print(n, m.version(n))\n"
+             "    except Exception: print(n, '')\n")
+    r = run([py, "-c", probe], capture_output=True, text=True)
+    have = dict(ln.split(" ", 1) for ln in (r.stdout or "").splitlines() if " " in ln)
+    qt, we = have.get("PyQt6", "").strip(), have.get("PyQt6-WebEngine", "").strip()
+    if not qt or not we:
+        return
+    minor = ".".join(we.split(".")[:2])
+    if ".".join(qt.split(".")[:2]) == minor:
+        return
+    warn(f"PyQt6 {qt} does not match PyQt6-WebEngine {we}: taking PyQt6 {minor}")
+    if pip_install(py, [f"PyQt6=={minor}.*", f"PyQt6-Qt6=={minor}.*"]).returncode != 0:
+        warn(f"Could not align PyQt6 to {minor}; the canvas and dashboards may not load")
+
+
 def pip_install(py, pip_args, quiet=False):
     base = [py, "-m", "pip", "install", "--retries", "1", "--timeout", "20"]
     if quiet:
@@ -1281,6 +1305,7 @@ def main():
     r = pip_install(py, ["-r", req])
     if r.returncode != 0:
         err("Core dependency installation failed."); sys.exit(1)
+    align_qt(py)
     ok("Core dependencies installed")
 
     copy_payload(prefix)

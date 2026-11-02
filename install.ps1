@@ -59,6 +59,8 @@ function Install-Hoplita {
             if (-not $py -or -not (Test-Path $py)) { throw "uv could not provide Python $pyWant" }
         }
         Write-Host "HOPLITA: using $py"
+        $env:PYTHONIOENCODING = 'utf-8'
+        try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
         & $py $installer.FullName @args
         if ($LASTEXITCODE -ne 0) { throw "install.py ended with code $LASTEXITCODE" }
     }
