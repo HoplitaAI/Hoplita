@@ -15,6 +15,7 @@ T_EVENT = "agent.event"
 T_STOP = "agent.stop"
 T_CLIENT_TOOL_CALL = "agent.client_tool_call"
 T_TOOL_RESULT = "agent.tool_result"
+CLIENT_TOOLS = frozenset(("render_html", "dashboard_render", "alert"))
 
 TERMINAL_EVENTS = ("reply", "cancelled", "iteration_limit", "error",
                    "proxy_response", "proxy_end")
@@ -400,6 +401,11 @@ class SessionOriginator:
         call_id = ev.get("call_id")
         name = ev.get("tool", "")
         args = ev.get("args", {}) or {}
+        if name not in CLIENT_TOOLS:
+            result = json.dumps({"error": f"'{name}' is not run for a remote session"})
+            _send(server_url, token, my_priv, self.peer, peer_pub, T_TOOL_RESULT,
+                  {"call_id": call_id, "result": result}, self.session_id)
+            return
         try:
             result = _execute_local_tool(name, args) if _execute_local_tool \
                 else json.dumps({"error": "no local tool executor"})
@@ -823,7 +829,7 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
             _report_live(live)
         return {"ok": True, "session_id": session_id, "result": result}
 
-    _delegated = ("render_html", "dashboard_render", "alert")
+    _delegated = tuple(CLIENT_TOOLS)
     try:
         with _orchestrating(emit=on_event, cancel=cancel_flag.is_set,
                             delegate=delegate, delegate_names=_delegated,
@@ -995,7 +1001,7 @@ def inject_local_turn(peer, message, local_sink=None):
             time.sleep(1.0)
         raise TimeoutError("the originator did not return the tool in time")
 
-    _delegated = ("render_html", "dashboard_render", "alert")
+    _delegated = tuple(CLIENT_TOOLS)
     try:
         with _orchestrating(emit=on_event, cancel=cancel_flag.is_set,
                             delegate=delegate, delegate_names=_delegated,
