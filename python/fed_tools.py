@@ -253,7 +253,7 @@ def _code_fetch_type(etype, ack_ids=None):
 def _code_xfers(rows):
     grouped = {}
     for env_id, sender, p in rows:
-        x = grouped.setdefault(p.get("xfer") or "?", {
+        x = grouped.setdefault((sender, p.get("xfer") or "?"), {
             "sender": sender, "project": p.get("project", ""),
             "branch": p.get("branch", ""), "base": p.get("base", ""),
             "tip": p.get("tip", ""), "total": int(p.get("parts") or 0),
@@ -840,7 +840,16 @@ def _code_pull_once():
     for x in _code_xfers(rows).values():
         cat = x["project"]
         path = _code_meta(f"code_path:{cat}") or ""
-        if path and _code_meta(f"code_await:{cat}") \
+        _awaited = _code_meta(f"code_await:{cat}")
+        if _awaited and x["sender"] != _awaited:
+            applied.append({"project": cat, "from": x["sender"],
+                            "dropped": f"awaiting this project from {_awaited}"})
+            try:
+                _code_fetch_type("code_pack", ack_ids=x["ids"])
+            except Exception:
+                pass
+            continue
+        if path and _awaited \
                 and not os.path.isdir(os.path.join(path, ".git")):
             import tempfile as _tmpf
             _fd, _bf = _tmpf.mkstemp(prefix="hoplita-code-", suffix=".bundle")
@@ -2777,12 +2786,16 @@ def tool_fed_accept_project(project_name=None, handle=None):
         return {"error": f"There are several incoming projects: {names}. "
                          f"Specify project_name and/or handle."}
     proj = cand[0]
+    taken = _name_taken("project", proj["name"], proj["from"])
+    if taken:
+        return {"error": taken}
     try:
         _with_relogin(lambda: fed.server_accept_folder(
             _store().data["server_url"], _store().data["token"],
             proj["from"], proj["project_id"]))
     except fed.FedServerError as e:
         return {"error": f"Could not accept the project: {e}"}
+    _code_meta(f"share_origin:project:{proj['name']}", proj["from"])
     if proj["name"] not in todo.get_projects():
         todo.add_project(proj["name"])
     pulled = 0
@@ -2918,6 +2931,21 @@ def tool_fed_share_folder(handle, folder_name):
     }
 
 
+def _name_taken(kind, name, owner):
+    store = _notes() if kind == "folder" else _todo()
+    try:
+        have = (store.get_categories() if kind == "folder"
+                else store.get_projects()) or []
+    except Exception:
+        return None
+    if name in have and _code_meta(f"share_origin:{kind}:{name}") != owner:
+        noun = "folder" if kind == "folder" else "project"
+        return (f"You already have a {noun} named '{name}'. Accepting this one "
+                f"would merge theirs into yours, and what is yours there would "
+                f"travel to them. Rename yours first, then accept.")
+    return None
+
+
 def tool_fed_accept_folder(handle, folder_name=None, folder_id=None):
     try:
         _, server_url, token = _require_session()
@@ -2942,11 +2970,15 @@ def tool_fed_accept_folder(handle, folder_name=None, folder_id=None):
                              f"{names}. Specify which with folder_name."}
         folder_id = cand[0]["folder_id"]
         folder_name = cand[0]["folder_name"]
+    taken = _name_taken("folder", folder_name, handle) if folder_name else None
+    if taken:
+        return {"error": taken}
     try:
         resp = fed.server_accept_folder(server_url, token, handle, folder_id)
     except fed.FedServerError as e:
         return {"error": f"Could not accept the folder: {e}"}
     fname = resp.get("folder_name", folder_name)
+    _code_meta(f"share_origin:folder:{fname}", handle)
     pulled = 0
     try:
         pull = tool_fed_folder_pull(fname)
@@ -3205,6 +3237,42 @@ def _granted_peers(st, server_url, token, name, kind):
     return folder_id, peers, errors
 
 
+def _allowed_senders(st, server_url, token, kind):
+    try:
+        resp = fed.server_list_folders(server_url, token)
+    except fed.FedServerError:
+        return {}
+    id_for = _folder_id_for if kind == "folder" else _project_id_for
+    my_handle = st.data.get("handle")
+    my_pub = st.data.get("public_key_b64")
+    _priv, my_sign_pub = _signing_keys(st)
+    out = {}
+    for row in resp.get("folders", []):
+        name, ph, fid = row.get("folder_name"), row.get("with"), row.get("folder_id")
+        if (row.get("kind", "folder") != kind or row.get("status") != "accepted"
+                or not (name and ph and fid)):
+            continue
+        if row.get("role") == "owner":
+            if fid != id_for(my_handle, name) or row.get("readonly"):
+                continue
+            pub, kerr = _trusted_pub(server_url, token, ph)
+            payload = None if kerr else _open_grant(
+                my_sign_pub, row.get("grant") or "", fid, peer=ph, owner=my_handle)
+            if not payload or payload.get("peer_pub") != pub:
+                continue
+        else:
+            if fid != id_for(ph, name):
+                continue
+            if not row.get("readonly"):
+                payload = _open_grant(_peer_sign_pub(st, server_url, token, ph),
+                                      row.get("grant") or "", fid,
+                                      peer=my_handle, owner=ph)
+                if not payload or payload.get("peer_pub") != my_pub:
+                    continue
+        out.setdefault(name, set()).add(ph)
+    return out
+
+
 def _find_shared_folder(server_url, token, folder_name, require_accepted=False,
                         kind=None):
     try:
@@ -3461,6 +3529,7 @@ def _fed_pull(kind, name, store):
             pass
 
     by_name = {}
+    allowed = None
     for env in [e for e in all_env if e.get("resource_type") == cfg["etype"]]:
         try:
             p = _unsealed(env).get("payload", {})
@@ -3472,6 +3541,12 @@ def _fed_pull(kind, name, store):
         if rname not in accepted:
             if known is not None and rname not in known:
                 acked.append(env.get("id"))
+            continue
+        if allowed is None:
+            allowed = _allowed_senders(st, server_url, token, cfg["share"])
+        if env.get("sender") not in allowed.get(rname, ()):
+            print(f"[FED] {cfg['etype']} for {rname!r} from {env.get('sender')!r}, "
+                  f"who is not in it: not applied", file=_sys.stderr)
             continue
         acked.append(env.get("id"))
         it = p.get("item")
@@ -3978,8 +4053,12 @@ def _process_share_offers():
         if level == "auto":
             if not _offer_grant_ok(store, server_url, token, f):
                 continue
+            _kind = "project" if rtype == "proyectos" else "folder"
+            if _name_taken(_kind, fname, owner):
+                continue
             try:
                 fed.server_accept_folder(server_url, token, owner, fid)
+                _code_meta(f"share_origin:{_kind}:{fname}", owner)
                 if rtype == "proyectos":
                     tool_fed_project_pull(fname)
                 else:
