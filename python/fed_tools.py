@@ -3497,6 +3497,8 @@ def _fed_pull(kind, name, store):
             fed.server_ack_envelopes(server_url, token, acked)
         except fed.FedServerError:
             pass
+    if applied or deleted:
+        _push_wake("content", {})
     return {"ok": True, "applied": applied, "deleted": deleted,
             "message": f"{applied} item(s) applied"
                        + (f", {deleted} resource(s) deleted" if deleted else "") + "."}
@@ -4281,13 +4283,6 @@ def _push_wake(kind, data=None):
         _WAKE_EVENTS.append({"kind": kind, "data": data or {}})
 
 
-def _pull_and_tell(pull):
-    r = pull()
-    if isinstance(r, dict) and (r.get("applied") or r.get("deleted")):
-        _push_wake("content", {})
-    return r
-
-
 def drain_wake_events():
     with _WAKE_LOCK:
         out = list(_WAKE_EVENTS)
@@ -4534,7 +4529,7 @@ def _ws_event(event, data):
                 if rtype in ("project_task", "project_tomb", "project_del",
                              "project_board")
                 else tool_fed_folder_pull)
-        _threading.Thread(target=lambda: _pull_and_tell(pull), daemon=True,
+        _threading.Thread(target=lambda: pull(), daemon=True,
                           name="fed-auto-pull").start()
         return
     if rtype in (fed_session.T_EVENT, fed_session.T_CLIENT_TOOL_CALL):
@@ -6000,7 +5995,10 @@ def tool_fed_sync_push():
 
 def tool_fed_sync_pull():
     with _sync_lock:
-        return _fed_sync_pull()
+        r = _fed_sync_pull()
+    if isinstance(r, dict) and r.get("merged"):
+        _push_wake("content", {})
+    return r
 
 
 def _fed_sync_push():
