@@ -12688,6 +12688,8 @@ enabled = true
             is_shared = False
 
         _note_id = self._current_note_id
+        _held = [(p, p.toPlainText()) for p in (self.note_content_text,
+                                                 self.note_raw_text)]
 
         def _after_save(res, guarded=False):
             self._busy(False)
@@ -12704,6 +12706,10 @@ enabled = true
                                     data.get("warning", t("fed.conflict_msg")))
             elif guarded and self._current_note_id == _note_id:
                 self._current_note_base_rev = int(self._current_note_base_rev or 1) + 1
+            if self._current_note_id == _note_id and not (guarded and data.get("conflict")):
+                for _p, _txt in _held:
+                    if _p.toPlainText() == _txt:
+                        _p.document().setModified(False)
             self.refresh_notes_lists()
             self.refresh_notes_display()
 
