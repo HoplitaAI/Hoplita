@@ -186,6 +186,7 @@ class SessionOriginator:
         self._seen = set()
         self._order = {}
         self._peer_pub = None
+        self._unheard_since = None
 
     def is_alive(self):
         return not self._done.is_set() and not self._stop.is_set()
@@ -204,6 +205,7 @@ class SessionOriginator:
               turn_payload, self.session_id, device=self.device)
         print(f"[SESSION-OUT] turn SENT → recipient={self.peer!r} "
               f"session={self.session_id}", file=sys.stderr)
+        self._unheard_since = time.time()
         if not self._opened:
             self._opened = True
             self.on_event({"event": "session_open", "peer": self.peer,
@@ -255,6 +257,21 @@ class SessionOriginator:
                 return
             self._done.wait(0.5)
 
+    UNREACHED_S = inbound.LIVE_MAX_AGE_S + 60
+
+    def _unreached(self):
+        t0 = self._unheard_since
+        if t0 is None or time.time() - t0 < self.UNREACHED_S:
+            return None
+        self._unheard_since = None
+        mins = int(inbound.LIVE_MAX_AGE_S // 60)
+        print(f"[SESSION-OUT] nothing back from {self.peer!r} in {mins} min "
+              f"(session {self.session_id}): given up", file=sys.stderr)
+        return {"event": "error", "code": "unreached", "retryable": True,
+                "error": f"'{self.peer}' did not answer within {mins} minutes: their "
+                         f"HOPLITA is probably off or offline. A request this old is "
+                         f"no longer run, so send it again when they are online."}
+
     def _take_parked(self):
         out = []
         while True:
@@ -270,6 +287,13 @@ class SessionOriginator:
         deadline = time.time() + self.overall_timeout
         terminal = {"event": "error", "error": "session with no response (timeout)"}
         while not self._stop.is_set() and time.time() < deadline:
+            unreached = self._unreached()
+            if unreached is not None:
+                self.on_event(unreached)
+                if not persistent:
+                    self._flush_all()
+                    self._done.set()
+                    return unreached
             try:
                 resp = fed.server_fetch_inbox_types(
                     server_url, token, [T_EVENT, T_CLIENT_TOOL_CALL],
@@ -308,6 +332,7 @@ class SessionOriginator:
                 ev = o.payload if isinstance(o.payload, dict) else {}
                 rtype = o.type
                 deadline = time.time() + self.overall_timeout
+                self._unheard_since = None
                 if isinstance(ev, dict):
                     ev.setdefault("t_recv", time.time())
                     if env.get("created_at"):
@@ -359,6 +384,7 @@ class SessionOriginator:
             self._expire_gaps()
 
     def _deliver(self, ev):
+        self._unheard_since = None
         lt, seq = (ev.get("lt"), ev.get("seq")) if isinstance(ev, dict) else (None, None)
         with self._rx_lock:
             if not lt or not isinstance(seq, int):
