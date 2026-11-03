@@ -8,6 +8,7 @@ TAKE, WAIT, DROP = "take", "wait", "drop"
 
 DATA_MAX_AGE_S = 90 * 86400
 LIVE_MAX_AGE_S = 15 * 60
+TOO_OLD, FROM_FUTURE, REPLAYED = "too old for its kind", "from the future", "replayed"
 FUTURE_SKEW_S = 10 * 60
 
 _rules = {}
@@ -113,15 +114,15 @@ def _check(dec, outer_sender, outer_type, me, now):
         return "no rule for this type"
     ts = int(dec.get("ts") or 0)
     if ts > now + FUTURE_SKEW_S:
-        return "from the future"
+        return FROM_FUTURE
     if now - ts > r[1]:
-        return "too old for its kind"
+        return TOO_OLD
     nonce = dec.get("nonce") or ""
     if len(nonce) < 16:
         return "no nonce"
     with _seen_lock:
         if nonce in _load_seen():
-            return "replayed"
+            return REPLAYED
     return None
 
 

@@ -1018,6 +1018,8 @@
   "fed.session_refused_no_permission": "🚫 {peer} intentó abrir una sesión con tu agente y se le rechazó: tiene las sesiones en «no». A {peer} le llega el aviso.",
   "fed.session_refused_not_contact": "🚫 {peer} intentó abrir una sesión con tu agente y se le rechazó: no es un contacto aceptado. A {peer} le llega el aviso.",
   "fed.session_refused_unverified": "🚫 Llegó una petición de sesión firmada como {peer} que no se pudo verificar: la clave que tienes de {peer} no casa (¿reinstaló o cambió de claves?). Se rechazó y se le avisó; si es quien dice, tendréis que volver a aceptaros.",
+  "fed.session_refused_too_old": "🚫 Una petición de sesión de {peer} llegó demasiado tarde para ejecutarla (más de 15 minutos después de enviarse, con esta máquina apagada o sin conexión). No se ejecutó; a {peer} se le avisa de que la vuelva a enviar.",
+  "fed.session_refused_clock": "🚫 Una petición de sesión de {peer} trae una hora por delante del reloj de esta máquina y no se ejecutó. Revisa la fecha y la hora en las dos máquinas; a {peer} se le avisa.",
   "fed.session_no_ack": "⚠ El HOPLITA de {peer} no lo ha confirmado en 20 s: puede estar apagado o desconectado. Lo recibirá cuando se conecte.",
   "fed.session_thinking": "el agente remoto está trabajando…",
   "fed.share_with": "Compartir con…",

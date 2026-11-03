@@ -652,7 +652,23 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
 
     verdict, _o, _why = inbound.open_env(env)
     if verdict != inbound.TAKE:
-        _decline_to_server_key(f"'{store.data.get('handle', '')}' could not verify "
+        me_h = store.data.get('handle', '')
+        if _why == inbound.REPLAYED:
+            return {"ok": False, "reason": f"not taken: {_why}"}
+        if _why == inbound.TOO_OLD:
+            _mins = inbound.LIVE_MAX_AGE_S // 60
+            _decline_to_server_key(f"'{me_h}' received this request more than {_mins} "
+                                   f"minutes after it was sent, too late to run it. "
+                                   f"Send it again.")
+            _refused_here("too_old")
+            return {"ok": False, "reason": f"not taken: {_why}"}
+        if _why == inbound.FROM_FUTURE:
+            _decline_to_server_key(f"'{me_h}' could not take this request: its time is "
+                                   f"ahead of this machine's clock. Check the date and "
+                                   f"time on both machines.")
+            _refused_here("clock")
+            return {"ok": False, "reason": f"not taken: {_why}"}
+        _decline_to_server_key(f"'{me_h}' could not verify "
                                f"that this request comes from you: the key it holds "
                                f"for you does not match. If you reinstalled or changed "
                                f"keys, they need to accept you again.")

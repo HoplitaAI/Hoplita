@@ -1018,6 +1018,8 @@
   "fed.session_refused_no_permission": "🚫 {peer} tried to open a session with your agent and was turned away: their sessions are set to «no». {peer} is told.",
   "fed.session_refused_not_contact": "🚫 {peer} tried to open a session with your agent and was turned away: not an accepted contact. {peer} is told.",
   "fed.session_refused_unverified": "🚫 A session request signed as {peer} could not be verified: the key you hold for {peer} does not match (did they reinstall or change keys?). It was turned away and they were told; if it is really them, you will need to accept each other again.",
+  "fed.session_refused_too_old": "🚫 A session request from {peer} arrived too late to run (more than 15 minutes after it was sent, while this machine was off or offline). It was not run; {peer} is told to send it again.",
+  "fed.session_refused_clock": "🚫 A session request from {peer} carries a time ahead of this machine's clock, so it was not run. Check the date and time on both machines; {peer} is told.",
   "fed.session_no_ack": "⚠ {peer}'s HOPLITA has not confirmed it after 20 s: it may be off or disconnected. It will get it when it connects.",
   "fed.session_thinking": "remote agent is working…",
   "fed.share_with": "Share with…",

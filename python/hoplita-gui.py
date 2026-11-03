@@ -8383,6 +8383,9 @@ enabled = true
                 except Exception:
                     pass
             threading.Thread(target=_notify, daemon=True).start()
+        self._session_waiting.discard(tab_id)
+        self._session_queue.pop(tab_id, None)
+        self._enchant_t0.pop(tab_id, None)
         self._chat_tabs = [x for x in self._chat_tabs if x["id"] != tab_id]
         self._chat_ctxs.pop(tab_id, None)
         if self._active_tab_id == tab_id:
@@ -8391,6 +8394,8 @@ enabled = true
             self.chat_display.setHtml(loc.get("html", "") if loc else "")
             self._refresh_chat_meta()
         self._render_chat_tabs()
+        self._set_enchanting(self._busy_now())
+        self._update_queue_label()
 
 
     def _ensure_green_tab(self, peer):
