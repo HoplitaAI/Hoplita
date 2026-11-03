@@ -2589,6 +2589,11 @@ def tool_fed_ask_agent(handle, message, max_iterations=None, device="", tab="",
         _require_session()
     except Exception as e:
         return {"error": str(e)}
+    import hoplita_device as _dev
+    if (handle or "").strip().lower() == (_store().data.get("handle") or "").lower() \
+            and (device or "").strip() in ("", _dev.device_id()):
+        return {"error": f"'{handle}' is you: this agent IS that agent. Do the "
+                         f"task here, with your own tools."}
 
     collected = {"events": [], "reply": None, "terminal": None}
     try:
