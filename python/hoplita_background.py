@@ -706,7 +706,13 @@ def _kill(proc):
             except Exception:
                 proc.terminate()
         else:
-            proc.terminate()
+            try:
+                import hoplita_paths
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                               capture_output=True, timeout=10,
+                               **hoplita_paths.no_console())
+            except Exception:
+                proc.terminate()
         try:
             proc.wait(timeout=3)
         except Exception:
