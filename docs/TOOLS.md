@@ -194,7 +194,7 @@ A code project's memory is a notes folder with exactly four notes, `rules` (the 
 
 ## 👁 Background: work that goes on without the turn
 
-A conversation can leave work running and go on, or end its turn and be woken. Every job belongs to the conversation that started it, and its report comes back THERE: into the turn running in it (framed as the job's aside, read before the model's next call) or, with no turn running, as that conversation's next turn — the window paints it as the job speaking and starts the turn; a saved conversation whose tab is closed is reopened for it. A job never wakes another tab. Jobs survive a restart: watches are re-armed, a run that was alive is reported as lost. `[CHAT] max_threads` caps how many may be alive at once; the firewall judges the real tool, not the bridge.
+A conversation can leave work running and go on, or end its turn and be woken. Every job belongs to the conversation that started it, and its report comes back THERE: into the turn running in it (framed as the job's aside, read before the model's next call) or, with no turn running, as that conversation's next turn — the window paints it as the job speaking and starts the turn; a saved conversation whose tab is closed is reopened for it. A job never wakes another tab. A sub-agent of a plan can start jobs too: they belong to the plan's conversation, and the report goes to the sub-agent while it still works, to the plan's turn once the sub-agent is gone, and wakes the conversation when both are. Jobs survive a restart: watches are re-armed, a run that was alive is reported as lost. `[CHAT] max_threads` caps how many may be alive at once; the firewall judges the real tool, not the bridge.
 
 | Tool | Args | What it does |
 |---|---|---|
@@ -478,6 +478,7 @@ Profiles resolve to concrete sets in the MCP (`hoplita-mcp.py` → `TOOL_PROFILE
 On top of the profile, for every sub-agent:
 
 - `intent` is always in, whatever the profile.
+- `background_run`, `background_watch`, `background_stop` and `background_list` are in every profile that calls anything (not `none`): they grant no capability of their own, since `background_run` is unwrapped to its real tool before the profile wall and a watch's probe is judged by that same wall when it is armed. A job a sub-agent starts belongs to the plan's conversation: its report reaches the sub-agent while it still works, the plan's turn once it is gone, and wakes the conversation when both are.
 - `plan_and_orchestrate` and `call_council` are always out (a sub-agent starting its own fan-out is recursion; a council member convening a second council would make its own round wait on it). A federated node running a pack keeps them, because its plan is local to its own machine.
 - The shared-surface tools `render_html`, `dashboard_render` and `canvas_eval` are given only to a **terminal** sub-task, one nothing else in the plan depends on, so nobody paints a finished-looking canvas while other sub-tasks are still running.
 - The general firewall keeps the last word.

@@ -3639,7 +3639,11 @@ def tool_exec_command(command, cwd=None, timeout=600):
 
 
 def _turn_conv_tab(turn_id=""):
-    snap = _TURN_SNAPSHOTS.get((turn_id or "").strip()) if turn_id else None
+    tid = (turn_id or "").strip()
+    snap = _TURN_SNAPSHOTS.get(tid) if tid else None
+    while snap is None and "~" in tid:
+        tid = tid.rsplit("~", 1)[0]
+        snap = _TURN_SNAPSHOTS.get(tid)
     if snap:
         return (snap.get("conv") or snap.get("uuid") or "", snap.get("tab") or "")
     return (getattr(_TURN_SESSION, "conv", "") or getattr(_TURN_SESSION, "uuid", "") or "",
@@ -3647,6 +3651,10 @@ def _turn_conv_tab(turn_id=""):
 
 
 def _turn_id_here():
+    import fed_agent as _fa
+    own = _fa.turn_for_tool()
+    if own:
+        return own
     ctx = getattr(_ORCH, "ctx", None)
     return (getattr(ctx, "turn_id", "") or "") if ctx is not None else ""
 
@@ -3669,8 +3677,13 @@ def _background_run_tool(name, arguments):
     return res
 
 
-def _background_deliver(conv, tab, text):
+def _background_deliver(conv, tab, text, turn=""):
     import fed_agent as _fa
+    _own = (turn or "").strip()
+    while _own:
+        if _fa.inject(_own, text, kind="background"):
+            return True
+        _own = _own.rsplit("~", 1)[0] if "~" in _own else ""
     for _tid, _snap in list(_TURN_SNAPSHOTS.items()):
         if not ((conv and (_snap.get("conv") == conv or _snap.get("uuid") == conv))
                 or (tab and _snap.get("tab") == tab)):
@@ -3738,11 +3751,13 @@ def tool_background_watch(a):
         probe = {}
     turn = _turn_id_here()
     conv, tab = _turn_conv_tab(turn)
+    import fed_agent as _fa
     out = hoplita_background.new_watch(
         conv, tab, turn, (a.get("label") or "").strip(), probe,
         every_s=a.get("every_s") or hoplita_background.DEFAULT_EVERY_S,
         wake=a.get("wake") or "change", until_s=a.get("until_s") or 0,
-        job_id=job_id, blocked=lambda n: n not in _allowed_tools())
+        job_id=job_id,
+        blocked=lambda n: n not in _allowed_tools() or not _fa.tool_may(n))
     if out.get("error"):
         return out
     j = out["job"]
@@ -13811,6 +13826,9 @@ _SUBAGENT_BANNED_TOOLS = {"plan_and_orchestrate", "call_council"}
 
 _ALWAYS_IN_PROFILE = {"intent"}
 
+_BACKGROUND_IN_PROFILE = {"background_run", "background_watch",
+                          "background_stop", "background_list"}
+
 _PROJECT_TOOLS = {"get_todo_context", "list_todo_projects", "add_task",
                   "update_task_progress", "task_depends"}
 
@@ -13829,6 +13847,8 @@ def _profile_tool_names(profile, terminal=False, may_orchestrate=False):
     if not terminal:
         names -= _SUBAGENT_SHARED_SURFACE_TOOLS
     names |= (_ALWAYS_IN_PROFILE & _all)
+    if names - _ALWAYS_IN_PROFILE:
+        names |= (_BACKGROUND_IN_PROFILE & _all)
     return names
 
 
@@ -14228,6 +14248,8 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
             allowed_tools=_sub_allowed)
     except Exception as e:
         return f"[sub-agent error: {e}]"
+    finally:
+        fed_agent.forget_turn(f"{ctx.turn_id}~{sid}")
     try:
         _n_tools = len([t for t in (res.get("tool_trace") or [])
                         if (t.get("tool") or "") != "intent"])

@@ -311,6 +311,8 @@ def _check_probe(probe, blocked):
             return "`command` is empty."
         if any(d in c.lower() for d in DANGEROUS):
             return "Blocked"
+        if callable(blocked) and blocked("exec_command"):
+            return "a `command` probe needs exec_command, which is not available to this agent."
     if k == "tool":
         t = (probe.get("tool") or "").strip()
         if not t:
@@ -483,7 +485,9 @@ def live_for_turn(turn_id):
     if not turn_id:
         return []
     with _LOCK:
-        return [_public(j) for j in _live() if j.get("turn") == turn_id]
+        return [_public(j) for j in _live()
+                if j.get("turn") == turn_id
+                or (j.get("turn") or "").startswith(turn_id + "~")]
 
 
 def live_for_conv(conv="", tab=""):
@@ -557,7 +561,8 @@ def _emit(j, what, text):
     taken = False
     if _DELIVER is not None:
         try:
-            taken = bool(_DELIVER(j.get("conv") or "", j.get("tab") or "", text))
+            taken = bool(_DELIVER(j.get("conv") or "", j.get("tab") or "", text,
+                                  j.get("turn") or ""))
         except Exception:
             taken = False
     with _LOCK:

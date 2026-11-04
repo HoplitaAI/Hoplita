@@ -835,6 +835,20 @@ def conversation_for_tool():
     return list(getattr(_tool_emit, "messages", []) or [])
 
 
+def turn_for_tool():
+    return getattr(_tool_emit, "turn", "") or ""
+
+
+def tool_may(name):
+    fn = getattr(_tool_emit, "may", None)
+    if fn is None:
+        return True
+    try:
+        return bool(fn(name))
+    except Exception:
+        return False
+
+
 def tool_progress(key, **args):
     fn = getattr(_tool_emit, "fn", None)
     if fn is None:
@@ -1476,6 +1490,9 @@ def run_agentic_turn(user_message=None, history=None, system=None,
 
     def _is_allowed(name):
         return allowed is None or name in allowed
+
+    def _may_here(name):
+        return _is_allowed(name) and not (callable(is_blocked) and is_blocked(name))
 
     def _is_delegated(name):
         if not delegate or name in NEVER_DELEGATE \
@@ -2355,6 +2372,8 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 _tool_emit.tail = _conversation_tail(messages)[-8:]
                 _tool_emit.messages = messages
                 _tool_emit.line_cap = line_cap(_window)
+                _tool_emit.turn = turn_id
+                _tool_emit.may = _may_here
                 try:
                     result = _execute_tool(name, args, consented=True)
                 finally:
@@ -2362,6 +2381,8 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                     _tool_emit.tail = []
                     _tool_emit.messages = []
                     _tool_emit.line_cap = 0
+                    _tool_emit.turn = ""
+                    _tool_emit.may = None
             if name == "load_tools":
                 if _heavy_cut:
                     try:
