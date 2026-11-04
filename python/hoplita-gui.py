@@ -7697,6 +7697,8 @@ enabled = true
             if m.get("role") != "user":
                 continue
             txt = (_fedagent_mod.user_said(m) or "").strip().replace("\n", " ")
+            if txt.startswith(BG_EVENT_PREFIX):
+                continue
             if txt:
                 return txt[:48]
         return ""
