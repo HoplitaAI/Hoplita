@@ -647,6 +647,11 @@ def run_shell(command, cwd=None, timeout=600, capture_only=False):
             fh = open(out_path, "wb")
             proc = subprocess.Popen(command, shell=True, stdout=fh,
                                     stderr=subprocess.STDOUT, cwd=cwd or None, **kw)
+        if os.name != "posix":
+            try:
+                proc._hoplita_job = _win_job_for(proc)
+            except Exception:
+                proc._hoplita_job = None
         if job:
             register_process(job, proc)
         try:
@@ -696,6 +701,46 @@ def _tail(path, n=OUTPUT_TAIL * 4):
         return ""
 
 
+def _win_job_for(proc):
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.windll.kernel32
+
+    class _Basic(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                    ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t),
+                    ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class _Io(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint64) for n in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+    class _Extended(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", _Basic), ("IoInfo", _Io),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    info = _Extended()
+    info.BasicLimitInformation.LimitFlags = 0x2000
+    if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)) \
+            or not k32.AssignProcessToJobObject(job, wintypes.HANDLE(int(proc._handle))):
+        k32.CloseHandle(job)
+        return None
+    return job
+
+
 def _kill(proc):
     try:
         if proc.poll() is not None:
@@ -706,13 +751,22 @@ def _kill(proc):
             except Exception:
                 proc.terminate()
         else:
-            try:
-                import hoplita_paths
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                               capture_output=True, timeout=10,
-                               **hoplita_paths.no_console())
-            except Exception:
-                proc.terminate()
+            _job = getattr(proc, "_hoplita_job", None)
+            _done = False
+            if _job:
+                try:
+                    import ctypes
+                    _done = bool(ctypes.windll.kernel32.TerminateJobObject(_job, 1))
+                except Exception:
+                    _done = False
+            if not _done:
+                try:
+                    import hoplita_paths
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                                   capture_output=True, timeout=10,
+                                   **hoplita_paths.no_console())
+                except Exception:
+                    proc.terminate()
         try:
             proc.wait(timeout=3)
         except Exception:
