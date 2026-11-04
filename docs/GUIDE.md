@@ -902,8 +902,10 @@ several at once (`exec_command`); you do the same from the keyboard with
 into its running turn, or as its next turn, painted as the job speaking —
 never to another tab. An idle tab with jobs alive wears 👁; `/watch list`
 shows them, `/watch stop <id|all>` ends them, as does closing the tab, and the
-model has `background_stop` for the same. `[CHAT] max_threads` caps how many
-may be alive at once.
+model has `background_stop` for the same, so saying so in words works too,
+mid-turn or not. Stopping the turn (■) does not end its jobs: they belong to
+the conversation, not to the turn, and report when they land. `[CHAT]
+max_threads` caps how many may be alive at once.
 
 Work in one tab never takes the screen from you. The canvas comes to the
 front only for a canvas you open, or for what the tab you are in draws while

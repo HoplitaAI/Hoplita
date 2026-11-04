@@ -14238,6 +14238,7 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
             else _profile_tool_names(profile, terminal))
         res = fed_agent.run_agentic_turn(
             user_message=None if messages else prompt, messages=messages,
+            system=(None if messages else _tr("prompts.background")),
             given=given, max_iterations=max_iter,
             on_event=on_event, cancel=ctx.cancel,
             turn_id=f"{ctx.turn_id}~{sid}", llm_chat=chat,
@@ -14294,7 +14295,8 @@ def _child_run_local(pack, message, terminal=True, event_sink=None):
             unattended=ctx.unattended, turn_id=ctx.turn_id,
             code_project=ctx.code_project, blocked=ctx.blocked,
             local_only=ctx.local_only, remote=getattr(ctx, "remote", False))
-    msgs = [{"role": "system", "content": hoplita_children.system_block(pack)},
+    msgs = [{"role": "system", "content": hoplita_children.system_block(pack)
+             + "\n\n" + _tr("prompts.background")},
             {"role": "user", "content": message}]
     given = ""
     try:
