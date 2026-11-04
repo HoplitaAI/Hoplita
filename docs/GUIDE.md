@@ -891,6 +891,18 @@ board draws them: a light per agent (amber and pulsing while it works, green
 done, red failed), where it runs, its role and model, and the rail of its own
 steps with the one it is on. A card opens its tab.
 
+A tab can also leave work running and go on, or end its turn and be woken.
+The model starts any tool in the background (`background_run`: a test suite,
+a build, a slow fetch), watches a file, a command or a tool for a change
+(`background_watch`), and runs shell commands outside the shared terminal,
+several at once (`exec_command`); you do the same from the keyboard with
+`/watch`. Their reports come back to the conversation that started them —
+into its running turn, or as its next turn, painted as the job speaking —
+never to another tab. An idle tab with jobs alive wears 👁; `/watch list`
+shows them, `/watch stop <id|all>` ends them, as does closing the tab, and the
+model has `background_stop` for the same. `[CHAT] max_threads` caps how many
+may be alive at once.
+
 Work in one tab never takes the screen from you. The canvas comes to the
 front only for a canvas you open, or for what the tab you are in draws while
 nothing is half-typed in its box; anything else (another tab drawing, a

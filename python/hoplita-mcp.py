@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 import fed_tools
+import hoplita_background
 import hoplita_children
 from hoplita_search import (rank_by_words, _norm_words,
                             _SEARCH_STOPS)
@@ -3631,6 +3632,151 @@ def tool_run_command(command, cwd=None, timeout=60):
         return {"error": f"Timeout ({timeout}s)"}
     except Exception as e:
         return {"error": str(e)}
+
+
+def tool_exec_command(command, cwd=None, timeout=600):
+    return hoplita_background.run_shell(command, cwd or None, timeout)
+
+
+def _turn_conv_tab(turn_id=""):
+    snap = _TURN_SNAPSHOTS.get((turn_id or "").strip()) if turn_id else None
+    if snap:
+        return (snap.get("conv") or snap.get("uuid") or "", snap.get("tab") or "")
+    return (getattr(_TURN_SESSION, "conv", "") or getattr(_TURN_SESSION, "uuid", "") or "",
+            getattr(_TURN_SESSION, "tab", "") or "")
+
+
+def _turn_id_here():
+    ctx = getattr(_ORCH, "ctx", None)
+    return (getattr(ctx, "turn_id", "") or "") if ctx is not None else ""
+
+
+def _background_run_tool(name, arguments):
+    tools = _allowed_tools()
+    if name not in tools:
+        return {"error": f"'{name}' is not available here"}
+    try:
+        res = tools[name]["fn"](arguments if isinstance(arguments, dict) else {})
+    except KeyError as e:
+        import fed_agent as _fa
+        _k = e.args[0] if e.args else None
+        _spec = TOOL_PARAMS.get(name) or {}
+        if isinstance(_k, str) and _k in (_spec.get("properties") or {}):
+            return _fa.args_complaint(name, arguments, e, _spec)
+        return {"error": f"failed executing '{name}': {e}"}
+    except Exception as e:
+        return {"error": f"failed executing '{name}': {e}"}
+    return res
+
+
+def _background_deliver(conv, tab, text):
+    import fed_agent as _fa
+    for _tid, _snap in list(_TURN_SNAPSHOTS.items()):
+        if not ((conv and (_snap.get("conv") == conv or _snap.get("uuid") == conv))
+                or (tab and _snap.get("tab") == tab)):
+            continue
+        with _AGENT_TURNS_LOCK:
+            _live = _tid in _AGENT_TURNS
+        if _live and _fa.inject(_tid, text, kind="background"):
+            return True
+    return False
+
+
+def _background_ceiling():
+    return CONFIG.getint("CHAT", "max_threads", fallback=8) if CONFIG else 8
+
+
+class _BackgroundAdapter:
+
+    @staticmethod
+    def start(name, arguments, label, turn_id, delegated=False, work=None):
+        conv, tab = _turn_conv_tab(turn_id)
+        job = hoplita_background.new_run(conv, tab, turn_id, name, arguments,
+                                         label, delegated=delegated)
+        if job.get("error"):
+            return job
+        if not delegated and work is not None:
+            hoplita_background.start_run(job, work)
+        return job
+
+    @staticmethod
+    def live_for_turn(turn_id):
+        return hoplita_background.live_for_turn(turn_id)
+
+
+def tool_background_run(tool, arguments, label=""):
+    tool = (tool or "").strip()
+    if tool and tool not in _allowed_tools():
+        return {"error": f"'{tool}' is not available here"}
+    turn = _turn_id_here()
+    job = _BackgroundAdapter.start(
+        tool, arguments if isinstance(arguments, dict) else {}, label, turn,
+        delegated=False,
+        work=lambda _n=tool, _a=arguments: _background_run_tool(
+            _n, _a if isinstance(_a, dict) else {}))
+    if job.get("error"):
+        return job
+    return {"started": True, "job_id": job["id"], "tool": tool,
+            "label": job.get("label", ""),
+            "note": "It runs on its own; its result reaches the conversation "
+                    "as a message when it lands. background_stop(job_id) "
+                    "cancels it."}
+
+
+def tool_background_watch(a):
+    a = a if isinstance(a, dict) else {}
+    job_id = (a.get("job_id") or "").strip()
+    if (a.get("file") or "").strip():
+        probe = {"kind": "file", "path": a["file"].strip()}
+    elif (a.get("command") or "").strip():
+        probe = {"kind": "command", "command": a["command"].strip(),
+                 "cwd": (a.get("cwd") or "").strip()}
+    elif (a.get("tool") or "").strip():
+        probe = {"kind": "tool", "tool": a["tool"].strip(),
+                 "arguments": a.get("arguments") if isinstance(a.get("arguments"), dict) else {}}
+    else:
+        probe = {}
+    turn = _turn_id_here()
+    conv, tab = _turn_conv_tab(turn)
+    out = hoplita_background.new_watch(
+        conv, tab, turn, (a.get("label") or "").strip(), probe,
+        every_s=a.get("every_s") or hoplita_background.DEFAULT_EVERY_S,
+        wake=a.get("wake") or "change", until_s=a.get("until_s") or 0,
+        job_id=job_id, blocked=lambda n: n not in _allowed_tools())
+    if out.get("error"):
+        return out
+    j = out["job"]
+    res = {"job_id": j["id"], "label": j.get("label"), "every_s": j.get("every_s"),
+           "wake": j.get("wake"), "until_s": j.get("until_s")}
+    if out.get("updated"):
+        res["updated"] = True
+        res["note"] = "The watch goes on with the new settings."
+    else:
+        res["now"] = out.get("baseline", "")
+        res["note"] = ("Watching. You are told when it changes, as a message: "
+                       "in this turn if you are working, or it wakes this "
+                       "conversation. Go on with something else, or end your "
+                       "turn; do not poll. background_stop(job_id) ends it.")
+    return res
+
+
+def tool_background_stop(job_id):
+    j = hoplita_background.stop((job_id or "").strip(), "stopped on request")
+    if j is None:
+        return {"error": f"no job '{job_id}'. background_list shows them."}
+    return {"stopped": True, "job_id": j["id"], "label": j.get("label"),
+            "state": j.get("state")}
+
+
+def tool_background_list(all_convs=False):
+    if all_convs:
+        jobs = hoplita_background.list_jobs()
+    else:
+        conv, tab = _turn_conv_tab(_turn_id_here())
+        jobs = (hoplita_background.list_jobs(conv=conv, tab=tab)
+                if (conv or tab) else hoplita_background.list_jobs())
+    return {"jobs": jobs, "live": len([j for j in jobs if j.get("state") == "live"]),
+            "ceiling": hoplita_background.ceiling()}
 
 
 def tool_canvas_see(max_width=None):
@@ -9521,6 +9667,16 @@ def register_tools():
                                    "fn": lambda a: tool_search_web(a["query"])},
         "run_command":            {"desc": f"Run a command ({platform.system()}). Pass `timeout` in SECONDS for anything that is not instant — an install, a build, a migration, a test suite. When it is cut short you get exit_code -1 with only part of the output: that is the clock running out, NOT the command failing, so re-run it with a bigger timeout instead of concluding anything from the fragment.",
                                    "fn": lambda a: tool_run_command(a["command"], a.get("cwd"), a.get("timeout", 60))},
+        "exec_command":           {"desc": "Run a shell command ON ITS OWN, outside the shared terminal: nobody watches it, its whole output goes to a file (the tail comes back with exit_code, duration_s and output_path), and several can run at once. Use it for checks, builds, test suites and anything the person does not need to see run; run_command is the terminal the person watches and works in with you. For something long, start it with background_run(tool='exec_command', ...) and go on.",
+                                   "fn": lambda a: tool_exec_command(a["command"], a.get("cwd"), a.get("timeout", 600))},
+        "background_run":         {"desc": "Run ANY tool in the background: it answers at once with a job id and the tool runs on its own; its result reaches you as a message when it lands — in this turn if you are still working, or as this conversation's next turn if you ended it. Use it for anything that takes long (a test suite, a build, a slow fetch, a long browse) so you keep working, or end your turn and get woken. Never wait for it by polling. background_stop(job_id) cancels it.",
+                                   "fn": lambda a: tool_background_run(a["tool"], a.get("arguments") or {}, a.get("label", ""))},
+        "background_watch":       {"desc": "Watch something WITHOUT you: a file (it appears, disappears or changes), a shell command (its output or exit code changes) or a tool (its result changes), probed every few seconds by the machine alone. You are told when it changes (wake='change', the default: before and after) or every round (wake='always'). The report arrives like a background_run result: in this turn if you are working, or it wakes this conversation. It keeps watching until background_stop(job_id), its time limit (until_s) or the tab closing; call it again with job_id to change its pace.",
+                                   "fn": lambda a: tool_background_watch(a)},
+        "background_stop":        {"desc": "End a background job (a run or a watch) you or the person no longer want: a run's process is killed and its result dropped; a watch stops probing. Use it when a result is no longer needed, when a watch has served its purpose, or when something is wedged on it.",
+                                   "fn": lambda a: tool_background_stop(a["job_id"])},
+        "background_list":        {"desc": "Your background jobs: live runs and watches (id, label, tool, state, age, rounds, last probe) and the recently ended ones.",
+                                   "fn": lambda a: tool_background_list(bool(a.get("all")))},
         "render_html":            {"desc": "Render HTML/CSS/JS/SVG in the GUI's visual CANVAS (a Chromium webview). To explain CODE — a flow, a call path, a data shape, a change — use the whiteboard (wb_*: diagrams anchored to the code) instead. It is a FREE canvas, not just for dashboards: use it for ANY other visual content — charts (Chart.js 4 already available, or D3/Plotly via CDN), SVG (diagrams, illustrations, icons, schematics), CSS/JS animations, canvas/WebGL (three.js via CDN), maps, UI mockups, tables, timelines, trees, graphs, or complete HTML pages. You can send just the <body> (it gets wrapped in a dark theme) or a complete HTML document (rendered as-is). If you need data, fetch it first (run_command, search_web...) and build the HTML with it. For a LONG document, split it across 2-4 calls with append=true — one giant call gets cut off by the output token limit.",
                                    "fn": lambda a: tool_dashboard_render(a.get("html", ""))},
         "dashboard_render":       {"desc": "[ALIAS of render_html] Render a dashboard/visualization in the GUI canvas. Same as render_html: accepts HTML/CSS/JS/SVG. Kept for compatibility; prefer render_html.",
@@ -10167,6 +10323,11 @@ def register_tool_params():
         "call_council":           {"properties": {"topic": {"type": "string", "description": "The matter, stated so it stands on its own: nobody sitting down has read your conversation."}, "members": {"type": "array", "items": {"type": "string"}, "description": "Pool aliases that take a seat. Empty = every pool model that sits on councils. 'base' is the model you are running on."}, "first": {"type": "string", "description": "Who answers first — the one the others examine. Empty = the first of the list."}, "context": {"type": "string", "description": "What they need that does not belong in the statement of the matter: what you already tried, what came back, the constraints."}}, "required": ["topic"]},
         "search_web":             {"properties": {"query": {"type": "string"}}, "required": ["query"]},
         "run_command":            {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait. Raise it well above the default for installs, builds, migrations and test suites — 300 or more."}}, "required": ["command"]},
+        "exec_command":           {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait (default 600). A cut returns exit_code -1 with the partial output and the file that holds it."}}, "required": ["command"]},
+        "background_run":         {"properties": {"tool": {"type": "string", "description": "the tool's exact name (any tool you have, including the shelved ones)"}, "arguments": {"type": "object", "description": "its arguments", "additionalProperties": True}, "label": {"type": "string", "description": "a few words that say what this job is for; they come back with its result"}}, "required": ["tool"]},
+        "background_watch":       {"properties": {"label": {"type": "string", "description": "what this watch is for"}, "every_s": {"type": "integer", "description": "seconds between probes (minimum 5, default 30)"}, "file": {"type": "string", "description": "a path: fires when it appears, disappears or changes"}, "command": {"type": "string", "description": "a shell command: fires when its exit code or output changes"}, "tool": {"type": "string", "description": "a tool to call each round: fires when its result changes"}, "arguments": {"type": "object", "description": "the tool's arguments", "additionalProperties": True}, "wake": {"type": "string", "enum": ["change", "always"], "description": "change (default) = only when the probe's answer differs from the last round; always = every round"}, "until_s": {"type": "integer", "description": "life limit in seconds (0 = none)"}, "job_id": {"type": "string", "description": "an existing watch to re-pace or re-label instead of starting one"}}, "required": []},
+        "background_stop":        {"properties": {"job_id": {"type": "string", "description": "the job to end (from background_run, background_watch or background_list)"}}, "required": ["job_id"]},
+        "background_list":        {"properties": {"all": {"type": "boolean", "description": "true = every conversation's jobs, not only this one's"}}, "required": []},
         "render_html":            {"properties": {"html": {"type": "string", "description": "HTML/CSS/JS/SVG to render. Chart.js 4 available; D3/Plotly/three.js via CDN. <body> fragment or complete document."}, "append": {"type": "boolean", "description": "true = ADD this chunk to what is already on the canvas. Use it to build a LARGE document in 2-4 calls: a single huge call gets truncated by the output token cap and the server rejects it."}}, "required": ["html"]},
         "see_image":              {"properties": {"path": {"type": "string", "description": "the image file"}, "max_width": {"type": "integer", "description": "downscale width in px (default 1024)"}}, "required": ["path"]},
         "canvas_see":             {"properties": {"max_width": {"type": "integer", "description": "Screenshot width in px (default 1024). Smaller = fewer tokens."}}, "required": []},
@@ -10500,7 +10661,7 @@ def register_tool_params():
             _props = (TOOL_PARAMS.get(_n) or {}).get("properties") or {}
             if _tc(_n) != "system":
                 continue
-            if _n == "run_command":
+            if _n in ("run_command", "exec_command"):
                 _tool["fn"] = _project_scoped(_tool["fn"], keys=("cwd",))
             elif "path" in _props:
                 _tool["fn"] = _project_scoped(_tool["fn"], keys=("path",))
@@ -11602,6 +11763,7 @@ class ToolCallReq(BaseModel):
     arguments: dict = {}
     code_project: str = ""
     turn_id: str = ""
+    background_job: str = ""
 
 
 class FeedbackReq(BaseModel):
@@ -11813,7 +11975,82 @@ def agent_session_events():
     import fed_tools
     return {"events": fed_tools.drain_session_events(),
             "shares": fed_tools.drain_share_events(),
-            "wake": fed_tools.drain_wake_events()}
+            "wake": fed_tools.drain_wake_events(),
+            "background": hoplita_background.drain_events(),
+            "background_live": hoplita_background.live_counts()}
+
+
+class BackgroundDoneReq(BaseModel):
+    job_id: str
+    result: str = ""
+    error: str = ""
+
+
+class BackgroundStopReq(BaseModel):
+    job_id: str = ""
+    conv: str = ""
+    tab: str = ""
+
+
+@app.get("/agent/background")
+def agent_background_list(conv: str = "", tab: str = ""):
+    return {"jobs": hoplita_background.list_jobs(conv=conv, tab=tab),
+            "ceiling": hoplita_background.ceiling()}
+
+
+@app.post("/agent/background/done")
+def agent_background_done(req: BackgroundDoneReq):
+    j = hoplita_background.finish(req.job_id, req.result,
+                                  error=(req.error or None))
+    if j is None:
+        return {"accepted": False,
+                "error": f"no live job '{req.job_id}' (stopped, or already ended)"}
+    return {"accepted": True, "state": j.get("state")}
+
+
+class BackgroundWatchReq(BaseModel):
+    conv: str = ""
+    tab: str = ""
+    label: str = ""
+    every_s: int = 30
+    file: str = ""
+    command: str = ""
+    cwd: str = ""
+    tool: str = ""
+    arguments: dict = {}
+    wake: str = "change"
+    until_s: int = 0
+
+
+@app.post("/agent/background/watch")
+def agent_background_watch(req: BackgroundWatchReq):
+    if req.file.strip():
+        probe = {"kind": "file", "path": req.file.strip()}
+    elif req.command.strip():
+        probe = {"kind": "command", "command": req.command.strip(),
+                 "cwd": req.cwd.strip()}
+    elif req.tool.strip():
+        probe = {"kind": "tool", "tool": req.tool.strip(),
+                 "arguments": req.arguments or {}}
+    else:
+        probe = {}
+    out = hoplita_background.new_watch(
+        req.conv, req.tab, "", req.label.strip(), probe, every_s=req.every_s,
+        wake=req.wake or "change", until_s=req.until_s,
+        blocked=lambda n: n not in _allowed_tools())
+    if out.get("error"):
+        return out
+    j = out["job"]
+    return {"job_id": j["id"], "label": j.get("label"), "every_s": j.get("every_s"),
+            "wake": j.get("wake"), "now": out.get("baseline", "")}
+
+
+@app.post("/agent/background/stop")
+def agent_background_stop(req: BackgroundStopReq):
+    if req.job_id:
+        j = hoplita_background.stop(req.job_id, "stopped by the person")
+        return {"stopped": [j["id"]] if j else [], "found": j is not None}
+    return {"stopped": hoplita_background.stop_conv(req.conv, req.tab)}
 
 
 class SessionSendReq(BaseModel):
@@ -12013,7 +12250,8 @@ _ALWAYS_HOT = ("add_fact", "edit_fact", "delete_fact",
 
 
 _STARTER_HOT = ("run_command", "read_file", "list_dir", "search_web",
-                "scrape_url", "see_image")
+                "scrape_url", "see_image", "exec_command", "background_run",
+                "background_watch")
 
 _HOT_FROZEN = {}
 
@@ -12068,6 +12306,7 @@ _FAMILY_BLURB = {
     "tasks": "todo tasks and task projects",
     "calendar": "appointments",
     "cron": "scheduled jobs",
+    "background": "work that goes on without you: run any tool in the background, watch a file, a command or a tool for a change, and be told when it lands",
     "chat": "saved chat sessions and the conversation log",
     "canvas": "the HTML canvas and dashboards",
     "whiteboard": "a live whiteboard anchored to code: explain a change or how code works with diagrams and code peeks that open the code (start with wb_get_instructions)",
@@ -12091,7 +12330,7 @@ _SHELF_KEEP_DESC = {
     "propose_memory_change", "working_memory_forget", "search_working_memory",
     "project_journal", "project_write", "get_agentic_config",
     "cron_set_context", "set_cron_context", "fed_ask_agent", "fed_share",
-    "fill_credentials", "get_otp",
+    "fill_credentials", "get_otp", "exec_command", "background_list",
 }
 
 
@@ -12407,11 +12646,14 @@ def call_tool(req: ToolCallReq):
             _TURN_SESSION.project = _req_proj
         with _AGENT_TURNS_LOCK:
             _turn_cancel = _AGENT_TURNS.get((getattr(req, "turn_id", "") or "").strip())
+        hoplita_background.CURRENT.job = (getattr(req, "background_job", "") or "").strip()
         try:
             with _orchestration_ctx(OrchestrationCtx(
-                    cancel=_turn_cancel.is_set if _turn_cancel is not None else None)):
+                    cancel=_turn_cancel.is_set if _turn_cancel is not None else None,
+                    turn_id=(getattr(req, "turn_id", "") or "").strip())):
                 result = TOOLS[req.tool]["fn"](req.arguments)
         finally:
+            hoplita_background.CURRENT.job = ""
             for k, v in _prev.items():
                 setattr(_TURN_SESSION, k, v)
     except KeyError as e:
@@ -13397,6 +13639,7 @@ def prepare_turn_messages(messages, pinned_skills=None, emit=None,
     out = _prepend_system(out, _tr("prompts.language_directive"))
 
     out = _prepend_system(out, _tr("prompts.no_false_claims"))
+    out = _prepend_system(out, _tr("prompts.background"))
 
     out = _prepend_system(out, _tr("prompts.identity"))
     out = _inject_block(out, _tr("prompts.today",
@@ -15694,6 +15937,7 @@ def agent_hands(req: HandsControlReq):
 class AgentInjectReq(BaseModel):
     turn_id: str
     message: str
+    kind: str = "user"
 
 
 @app.post("/shutdown")
@@ -15735,7 +15979,7 @@ def shutdown_mcp(request: Request):
 @app.post("/agent/inject")
 def agent_inject(req: AgentInjectReq):
     import fed_agent
-    if fed_agent.inject(req.turn_id, req.message):
+    if fed_agent.inject(req.turn_id, req.message, kind=req.kind or "user"):
         return {"injected": True, "turn_id": req.turn_id}
     return {"injected": False,
             "error": f"turn '{req.turn_id}' does not exist or already finished"}
@@ -16381,6 +16625,12 @@ if __name__ == "__main__":
         _ensure_venv_in_path()
         _load_external_mcps()
         register_manager_map()
+        import fed_agent as _fa_bg
+        hoplita_background.configure(
+            _hb(), run_fn=_background_run_tool,
+            deliver_fn=_background_deliver, max_fn=_background_ceiling)
+        _fa_bg.configure_background(_BackgroundAdapter)
+        hoplita_background.start()
         _enroll_from_env()
         threading.Thread(target=backfill_message_log, daemon=True).start()
 

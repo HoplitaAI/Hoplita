@@ -1603,6 +1603,8 @@ class ChatCtx:
         self.last_extracted_idx = 0
         self.msg_queue = []
         self.turn_id = None
+        self.bg_live = 0
+        self.bg_labels = []
         self.injected_pending = []
         self.sticky = ""
         self.no_log = False
@@ -1661,10 +1663,11 @@ _CMD_USAGE = {
     "alert": lambda: t("usage.alert"),
 }
 _CMD_NO_ARGS = {"summary", "todo", "verify", "goal", "pin", "why", "model",
-                "creds", "help", "queue", "qa", "compact", "context"}
+                "creds", "help", "queue", "qa", "compact", "context", "watch"}
 _GUI_CMDS = set(_CMD_USAGE) | _CMD_NO_ARGS
 
 CRON_TAB_ID = "cron"
+BG_EVENT_PREFIX = "[BACKGROUND EVENT]"
 
 
 def _canon_cmd(msg):
@@ -2333,7 +2336,8 @@ class ChatAssistantWindow(QMainWindow):
             r = requests.post(f"{url}/call",
                               json={"tool": tool, "arguments": arguments,
                                     "code_project": _Face_call_project(self),
-                                    "turn_id": getattr(getattr(self, "_tls", None), "turn_id", "") or ""},
+                                    "turn_id": getattr(getattr(self, "_tls", None), "turn_id", "") or "",
+                                    "background_job": getattr(getattr(self, "_tls", None), "bg_job", "") or ""},
                               headers=self._tab_headers(), timeout=timeout)
             if r.status_code != 200:
                 return False, {}, self._http_error(r)
@@ -2360,7 +2364,8 @@ class ChatAssistantWindow(QMainWindow):
             r = requests.post(f"{url}/call",
                               json={"tool": tool, "arguments": arguments,
                                     "code_project": _Face_call_project(self),
-                                    "turn_id": getattr(getattr(self, "_tls", None), "turn_id", "") or ""},
+                                    "turn_id": getattr(getattr(self, "_tls", None), "turn_id", "") or "",
+                                    "background_job": getattr(getattr(self, "_tls", None), "bg_job", "") or ""},
                               headers=self._tab_headers(), timeout=timeout)
             if r.status_code == 200:
                 data = r.json()
@@ -2823,6 +2828,13 @@ class ChatAssistantWindow(QMainWindow):
                     continue
                 _seen.add(key)
                 self.signals.share_incoming.emit(key[0], key[1], key[2] or "folder")
+            for _bev in payload.get("background", []) or []:
+                try:
+                    self._deliver_background_event(_bev)
+                except Exception as _e:
+                    print(f"[BACKGROUND] deliver: {_e}", file=sys.stderr)
+            if "background_live" in payload:
+                self._paint_background_live(payload.get("background_live") or [])
             _wake = payload.get("wake", []) or []
             if _wake:
                 kinds = {w.get("kind") for w in _wake}
@@ -6272,7 +6284,8 @@ enabled = true
             _fl.setContentsMargins(0, 0, 4, 0)
             _fl.setSpacing(0)
             _spin = self._SPIN[getattr(self, "_spin_i", 0) % len(self._SPIN)] + " "
-            _label = (("⏸ " if waiting else _spin if working else "")
+            _eye = "👁 " if getattr(self._chat_ctxs.get(tab["id"]), "bg_live", 0) else ""
+            _label = (("⏸ " if waiting else _spin if working else _eye)
                       + tab["title"] + _mark)
             _shown_label = _fm.elidedText(_label, Qt.TextElideMode.ElideRight,
                                           int(_title_w))
@@ -6293,6 +6306,10 @@ enabled = true
                 _tips.append(t("fwtab.tip", n=_nfw))
             if _job:
                 _tips.append(t("job.tab_tip", name=_job))
+            _bgn = getattr(self._chat_ctxs.get(tab["id"]), "bg_live", 0)
+            if _bgn:
+                _tips.append(t("bg.tab_tip", n=_bgn, names=", ".join(
+                    getattr(self._chat_ctxs.get(tab["id"]), "bg_labels", []) or [])))
             btn.setToolTip("\n".join(_tips))
             frame.setStyleSheet(self._chat_tab_css(col, active))
             if working:
@@ -6847,6 +6864,8 @@ enabled = true
                     foot.append("🔒")
                 if getattr(c, "blocked_tools", None):
                     foot.append("🛡")
+                if getattr(c, "bg_live", 0):
+                    foot.append("👁 " + str(c.bg_live))
             rows.append({
                 "id": tid, "title": tab.get("title", ""),
                 "color": self._chat_tab_color(tab.get("kind", "local")),
@@ -8327,6 +8346,13 @@ enabled = true
         if _c is not None and _c.task_running:
             self._cancel_pending_ack(tab_id)
             _c.stop_requested.set()
+        if _c is not None and tab.get("kind") == "local":
+            _bkey = getattr(_c, "sync_id", "") or tab_id
+            _buuid = getattr(_c, "session_uuid", None) or ""
+            _burl = self._tab_url(_c)
+            self._bg(lambda: requests.post(
+                f"{_burl}/agent/background/stop",
+                json={"conv": _buuid, "tab": _bkey}, timeout=5))
         if _c is not None and tab.get("kind") == "local":
             segment = _c.history[_c.last_extracted_idx:]
             if any(m.get("role") == "user" for m in segment):
@@ -15010,6 +15036,8 @@ enabled = true
         item = ctx.msg_queue.pop(0)
         if tab_id == self._active_tab_id:
             self._update_queue_label()
+        if tab_id == self._active_tab_id \
+                and not str(item[0]).startswith(BG_EVENT_PREFIX):
             self.send_message(_queued=item)
         else:
             self._run_queued_in_tab(tab_id, item)
@@ -15025,12 +15053,155 @@ enabled = true
             self._append_html_to_tab(tab_id, self._chat_frag(
                 t("queue.cmd_skipped", cmd=_c.split()[0]), "#f59e0b", "⏭"))
             return
-        self._append_html_to_tab(tab_id, self._chat_frag(
-            msg, "#0ea5e9", "👤 " + t("label.user")))
+        if msg.startswith(BG_EVENT_PREFIX):
+            self._append_html_to_tab(tab_id, self._background_event_line(msg))
+        else:
+            self._append_html_to_tab(tab_id, self._chat_frag(
+                msg, "#0ea5e9", "👤 " + t("label.user")))
         ctx.history.append({"role": "user", "content": msg})
         if not self._spawn_turn(tab_id, self.call_normal_ai, msg):
             ctx.msg_queue.insert(0, (msg, []))
             self._update_queue_label()
+
+    def _bg_tab_key(self, tab_id, ctx):
+        return getattr(ctx, "sync_id", "") or tab_id
+
+    def _tab_for_conversation(self, conv, tab):
+        for tid, c in self._chat_ctxs.items():
+            if self._tab_by_id(tid) is None:
+                continue
+            if conv and getattr(c, "session_uuid", None) == conv:
+                return tid
+        for tid, c in self._chat_ctxs.items():
+            if tab and self._tab_by_id(tid) is not None \
+                    and self._bg_tab_key(tid, c) == tab:
+                return tid
+        return None
+
+    def _deliver_background_event(self, ev):
+        tid = self._tab_for_conversation(ev.get("conv") or "",
+                                         ev.get("tab") or "")
+        if tid is not None:
+            self._feed_background_event(tid, ev)
+            return
+        uuid = ev.get("conv") or ""
+        if uuid and uuid != (ev.get("tab") or ""):
+            self._restore_session(uuid, quiet=True,
+                                  then=lambda t_: self._feed_background_event(t_, ev))
+
+    def _feed_background_event(self, tid, ev):
+        ctx = self._chat_ctxs.get(tid)
+        if ctx is None:
+            return
+        msg = ev.get("message") or ev.get("text") or ""
+        if not msg:
+            return
+        if getattr(ctx, "task_running", False) and getattr(ctx, "turn_id", None) \
+                and self._inject_into_turn(ctx.turn_id, msg, kind="background"):
+            return
+        ctx.msg_queue.append((msg, []))
+        self._render_chat_tabs()
+        if tid == self._active_tab_id:
+            self._update_queue_label()
+        self._drain_tab_queue(tid)
+
+    def _background_event_line(self, msg):
+        body = msg.split("\n", 1)[1] if "\n" in msg else msg
+        head = body.split("\n", 1)[0]
+        return self._chat_frag(head[:300], "#f5b800", "⚙ " + t("bg.label"))
+
+    def _paint_background_live(self, rows):
+        by_conv, by_tab = {}, {}
+        for r in rows or []:
+            if r.get("conv"):
+                by_conv[r["conv"]] = r
+            if r.get("tab"):
+                by_tab[r["tab"]] = r
+        changed = False
+        for tid, c in self._chat_ctxs.items():
+            r = (by_conv.get(getattr(c, "session_uuid", None) or "")
+                 or by_tab.get(self._bg_tab_key(tid, c)))
+            n = int(r.get("n", 0) or 0) if r else 0
+            labels = [str(x) for x in (r.get("labels") or [])] if r else []
+            if n != getattr(c, "bg_live", 0) or labels != getattr(c, "bg_labels", []):
+                c.bg_live, c.bg_labels = n, labels
+                changed = True
+        if changed:
+            self._render_chat_tabs()
+
+    def _cmd_watch(self, msg):
+        args = msg.split(None, 2)[1:]
+        ctx = self._view_ctx()
+        tab_id = self._active_tab_id
+        conv = getattr(ctx, "session_uuid", None) or ""
+        tkey = self._bg_tab_key(tab_id, ctx)
+        url = self._tab_url()
+        sub = (args[0] if args else "").lower()
+        if not args or sub in ("list", "ls"):
+            def work():
+                return requests.get(f"{url}/agent/background",
+                                    params={"conv": conv, "tab": tkey},
+                                    timeout=10).json()
+
+            def done(res):
+                from tabs_overview import ago
+                jobs = [j for j in ((res or {}).get("jobs") or [])
+                        if j.get("state") == "live"]
+                if not jobs:
+                    self.add_message(t("bg.watch_none"), "system")
+                    return
+                lines = [t("bg.watch_row", id=j.get("id"), label=j.get("label"),
+                           kind=j.get("kind"), age=ago(j.get("age_s") or 0),
+                           last=str(j.get("last_preview") or j.get("tool") or "")[:80])
+                         for j in jobs]
+                self.add_message(t("bg.watch_list", n=len(jobs)) + "\n"
+                                 + "\n".join(lines), "system")
+            self._bg(work, done)
+            return
+        if sub == "stop":
+            target = (args[1] if len(args) > 1 else "").strip()
+            if not target:
+                self.add_message(t("bg.watch_usage"), "system")
+                return
+            payload = ({"conv": conv, "tab": tkey} if target.lower() in ("all", "todos")
+                       else {"job_id": target})
+
+            def work2():
+                return requests.post(f"{url}/agent/background/stop",
+                                     json=payload, timeout=10).json()
+
+            def done2(res):
+                n = len((res or {}).get("stopped") or [])
+                self.add_message(t("bg.watch_stopped", n=n) if n
+                                 else t("bg.watch_stop_none", id=target), "system")
+            self._bg(work2, done2)
+            return
+        if not sub.isdigit() or len(args) < 2:
+            self.add_message(t("bg.watch_usage"), "system")
+            return
+        rest = args[1].strip()
+        a = {"conv": conv, "tab": tkey, "every_s": int(sub)}
+        if rest.lower().startswith("cmd:"):
+            a["command"] = rest[4:].strip()
+            a["label"] = a["command"][:40]
+        else:
+            a["file"] = rest
+            a["label"] = os.path.basename(rest.rstrip("/\\")) or rest
+
+        def work3():
+            return requests.post(f"{url}/agent/background/watch", json=a,
+                                 timeout=30).json()
+
+        def done3(res):
+            if not isinstance(res, dict) or res.get("error"):
+                self.add_message(t("bg.watch_error", why=str(
+                    (res or {}).get("error") if isinstance(res, dict) else res)[:200]),
+                    "error")
+                return
+            self.add_message(t("bg.watch_started", id=res.get("job_id"),
+                               label=res.get("label"), every=res.get("every_s"),
+                               now=str(res.get("now") or "")[:120]), "system")
+        self._bg(work3, done3)
 
     def _send_queued_session(self, tab_id, peer, direction, msg):
         self._session_waiting.add(tab_id)
@@ -15295,6 +15466,11 @@ enabled = true
 
         if not _in_session:
             msg = _canon_cmd(msg)
+
+        if _queued is None and not _in_session and _canon_cmd(msg).startswith("/watch"):
+            self._cmd_watch(_canon_cmd(msg))
+            self.entry.clear(); self.entry.clear_pending()
+            return
 
         if _queued is None and not _in_session and msg.startswith("/queue"):
             n = len(self._msg_queue)
@@ -16070,10 +16246,11 @@ enabled = true
 
         dlg.exec()
 
-    def _inject_into_turn(self, turn_id, msg):
+    def _inject_into_turn(self, turn_id, msg, kind="user"):
         try:
             r = requests.post(f"{self._tab_url()}/agent/inject", timeout=15,
-                              json={"turn_id": turn_id, "message": msg})
+                              json={"turn_id": turn_id, "message": msg,
+                                    "kind": kind})
             return bool(r.ok and r.json().get("injected"))
         except Exception as e:
             print(f"[INJECT] {e}", file=sys.stderr)
@@ -17442,6 +17619,32 @@ enabled = true
                       or getattr(self, "_stop_requested", None) or threading.Event())
         _was_stopped = {"v": False}
 
+        def _run_background_delegated(ev):
+            self._tls.tab_id = tab
+            self._tls.turn_id = turn_id
+            self._tls.bg_job = ev.get("background") or ""
+            name = ev.get("tool", "")
+            err = ""
+            try:
+                result = self.execute_tool(name, ev.get("args") or {})
+            except Exception as e:
+                result, err = "", str(e)
+            finally:
+                self._tls.bg_job = ""
+            try:
+                _r = requests.post(f"{self._tab_url(_c)}/agent/background/done",
+                                   json={"job_id": ev.get("background") or "",
+                                         "result": (result if isinstance(result, str)
+                                                    else json.dumps(result, ensure_ascii=False)),
+                                         "error": err}, timeout=30)
+                _j = _r.json() if _r.ok else {}
+                if isinstance(_j, dict) and _j.get("accepted") is False:
+                    self.thread_msg(t("bg.result_dropped", tool=name,
+                                      why=str(_j.get("error") or "")[:120]),
+                                    "system")
+            except Exception as e:
+                print(f"[BACKGROUND] {name}: {e}", file=sys.stderr)
+
         def _run_delegated(ev):
             self._tls.tab_id = tab
             self._tls.turn_id = turn_id
@@ -17540,8 +17743,18 @@ enabled = true
                             _p.remove(_im)
                             self.signals.queue_changed.emit(
                                 getattr(self._tls, "tab_id", "") or "")
-                        self.thread_msg(t("chat.injected", n=ev.get("n"),
-                                          msg=_im))
+                        if ev.get("kind") == "background":
+                            self.thread_msg(t("chat.injected_bg", n=ev.get("n"),
+                                              msg=_im.split("\n", 1)[0][:200]))
+                        else:
+                            self.thread_msg(t("chat.injected", n=ev.get("n"),
+                                              msg=_im))
+                    elif et == "background_live":
+                        self.thread_msg(t("bg.live_line", n=ev.get("n", 0),
+                                          names=", ".join(
+                                              str(j.get("label") or j.get("id"))
+                                              for j in (ev.get("jobs") or []))),
+                                        "system")
                     elif et == "max_iterations":
                         max_iterations = ev.get("max", max_iterations)
                         self.thread_msg(t("chat.iteration_budget",
@@ -17715,6 +17928,15 @@ enabled = true
                                           waited=ev.get("waited", 0),
                                           ceiling=ev.get("ceiling", 0)),
                                         "system")
+                    elif et == "client_tool_call" and ev.get("background"):
+                        name = ev.get("tool", "")
+                        self.thread_msg(t("bg.started", tool=name,
+                                          id=ev.get("background"),
+                                          args=str(ev.get("args") or {})[:80]),
+                                        "system")
+                        threading.Thread(target=_run_background_delegated,
+                                         args=(ev,), daemon=True,
+                                         name=f"bg-{name}").start()
                     elif et == "client_tool_call":
                         tool_idx += 1
                         name = ev.get("tool", "")

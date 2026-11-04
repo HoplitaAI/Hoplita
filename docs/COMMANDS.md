@@ -42,6 +42,7 @@ purpose.
 | `/why` | What was put in front of the model on this tab's last turn: the trail behind its answer |
 | `/context` | What the next prompt weighs, block by block, heaviest first: history by role, the fifteen heaviest blocks, the tools carried. The meter gives one figure; this says what the figure is made of |
 | `/compact` | Fold the old part of this tab's context into a summary now, without waiting for the meter. Same routine as the automatic one; it says the size before and after and what the untouched recent window still weighs |
+| `/watch <seconds> <path>` · `/watch <seconds> cmd: <command>` | Watch a file or a command from this tab while it goes on with its work: when it changes, the report comes back to THIS conversation — into its running turn, or as its next turn. `/watch list` shows this tab's live jobs (watches and background runs), `/watch stop <id|all>` ends them; closing the tab ends them too. The model has the same from its side (`background_watch`, `background_run`, `background_stop`) |
 | `/queue` | What is waiting in this tab's queue. `/queue <n>` takes message n back into the box to edit it, `/queue del <n>` drops it, `/queue clear` empties the queue (and a pending compaction) |
 | `/alert <message>` | Popup with a sound |
 | `/creds` | Credentials manager (dialog) |

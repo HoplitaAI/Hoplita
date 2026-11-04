@@ -23,6 +23,7 @@ from tool_families import (_EXACT, _PREFIX, _FED_ACCOUNT, _FED_CONTACTS,
 
 _ICON = {"system": "📂", "code": "💻", "web": "🌐", "mail": "✉", "desktop": "🖱", "notes": "📝",
          "memory": "🧠", "tasks": "✅", "calendar": "📅", "cron": "⏰",
+         "background": "👁",
          "chat": "💬", "canvas": "🎨", "whiteboard": "🧭", "creds": "🔐", "agents": "🤖",
          "device": "🖥", "fedaccount": "🪪", "fedcontacts": "👥",
          "fedshare": "📤", "fedcode": "🔀", "fedsync": "🔄", OTHER: "🔧"}

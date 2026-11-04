@@ -16,6 +16,7 @@ Reference for the **237 built-in tools** the LLM can call. The list is extracted
 
 | Tool | Args | What it does |
 |---|---|---|
+| `exec_command` | `command` `cwd?` `timeout?` | Runs a shell command ON ITS OWN, outside the shared terminal: nobody watches it, its whole output goes to a file (`output_path`; the tail comes back with `exit_code` and `duration_s`), and several can run at once. The terminal is one and serial; this is the second door, for checks, builds and suites the person does not need to see run. Through `background_run` it does not even hold the turn. |
 | `run_command` | `command` `cwd?` `timeout?` | Runs a system command. Pass `timeout` in seconds for anything that is not instant (installs, builds, migrations); a command cut short returns exit code -1 with partial output. |
 | `read_file` | `path` | Reads a text file. A PDF or an office document is refused with the tool that reads it (`pdf_info`, `office_info`): read as text they are mojibake. |
 | `read_folder` | `path` `extensions?` | Reads every file in a folder (text, images, PDFs, Word/Excel/PowerPoint as their text) for batch processing. |
@@ -190,6 +191,17 @@ A code project's memory is a notes folder with exactly four notes, `rules` (the 
 | `disable_current_cron_job` | — | The job running right now pauses itself; only when the task says it must not run again. |
 | `set_cron_context` | `job_id` | Sets which job is running (internal: it is what makes the two above possible). |
 
+
+## 👁 Background: work that goes on without the turn
+
+A conversation can leave work running and go on, or end its turn and be woken. Every job belongs to the conversation that started it, and its report comes back THERE: into the turn running in it (framed as the job's aside, read before the model's next call) or, with no turn running, as that conversation's next turn — the window paints it as the job speaking and starts the turn; a saved conversation whose tab is closed is reopened for it. A job never wakes another tab. Jobs survive a restart: watches are re-armed, a run that was alive is reported as lost. `[CHAT] max_threads` caps how many may be alive at once; the firewall judges the real tool, not the bridge.
+
+| Tool | Args | What it does |
+|---|---|---|
+| `background_run` | `tool` `arguments?` `label?` | Runs ANY tool in the background: answers at once with a `job_id`, the tool runs on its own (on the window when it owns it, on the MCP otherwise), and its result reaches the conversation when it lands. For anything long: a test suite, a build, a slow fetch. Not for the tools that talk about the turn itself or carry a stream a face must answer (`intent`, `plan_and_orchestrate`, `call_council`, the bridges). |
+| `background_watch` | `label?` `every_s?` `file?` `command?` `tool?` `arguments?` `wake?` `until_s?` `job_id?` | Watches ONE thing without the model, every `every_s` seconds (floor 5, default 30): a `file` (appears, disappears, changes), a shell `command` (exit code or output changes) or a `tool` with its `arguments` (its result changes, keys that are clocks ignored). `wake=change` (default) reports only a change, with before and now; `wake=always` reports every round. `until_s` is a life limit. With `job_id` an existing watch is re-paced or re-labelled. The reply carries the baseline (`now`). |
+| `background_stop` | `job_id` | Ends a job: a run's process is ended and its late result dropped; a watch stops probing. For what is no longer needed, and for whatever is wedged on it. The person has the same door: `/watch stop <id|all>`, and closing the tab. |
+| `background_list` | `all?` | This conversation's jobs (every conversation's with `all`): id, kind, label, tool, state, age, rounds, last probe; `live` and `ceiling`. |
 
 ## 💬 Conversations
 

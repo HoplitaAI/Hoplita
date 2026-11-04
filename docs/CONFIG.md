@@ -65,6 +65,7 @@ Everything else follows the base on its own; the other tabs carry sane defaults.
 | `agentic_max_iterations` | int | `8` (`20` in the example) | Maximum tool rounds per turn — the per-turn tool limit (Conversation tab, first line). With the key absent, a turn sent by the GUI and a plan's sub-agents use `5` |
 | `auto_route_models` | bool | `True` | Router: sends each turn to the pool specialist that fits — «Pick by itself» on the Models tab |
 | `client_tool_timeout` | int | `3600` | Seconds the MCP waits for a tool the GUI executes (the GUI sends it with each turn). Long on purpose: an orchestration's sub-agents delegate their tools here too, and a browse or a build takes minutes |
+| `max_threads` | int | `8` | How many background jobs may be alive at once, over every conversation: tools started with `background_run`, watches (`background_watch`, `/watch`) and the shell runs they hold. One more is refused and told why (Conversation tab) |
 | `terminal_timeout` | int | `300` | Seconds the embedded terminal waits for ONE command — the inner limit, where the one above is how long the MCP waits for the client. A cut comes back as exit `-1` with the partial output, which reads like a failure and is not one, so give long scripts (builds, acceptance runs) room here |
 | `compact_keep_recent` | int | `6` | Recent messages that are NOT compacted |
 | `compact_timeout` | int | `0` | Seconds one compaction slice may take. 0 = never less than `timeout`, nor than 900. A slice that runs out compacts nothing |

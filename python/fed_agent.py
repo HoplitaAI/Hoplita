@@ -108,6 +108,16 @@ _FALLBACK_STRINGS = {
         "over until the ORIGINAL request is complete. If this message "
         "cancels or replaces that request, it will say so — do not assume "
         "it does.",
+    "inject.background":
+        "[WHILE YOU WORK — one of your background jobs reports:] {text}\n"
+        "This is not a new request. Take it into account now, then RESUME "
+        "the task you were on exactly where you left it: the turn is not "
+        "over until the ORIGINAL request is complete.",
+    "inject.metacog_background":
+        "[YOUR BACKGROUND JOBS] {n} of them are live: {names}. If what you "
+        "need is one of their results, do not wait for it with more tool "
+        "calls: end the turn with a short answer and it will wake you when "
+        "it lands. Stop the ones you no longer need with background_stop.",
     "inject.resume_original":
         "[BEFORE YOU ANSWER] The user interrupted this turn with an aside "
         "and you handled it. The request that STARTED the turn was:\n"
@@ -391,14 +401,14 @@ def _digest_result(name, args, result, messages, chat):
         return ""
 
 
-def inject(turn_id, text):
+def inject(turn_id, text, kind="user"):
     text = (text or "").strip()
     if not text:
         return False
     with _INJECT_LOCK:
         if turn_id not in _INJECT:
             return False
-        _INJECT[turn_id].append(text)
+        _INJECT[turn_id].append((text, kind if kind == "background" else "user"))
         return True
 
 
@@ -581,6 +591,43 @@ USE_TOOL = {
 
 _on_tool_used = None
 _consent = None
+_background = None
+
+
+def configure_background(adapter):
+    global _background
+    _background = adapter
+
+
+BACKGROUND_NEVER = frozenset({
+    "background_run", "background_watch", "background_stop",
+    "background_list", "use_tool", "intent", "load_tools",
+    "plan_and_orchestrate", "call_council", "sticky_note"})
+
+
+def _unwrap_background(args):
+    if not isinstance(args, dict):
+        return "", {}, "", "background_run needs `tool` and `arguments`."
+    real = str(args.get("tool", "") or "").strip()
+    inner = args.get("arguments", {})
+    if isinstance(inner, str):
+        try:
+            inner = json.loads(inner) if inner.strip() else {}
+        except Exception:
+            inner = {}
+    if not isinstance(inner, dict):
+        inner = {}
+    label = str(args.get("label", "") or "").strip()[:80]
+    if real == "use_tool":
+        real = str(inner.get("name", "") or "").strip()
+        inner = inner.get("arguments", {}) if isinstance(inner.get("arguments"), dict) else {}
+    if not real:
+        return "", {}, label, ("background_run needs `tool` (the tool's exact "
+                               "name) and `arguments` (an object).")
+    if real in BACKGROUND_NEVER:
+        return real, inner, label, (f"'{real}' cannot run in the background: "
+                                    "call it directly.")
+    return real, inner, label, ""
 
 
 def configure_consent(fn):
@@ -1609,11 +1656,15 @@ def run_agentic_turn(user_message=None, history=None, system=None,
             break
         iteration += 1
 
-        for _msg in _drain_injections(turn_id):
-            messages.append({"role": "user",
-                             "content": _t("inject.mid_turn", text=_msg)})
+        for _msg, _kind in _drain_injections(turn_id):
+            messages.append({"role": "user", "content": _t(
+                "inject.mid_turn" if _kind != "background" else "inject.background",
+                text=_msg)})
             _injected_any = True
-            emit({"event": "injected", "message": _msg, "n": iteration})
+            if _kind == "background":
+                _progress()
+            emit({"event": "injected", "message": _msg, "n": iteration,
+                  "kind": _kind})
 
         if is_cancelled():
             emit({"event": "cancelled", "iterations": iteration,
@@ -1669,6 +1720,17 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                                      list=_render_intent(intent_items))
             if council:
                 nudge += "\n\n" + _t("inject.metacog_council")
+            _bg_now = []
+            if _background is not None:
+                try:
+                    _bg_now = list(_background.live_for_turn(turn_id) or [])
+                except Exception:
+                    _bg_now = []
+            if _bg_now:
+                nudge += "\n\n" + _t(
+                    "inject.metacog_background", n=len(_bg_now),
+                    names=", ".join(f"{j.get('id')} ({j.get('label')})"
+                                    for j in _bg_now[:6]))
             messages.append(harness_msg(nudge))
             _nudges_sent += 1
             _nudge_armed = False
@@ -1839,8 +1901,14 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                             if str(i.get("status", "")).lower()
                             in ("pending", "doing", "")]
             _worked = _real_tools(tool_trace) > 0
+            _bg_live = []
+            if _background is not None:
+                try:
+                    _bg_live = list(_background.live_for_turn(turn_id) or [])
+                except Exception:
+                    _bg_live = []
             if _open_intent and _worked and not _intent_chased \
-                    and iteration < max_it:
+                    and iteration < max_it and not _bg_live:
                 _intent_chased = True
                 _intent_original = reply
                 _intent_snapshot = _real_tools(tool_trace)
@@ -2022,7 +2090,11 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                              + "\n\n" + reply)
             _left = [i for i in intent_items
                      if str(i.get("status", "")).lower() in ("pending", "doing", "")]
-            if _left:
+            if _bg_live:
+                emit({"event": "background_live", "n": len(_bg_live),
+                      "jobs": [{"id": j.get("id"), "label": j.get("label"),
+                                "kind": j.get("kind")} for j in _bg_live]})
+            elif _left:
                 for i in _left:
                     i["status"] = "unfinished"
                 emit({"event": "intent", "items": [dict(it) for it in intent_items]})
@@ -2081,6 +2153,25 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                     continue
                 name = _real
                 args = _inner if isinstance(_inner, dict) else {}
+            _bg = None
+            if name == "background_run":
+                _real, _inner, _label, _err = _unwrap_background(args)
+                if not _err and _background is None:
+                    _err = "background work is not available here."
+                if _err:
+                    result = json.dumps({"error": _err}, ensure_ascii=False)
+                    emit({"event": "tool_result", "tool": name,
+                          "delegated": False, "result_preview": result[:200],
+                          "duration_s": 0.0})
+                    tool_trace.append({"tool": name, "args": args,
+                                       "result": result})
+                    messages.append({"role": "tool",
+                                     "tool_call_id": tc.get("id", name),
+                                     "content": result})
+                    _sterile_tools += 1
+                    continue
+                name, args = _real, _inner
+                _bg = {"label": _label}
             args = unwrap_call_envelope(name, args)
 
             if name == "intent":
@@ -2192,6 +2283,47 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                                  "tool_call_id": tc.get("id", name),
                                  "content": result})
                 _sterile_tools += 1
+                continue
+            if _bg is not None:
+                _work = None if delegated else (
+                    lambda _n=name, _a=args: _execute_tool(_n, _a, consented=True))
+                try:
+                    _job = _background.start(name, args, _bg["label"], turn_id,
+                                             delegated=delegated, work=_work)
+                except Exception as _e:
+                    _job = {"error": f"could not start it: {_e}"}
+                if not isinstance(_job, dict) or _job.get("error"):
+                    result = json.dumps(_job if isinstance(_job, dict)
+                                        else {"error": "could not start it"},
+                                        ensure_ascii=False)
+                    _sterile_tools += 1
+                else:
+                    if delegated:
+                        emit({"event": "client_tool_call", "call_id": call_id,
+                              "tool": name, "args": args,
+                              "background": _job["id"]})
+                    else:
+                        emit({"event": "tool_call", "tool": name,
+                              "args_preview": str(args)[:120],
+                              "background": _job["id"]})
+                    result = json.dumps(
+                        {"started": True, "job_id": _job["id"], "tool": name,
+                         "label": _job.get("label", ""),
+                         "note": "It runs on its own. Its result reaches you "
+                                 "as a message when it lands: in this turn "
+                                 "if you are still working, or as this "
+                                 "conversation's next turn if you ended it. "
+                                 "Do not poll for it; background_stop(job_id) "
+                                 "cancels it."}, ensure_ascii=False)
+                    _progress()
+                emit({"event": "tool_result", "tool": name,
+                      "delegated": delegated, "result_preview": result[:200],
+                      "duration_s": 0.0, "background": True})
+                tool_trace.append({"tool": name, "args": args,
+                                   "result": result, "background": True})
+                messages.append({"role": "tool",
+                                 "tool_call_id": tc.get("id", name),
+                                 "content": result})
                 continue
             if delegated:
                 emit({"event": "client_tool_call", "call_id": call_id,

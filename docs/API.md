@@ -62,7 +62,10 @@ Non-terminal, in no guaranteed order except that `turn_start` is first:
 | `proxy_response` / `proxy_end` | `status`, `ctype`, `body_b64` / `status` | Internal to `/tied/…`: the answer of a request that does not stream, and the end of one that does. A client of `/tied/…` receives the answer itself, never these. |
 | `prep` | `note:{key,args}` | What the MCP put in front of the model. **An i18n key, not text** — it does not know your language. |
 | `iteration` | `n`, `max` | |
-| `injected` | `message`, `n` | Something arrived on `/agent/inject` while this turn was running and was appended as a user message on iteration `n`. |
+| `injected` | `message`, `n`, `kind` | Something arrived on `/agent/inject` while this turn was running and was appended as a user message on iteration `n`: `kind: "user"` is the person's aside (framed `[WHILE YOU WORK — the user says:]`), `kind: "background"` a report of one of the turn's own background jobs (framed as such, never as the person). |
+| `client_tool_call` with `background` | `call_id`, `tool`, `args`, `background` | The model started a tool YOU own through `background_run`. Run it on a thread of your own and answer on `POST /agent/background/done` with that job id — not on `tool_result`: the loop is not waiting, it already told the model the job started and went on. Send the job id as `background_job` on every `/call` the tool makes, so a stop can reach its process. |
+| `tool_call` / `tool_result` with `background` | `tool`, `background` | The same, for a tool the MCP runs itself: `tool_call` carries the job id, the `tool_result` that follows (`background: true`) is the «started» answer the model got. |
+| `background_live` | `n`, `jobs` | The turn ends with `n` of its background jobs still alive (`jobs`: id, label, kind). The conversation stays connected: their reports will wake it. Its open intent items are left as they are, waiting, not marked unfinished. |
 | `tools_expanded` | `tools`, `total` | The model asked for schemas with `load_tools`. The manual travels in the tool RESULT (a message at the bottom); the tools block up top is NOT rebuilt — it is the prompt's prefix and it is built once per turn. The model calls a catalogue tool through the static bridge `use_tool(name, arguments)`, which the loop unwraps before every gate (firewall, profile, sterile cut, delegation, record). `total` is the size of the unchanged block. |
 | `max_iterations` | `max`, `was` | The budget changed **mid-turn**: `[CHAT] agentic_max_iterations` was edited and reloaded while this turn was running. The loop re-reads it every round, so a raise reaches the turn already spinning. |
 | `llm_call` / `llm_done` | `model`, `n_messages`, `n_tools`, `payload_kb` / `duration_s` | **Label the call with `model`, never with your own config.** Only the MCP knows where the turn went: when its router picks a pool specialist the client has no endpoint at all. |
@@ -307,6 +310,16 @@ cleanly at the next checkpoint.
 ## `POST /agent/hands`
 `{turn_id?, action}` — the person's control over the desktop hands from outside the turn: `pause` (every `hands_*` call waits), `resume`, `stop` (every further call refuses; the turn itself is stopped with `/agent/stop`, as always) or `status`. Empty `turn_id` addresses whoever holds the hands. Answers `{ok, turn_id, actions, paused, stopped}` or `{ok: false, error}` when nobody holds them.
 
+## Background jobs: `GET /agent/background` · `POST /agent/background/watch` · `POST /agent/background/stop` · `POST /agent/background/done`
+
+Work that goes on without the turn (`hoplita_background.py`): a tool started with `background_run`, a watch on a file, a command or a tool (`background_watch`), the shell runs they hold (`exec_command`). Every job belongs to the conversation that started it — the turn's `session_uuid`, or its `session` key for a tab never saved — and what it has to say goes back there: into a live turn of that conversation through the same door as `/agent/inject` (`kind: "background"`), or, with no turn running, onto the poll below for the face to start the conversation's next turn with.
+
+- `GET /agent/background?conv=&tab=` → `{jobs, ceiling}`: every job, or a conversation's (id, kind, label, tool, state `live|done|failed|stopped|lost`, age, rounds, fires, last probe, output file).
+- `POST /agent/background/watch` `{conv, tab, label, every_s, file | command [+cwd] | tool + arguments, wake, until_s}` → `{job_id, label, every_s, wake, now}`: the person's `/watch`, bound to the tab the face names.
+- `POST /agent/background/stop` `{job_id}` or `{conv, tab}` → `{stopped: [ids]}`: one job, or every live job of a conversation (its tab closed).
+- `POST /agent/background/done` `{job_id, result, error?}`: the face ran a delegated job's tool and this is its result. Refused (`accepted: false`) for a job stopped meanwhile: its result has nowhere to go, as asked.
+- The poll `GET /agent/session-events` carries `background` (the reports no live turn took, each with `conv`, `tab`, `what`, `text`, and `message` already framed for a new turn) and `background_live` (`[{conv, tab, n, labels}]`, for the strip's eye). Jobs survive a restart: watches are re-armed, runs alive at the time are reported as lost.
+
 ## `POST /agent/inject`
 `{turn_id, message}` → `{injected}`. Says something to a turn that is **already
 running**: the text is appended as a user message at the top of the next
@@ -462,7 +475,7 @@ vault (identity and keys) lives there.
 - `POST /agent/session-stop {peer}` cuts an outbound session;
   `POST /agent/session-close-inbound {peer}` closes an inbound one (the
   originator gets `session_closed`, the running turn is cancelled).
-- `GET /agent/session-events` → `{events, shares, wake}`: everything buffered
+- `GET /agent/session-events` → `{events, shares, wake, background, background_live}`: everything buffered
   since the last call, in both directions, delivered once. Poll it.
 - `GET /agent/pending-approvals` → `{pending: [{id, peer, message, analyze}]}`:
   incoming requests waiting for your yes; `POST /agent/resolve-approval
@@ -547,7 +560,7 @@ offer the same screens.
 
 **The turn and its controls** — `POST /agent/turn` · `POST /agent/tool_result` ·
 `POST /agent/plan_ack` · `POST /agent/council_ack` · `POST /agent/stop` ·
-`POST /agent/inject` · `POST /agent/hands` · `POST /agent/memory_snapshot` ·
+`POST /agent/inject` · `GET /agent/background` · `POST /agent/background/watch` · `POST /agent/background/stop` · `POST /agent/background/done` · `POST /agent/hands` · `POST /agent/memory_snapshot` ·
 `POST /agent/qa` · `GET /agent/context_limit` · `GET /agent/prompt_budget` ·
 `POST /agent/context_map` · `POST /code/judge` · `POST /call`.
 
