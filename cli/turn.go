@@ -273,8 +273,28 @@ func mcpTurn(cfg Config, messages []Message, verify string) (string, error) {
 			toolIdx = 0
 			fmt.Printf("🔄 Iteration %d/%d\n", int(num("n")), int(num("max")))
 		case "injected":
-			fmt.Printf("📨 Received mid-turn (iteration %d): %s\n",
-				int(num("n")), str("message"))
+			if str("kind") == "background" {
+
+				first := strings.SplitN(str("message"), "\n", 2)[0]
+				fmt.Printf("⚙ %s\n", tr("bg.cli_mid_turn",
+					"n", fmt.Sprintf("%d", int(num("n"))), "msg", truncate(first, 160)))
+			} else {
+				fmt.Printf("📨 Received mid-turn (iteration %d): %s\n",
+					int(num("n")), str("message"))
+			}
+		case "background_live":
+			names := []string{}
+			if jobs, ok := ev["jobs"].([]interface{}); ok {
+				for _, j := range jobs {
+					if m, ok := j.(map[string]interface{}); ok {
+						if l, _ := m["label"].(string); l != "" {
+							names = append(names, l)
+						}
+					}
+				}
+			}
+			fmt.Printf("👁 %s\n", tr("bg.cli_live",
+				"n", fmt.Sprintf("%d", int(num("n"))), "names", strings.Join(names, ", ")))
 		case "max_iterations":
 			fmt.Printf("⚙ Iteration budget changed live: %d → %d\n",
 				int(num("was")), int(num("max")))
@@ -372,8 +392,14 @@ func mcpTurn(cfg Config, messages []Message, verify string) (string, error) {
 				"n", fmt.Sprintf("%d", int(num("n")))))
 		case "tool_call":
 			toolIdx++
-			fmt.Printf("  %d. %s(%s)\n", toolIdx, str("tool"),
-				truncate(str("args_preview"), 80))
+			if bg := str("background"); bg != "" {
+
+				fmt.Printf("  %d. ⚙ %s(%s) · %s\n", toolIdx, str("tool"),
+					truncate(str("args_preview"), 80), tr("bg.cli_started", "id", bg))
+			} else {
+				fmt.Printf("  %d. %s(%s)\n", toolIdx, str("tool"),
+					truncate(str("args_preview"), 80))
+			}
 			lastTurnSteps = append(lastTurnSteps, turnStep{
 				action: str("tool"), detail: str("args_preview")})
 		case "tool_result":

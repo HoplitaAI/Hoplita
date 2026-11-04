@@ -11992,6 +11992,14 @@ class BackgroundStopReq(BaseModel):
     tab: str = ""
 
 
+@app.get("/agent/background/events")
+def agent_background_events(conv: str = "", tab: str = ""):
+    if not (conv or tab):
+        return {"events": [], "error": "name the conversation (conv or tab)"}
+    return {"events": hoplita_background.drain_events(conv=conv, tab=tab),
+            "live": hoplita_background.live_for_conv(conv, tab)}
+
+
 @app.get("/agent/background")
 def agent_background_list(conv: str = "", tab: str = ""):
     return {"jobs": hoplita_background.list_jobs(conv=conv, tab=tab),
@@ -14180,6 +14188,22 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
             ev = dict(ev)
             ev["call_id"] = f"{sid}~{ev.get('call_id')}"
             ctx.emit(ev)
+            if _card:
+                ctx.emit({"event": "orch", "orch": {
+                    "type": "step", "id": _card, "tool": ev.get("tool", ""),
+                    "args": str(ev.get("args") or "")[:120],
+                    "background": ev.get("background") or ""}})
+        elif et == "tool_call" and _card:
+            ctx.emit({"event": "orch", "orch": {
+                "type": "step", "id": _card, "tool": ev.get("tool", ""),
+                "args": str(ev.get("args_preview") or "")[:120],
+                "background": ev.get("background") or ""}})
+        elif et == "tool_result" and _card:
+            ctx.emit({"event": "orch", "orch": {
+                "type": "step_done", "id": _card, "tool": ev.get("tool", ""),
+                "duration_s": ev.get("duration_s") or 0,
+                "ok": not str(ev.get("result_preview") or "").lstrip()
+                .startswith(('{"error"', "❌"))}})
         elif et in ("llm_call", "llm_done"):
             ctx.emit({"event": "orch", "orch": {"type": "tick", "id": sid}})
         elif et == "intent" and _card:

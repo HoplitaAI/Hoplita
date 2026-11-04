@@ -885,11 +885,13 @@ busy; ⏸ in amber is a tab waiting for your OK.
 
 **▦** at the right of the strip (it reads `▦ 2/5` when two of five tabs are
 working) opens every tab on one page: its state and for how long, the job it
-works for and its next run, its goal, the step it is on and the last thing it
-said. A tab with sub-agents at work carries them on its card as the agents
-board draws them: a light per agent (amber and pulsing while it works, green
-done, red failed), where it runs, its role and model, and the rail of its own
-steps with the one it is on. A card opens its tab.
+works for and its next run, its goal, the last thing it said, and a tree of
+its work the way a process tree reads: the turn with its tool calls and their
+arguments (each ticked with its clock when it ends, the running one turning),
+the plan it keeps and the item it is on, its sub-agents with where they run,
+their model, their own calls and their own list, and the background jobs
+alive for it with their last probe. A ✕ on the turn stops it, a ✕ on a job
+ends it. A card opens its tab.
 
 A tab can also leave work running and go on, or end its turn and be woken.
 The model starts any tool in the background (`background_run`: a test suite,

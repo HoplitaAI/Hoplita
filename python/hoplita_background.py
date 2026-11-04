@@ -494,20 +494,52 @@ def live_for_conv(conv="", tab=""):
 
 def live_counts():
     acc = {}
+    now = _now()
     with _LOCK:
         for j in _live():
             k = (j.get("conv") or "", j.get("tab") or "")
-            e = acc.setdefault(k, {"conv": k[0], "tab": k[1], "n": 0, "labels": []})
+            e = acc.setdefault(k, {"conv": k[0], "tab": k[1], "n": 0, "labels": [],
+                                   "jobs": []})
             e["n"] += 1
             if len(e["labels"]) < 6:
                 e["labels"].append(j.get("label") or j.get("tool") or j["id"])
+            if len(e["jobs"]) < 8:
+                e["jobs"].append({
+                    "id": j["id"], "kind": j.get("kind"), "label": j.get("label"),
+                    "tool": j.get("tool"), "every_s": j.get("every_s"),
+                    "fires": j.get("fires", 0), "rounds": j.get("rounds", 0),
+                    "age_s": int(now - float(j.get("created") or now)),
+                    "last_preview": str(j.get("last_preview") or "")[:80]})
     return list(acc.values())
 
 
-def drain_events():
+CLAIM_S = 30
+_CLAIMS = {}
+
+
+def drain_events(conv="", tab=""):
+    now = _now()
     with _LOCK:
-        out = list(_EVENTS)
-        _EVENTS.clear()
+        if conv or tab:
+            _CLAIMS[(conv, tab)] = now
+            keep, out = [], []
+            for e in _EVENTS:
+                if (conv and e.get("conv") == conv) or (tab and e.get("tab") == tab):
+                    out.append(e)
+                else:
+                    keep.append(e)
+            _EVENTS[:] = keep
+            return out
+        claimed = {k for k, t0 in _CLAIMS.items() if now - t0 < CLAIM_S}
+        for k in list(_CLAIMS):
+            if now - _CLAIMS[k] >= CLAIM_S:
+                _CLAIMS.pop(k, None)
+        keep, out = [], []
+        for e in _EVENTS:
+            mine = any((c and e.get("conv") == c) or (t and e.get("tab") == t)
+                       for c, t in claimed)
+            (keep if mine else out).append(e)
+        _EVENTS[:] = keep
     return out
 
 

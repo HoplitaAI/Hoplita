@@ -779,6 +779,79 @@ func main() {
 		mcpDistill(cfg, segment)
 	}
 
+	runTurn := func(line string) {
+		var answer string
+		var err error
+		taskBegin()
+
+		answer, err = agenticCall(cfg, sessionHistory, line, "")
+		wasStopped := stopped()
+		taskEnd()
+		if err != nil {
+			fmt.Println("❌", err)
+
+			sessionHistory = append(sessionHistory,
+				Message{Role: "user", Content: line})
+			if note := turnTraceNote(err.Error()); note != "" {
+
+				sessionHistory = append(sessionHistory,
+					Message{Role: "assistant",
+						Content: "[Turn FAILED: " + truncate(err.Error(), 200) +
+							"]\n\n" + note})
+			}
+			return
+		}
+		fmt.Println()
+		fmt.Println(answer)
+		fmt.Println()
+		userContent := line
+		assistantContent := answer
+		if wasStopped {
+
+			assistantContent = "[The user STOPPED this task before it " +
+				"completed. Partial result:]\n" + answer
+		}
+		var userStored interface{} = userContent
+		if lastUserSent != nil && !wasStopped {
+
+			userStored = lastUserSent
+		}
+		lastUserSent = nil
+		sessionHistory = append(sessionHistory,
+			Message{Role: "user", Content: userStored})
+
+		if len(lastTranscript) > 0 {
+			sessionHistory = append(sessionHistory, lastTranscript...)
+		} else if note := turnTraceNote(""); note != "" {
+			assistantContent = assistantContent + "\n\n" + note
+		}
+		sessionHistory = append(sessionHistory,
+			Message{Role: "assistant", Content: assistantContent})
+
+		if lastPromptTokens > 0 {
+			renderTokenMeter(cfg, lastPromptTokens)
+		}
+
+		limit := cfg.MultiNumCtx
+		if limit <= 0 {
+			limit = 20000
+		}
+		measured := firstPromptTokens
+		if measured == 0 {
+			measured = lastPromptTokens
+		}
+		if float64(measured)/float64(limit) >= 0.85 {
+			sessionHistory = mcpCompact(cfg, sessionHistory)
+			lastExtracted = 0
+		}
+		if len(sessionHistory)-lastExtracted >= extractEveryN {
+			extractPending()
+		}
+	}
+
+	reports := make(chan string, 64)
+	go watchReports(cfg, reports)
+
 	for {
 		fmt.Print("> ")
 		line, err := in.ReadString('\n')
@@ -789,6 +862,10 @@ func main() {
 			return
 		}
 		line = strings.TrimSpace(line)
+		if hand := takeReports(reports); hand != "" {
+			fmt.Println(tr("bg.cli_handing"))
+			runTurn(hand)
+		}
 		if line == "" {
 			continue
 		}
@@ -1062,73 +1139,59 @@ func main() {
 				fmt.Printf("❌ %s\n", tr("model.unknown", "name", arg, "avail", avail))
 			}
 		default:
-			var answer string
-			var err error
-			taskBegin()
+			runTurn(line)
+		}
+	}
+}
 
-			answer, err = agenticCall(cfg, sessionHistory, line, "")
-			wasStopped := stopped()
-			taskEnd()
-			if err != nil {
-				fmt.Println("❌", err)
-
-				sessionHistory = append(sessionHistory,
-					Message{Role: "user", Content: line})
-				if note := turnTraceNote(err.Error()); note != "" {
-
-					sessionHistory = append(sessionHistory,
-						Message{Role: "assistant",
-							Content: "[Turn FAILED: " + truncate(err.Error(), 200) +
-								"]\n\n" + note})
-				}
-			} else {
-				fmt.Println()
-				fmt.Println(answer)
-				fmt.Println()
-				userContent := line
-				assistantContent := answer
-				if wasStopped {
-
-					assistantContent = "[The user STOPPED this task before it " +
-						"completed. Partial result:]\n" + answer
-				}
-				var userStored interface{} = userContent
-				if lastUserSent != nil && !wasStopped {
-
-					userStored = lastUserSent
-				}
-				lastUserSent = nil
-				sessionHistory = append(sessionHistory,
-					Message{Role: "user", Content: userStored})
-
-				if len(lastTranscript) > 0 {
-					sessionHistory = append(sessionHistory, lastTranscript...)
-				} else if note := turnTraceNote(""); note != "" {
-					assistantContent = assistantContent + "\n\n" + note
-				}
-				sessionHistory = append(sessionHistory,
-					Message{Role: "assistant", Content: assistantContent})
-
-				if lastPromptTokens > 0 {
-					renderTokenMeter(cfg, lastPromptTokens)
-				}
-
-				limit := cfg.MultiNumCtx
-				if limit <= 0 {
-					limit = 20000
-				}
-				measured := firstPromptTokens
-				if measured == 0 {
-					measured = lastPromptTokens
-				}
-				if float64(measured)/float64(limit) >= 0.85 {
-					sessionHistory = mcpCompact(cfg, sessionHistory)
-					lastExtracted = 0
-				}
-				if len(sessionHistory)-lastExtracted >= extractEveryN {
-					extractPending()
-				}
+func watchReports(cfg Config, out chan<- string) {
+	url := cfg.MCPURL + "/agent/background/events?conv=" +
+		neturl.QueryEscape(convID) + "&tab=" + neturl.QueryEscape(convID)
+	for {
+		time.Sleep(2 * time.Second)
+		if atomic.LoadInt32(&taskRunning) == 1 {
+			continue
+		}
+		r, err := httpClient(5).Get(url)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if r.StatusCode != 200 {
+			continue
+		}
+		var resp struct {
+			Events []map[string]interface{} `json:"events"`
+		}
+		if json.Unmarshal(body, &resp) != nil {
+			continue
+		}
+		for _, ev := range resp.Events {
+			msg, _ := ev["message"].(string)
+			if msg == "" {
+				continue
 			}
+			label, _ := ev["label"].(string)
+			what, _ := ev["what"].(string)
+			select {
+			case out <- msg:
+				fmt.Printf("\n⚙ %s · %s — %s\n> ", label, what, tr("bg.cli_arrived"))
+			default:
+
+			}
+		}
+	}
+}
+
+func takeReports(in <-chan string) string {
+	var parts []string
+	for {
+		select {
+		case m := <-in:
+			parts = append(parts, m)
+		default:
+			return strings.Join(parts, "\n\n")
 		}
 	}
 }

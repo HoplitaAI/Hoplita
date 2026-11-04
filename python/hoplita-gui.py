@@ -1605,6 +1605,8 @@ class ChatCtx:
         self.turn_id = None
         self.bg_live = 0
         self.bg_labels = []
+        self.bg_jobs = []
+        self.turn_iter = (0, 0)
         self.injected_pending = []
         self.sticky = ""
         self.no_log = False
@@ -6103,6 +6105,8 @@ enabled = true
         from tabs_overview import TabsOverview
         self.tabs_overview = TabsOverview()
         self.tabs_overview.open_tab.connect(self._overview_open)
+        self.tabs_overview.stop_turn.connect(self._overview_stop_turn)
+        self.tabs_overview.stop_job.connect(self._overview_stop_job)
         self._overview_page_idx = self._chat_stack.addWidget(self.tabs_overview)
         self._ovw_timer = QTimer(self)
         self._ovw_timer.setInterval(1000)
@@ -6789,6 +6793,162 @@ enabled = true
             self._switch_chat_tab(tab_id)
         self._render_chat_tabs()
 
+    def _overview_stop_turn(self, tab_id):
+        c = self._chat_ctxs.get(tab_id)
+        if c is None:
+            return
+        self._cancel_pending_ack(tab_id)
+        try:
+            c.stop_requested.set()
+        except Exception:
+            pass
+        tid = getattr(c, "turn_id", None)
+        if tid:
+            url = self._tab_url(c)
+            self._bg(lambda: requests.post(f"{url}/agent/stop",
+                                           json={"turn_id": tid}, timeout=15),
+                     lambda _r: None)
+
+    def _overview_stop_job(self, tab_id, job_id):
+        c = self._chat_ctxs.get(tab_id)
+        url = self._tab_url(c) if c is not None else self._mcp_url
+        self._bg(lambda: requests.post(f"{url}/agent/background/stop",
+                                       json={"job_id": job_id}, timeout=10),
+                 lambda _r: None)
+
+    @staticmethod
+    def _tree_prefixes(lines):
+        n = len(lines)
+        for i, ln in enumerate(lines):
+            d = int(ln.get("depth", 1))
+            if d == 0:
+                ln["prefix"] = ""
+                continue
+            later = lines[i + 1:]
+            last1 = not any(int(x.get("depth", 1)) == 1 for x in later)
+            if d == 1:
+                ln["prefix"] = "└─ " if last1 else "├─ "
+                continue
+            last2 = not (i + 1 < n and int(lines[i + 1].get("depth", 1)) == 2)
+            under_last = not any(int(x.get("depth", 1)) == 1 for x in later)
+            ln["prefix"] = ("   " if under_last else "│  ") + ("└─ " if last2 else "├─ ")
+        return lines
+
+    def _tab_tree(self, tab, c, working, since, now):
+        from tabs_overview import ago as tabs_overview_ago
+        tid = tab["id"]
+        lines = []
+        if working and c is not None:
+            it = getattr(c, "turn_iter", (0, 0)) or (0, 0)
+            lines.append({"depth": 0, "kind": "turn", "glyph": "spin", "color": "#38bdf8",
+                          "text": t("ovw.turn_line", i=it[0], n=it[1],
+                                    ago=tabs_overview_ago(since or 0)),
+                          "cancel": ["turn", tid, ""], "tip": t("ovw.stop_turn_tip")})
+            steps = [s for s in (getattr(c, "turn_steps", []) or []) if isinstance(s, dict)]
+            if len(steps) > 8:
+                lines.append({"depth": 1, "kind": "earlier", "glyph": "·", "color": "#64748b",
+                              "text": t("ovw.earlier", n=len(steps) - 8)})
+                steps = steps[-8:]
+            for s in steps:
+                done = bool(s.get("done")) or "result" in s
+                okk = s.get("ok", True)
+                detail = str(s.get("detail") or "")
+                head = f"{s.get('action', '')}({detail[:70]}{'…' if len(detail) > 70 else ''})"
+                if done:
+                    dur = s.get("duration")
+                    tail = f"  {float(dur):.1f}s" if dur is not None else ""
+                else:
+                    t0 = s.get("t0")
+                    tail = f"  {tabs_overview_ago(now - float(t0))}…" if t0 else ""
+                tip = f"{s.get('action', '')}({detail})"
+                if s.get("result"):
+                    tip += "\n→ " + str(s["result"])[:300]
+                lines.append({"depth": 1, "kind": "step",
+                              "glyph": ("✓" if okk else "✗") if done else "spin",
+                              "color": ("#e6edf7" if okk else "#fca5a5") if done else "#38bdf8",
+                              "text": head + tail, "tip": tip})
+            intent = [i for i in (getattr(c, "intent", []) or []) if isinstance(i, dict)]
+            if intent:
+                done_n = sum(1 for i in intent if str(i.get("status", "")).lower() == "done")
+                cur = (next((i for i in intent if str(i.get("status", "")).lower() == "doing"), None)
+                       or next((i for i in intent if str(i.get("status", "")).lower()
+                                in ("", "pending")), None))
+                lines.append({"depth": 1, "kind": "plan", "glyph": "◐" if cur else "✓",
+                              "color": "#c4b5fd",
+                              "text": t("ovw.plan_line", done=done_n, n=len(intent),
+                                        goal=str((cur or intent[-1]).get("goal", ""))[:70]),
+                              "tip": "\n".join(f"[{i.get('status', '')}] {i.get('goal', '')}"
+                                               for i in intent)})
+        agents = [a for a in self._agents_cards_for(tab) if isinstance(a, dict)]
+        if agents:
+            _order = {"running": 0, "pending": 1, "failed": 2, "done": 3, "cancelled": 4}
+            agents.sort(key=lambda a: _order.get(str(a.get("status") or "pending"), 1))
+            _done = sum(1 for a in agents if a.get("status") == "done")
+            _run = sum(1 for a in agents if a.get("status") == "running")
+            _bad = sum(1 for a in agents if a.get("status") == "failed")
+            _head = [t("ovw.agents_head", n=len(agents)),
+                     t("ovw.agents_done", done=_done, n=len(agents))]
+            if _run:
+                _head.append(t("ovw.agents_running", n=_run))
+            if _bad:
+                _head.append(t("ovw.agents_failed", n=_bad))
+            lines.append({"depth": 1, "kind": "agents", "glyph": "▸", "color": "#c4b5fd",
+                          "text": " · ".join(_head)})
+        for a in agents:
+            st = str(a.get("status") or "pending")
+            o = a.get("origin") if a.get("origin") in ("out", "in") else "local"
+            where = "⌂" if o == "local" else (("→ " if o == "out" else "← ")
+                                             + str(a.get("peer") or t("ovw.remote")))
+            parts = [f"{a.get('id', '')} {a.get('role') or 'general'}",
+                     "🧠 " + str(a.get("model") or "base"), where]
+            if a.get("tools") is not None:
+                parts.append(t("ovw.agent_tools", n=int(a.get("tools") or 0)))
+            if st not in ("running", "pending"):
+                parts.append(st)
+            lines.append({"depth": 1, "kind": "agent",
+                          "glyph": {"running": "spin", "done": "✓", "failed": "✗",
+                                    "cancelled": "⊘"}.get(st, "○"),
+                          "color": {"running": "#f5b800", "done": "#86efac",
+                                    "failed": "#fca5a5"}.get(st, "#94a3b8"),
+                          "text": " · ".join(parts), "tip": str(a.get("goal") or "")})
+            for s in [x for x in (a.get("steps") or []) if isinstance(x, dict)][-3:]:
+                done = bool(s.get("done"))
+                dur = s.get("duration")
+                tail = (f"  {float(dur):.1f}s" if done and dur is not None
+                        else (f"  {tabs_overview_ago(now - float(s['t0']))}…"
+                              if not done and s.get("t0") else ""))
+                lines.append({"depth": 2, "kind": "agent_step",
+                              "glyph": ("✓" if s.get("ok", True) else "✗") if done else "spin",
+                              "color": "#cbd5e1" if done else "#38bdf8",
+                              "text": f"{s.get('tool', '')}({str(s.get('args') or '')[:50]}){tail}",
+                              "tip": f"{s.get('tool', '')}({s.get('args', '')})"})
+            its = [i for i in (a.get("intent") or []) if isinstance(i, dict)]
+            if its and st == "running":
+                cur = (next((i for i in its if str(i.get("status", "")).lower() == "doing"), None)
+                       or next((i for i in its if str(i.get("status", "")).lower()
+                                in ("", "pending")), None))
+                if cur:
+                    done_n = sum(1 for i in its if str(i.get("status", "")).lower() == "done")
+                    lines.append({"depth": 2, "kind": "agent_plan", "glyph": "◐",
+                                  "color": "#c4b5fd",
+                                  "text": t("ovw.plan_line", done=done_n, n=len(its),
+                                            goal=str(cur.get("goal", ""))[:60])})
+        for j in (getattr(c, "bg_jobs", []) or []) if c is not None else []:
+            if not isinstance(j, dict):
+                continue
+            if j.get("kind") == "watch":
+                text = t("ovw.job_watch", label=j.get("label", ""), s=j.get("every_s", 0),
+                         fires=j.get("fires", 0), last=str(j.get("last_preview") or "")[:60])
+                glyph = "👁"
+            else:
+                text = t("ovw.job_run", label=j.get("label", ""), tool=j.get("tool", ""),
+                         ago=tabs_overview_ago(j.get("age_s") or 0))
+                glyph = "⚙"
+            lines.append({"depth": 1, "kind": "job", "glyph": glyph, "color": "#f5b800",
+                          "text": text, "tip": t("ovw.stop_job_tip"),
+                          "cancel": ["job", tid, str(j.get("id", ""))]})
+        return self._tree_prefixes(lines)
+
     def _overview_tick(self):
         if self._chat_stack.currentIndex() != getattr(self, "_overview_page_idx", -1):
             self._ovw_timer.stop()
@@ -6866,6 +7026,11 @@ enabled = true
                     foot.append("🛡")
                 if getattr(c, "bg_live", 0):
                     foot.append("👁 " + str(c.bg_live))
+            try:
+                tree = self._tab_tree(tab, c, working, since, now)
+            except Exception as _e:
+                print(f"[OVERVIEW] tree of {tid}: {_e}", file=sys.stderr)
+                tree = []
             rows.append({
                 "id": tid, "title": tab.get("title", ""),
                 "color": self._chat_tab_color(tab.get("kind", "local")),
@@ -6875,7 +7040,7 @@ enabled = true
                 "next_run": self._ovw_when(job.get("next") or "") if job else "",
                 "goal": getattr(c, "goal", "") if c is not None else "",
                 "doing": doing, "last": last, "foot": foot,
-                "agents": self._agents_cards_for(tab)})
+                "agents": self._agents_cards_for(tab), "tree": tree})
         return rows
 
     def _toggle_council_view(self):
@@ -7292,7 +7457,8 @@ enabled = true
             s = dict(s)
             p = prev.get(s.get("id"))
             if p:
-                for k in ("model", "role", "goal", "deps", "peer", "origin"):
+                for k in ("model", "role", "goal", "deps", "peer", "origin",
+                          "steps", "tools"):
                     if not s.get(k) and p.get(k):
                         s[k] = p[k]
                 if ("intent" not in s and p.get("intent")
@@ -7302,6 +7468,45 @@ enabled = true
         ctx.agents = merged
         if getattr(self, "agents_panel", None) is not None:
             self.agents_panel.update_state(self._agents_cards_for_active())
+
+    def _set_subtask_field(self, sid, key, value):
+        ctx = self._turn_ctx()
+        cards = [dict(c) for c in (ctx.agents or [])]
+        hit = False
+        for c in cards:
+            if str(c.get("id")) == str(sid):
+                c[key] = value
+                hit = True
+        if hit:
+            ctx.agents = cards
+            if getattr(self, "agents_panel", None) is not None:
+                self.agents_panel.update_state(self._agents_cards_for_active())
+
+    def _set_subtask_step(self, ev):
+        ctx = self._turn_ctx()
+        cards = [dict(c) for c in (ctx.agents or [])]
+        hit = False
+        for c in cards:
+            if str(c.get("id")) != str(ev.get("id")):
+                continue
+            steps = [dict(s) for s in (c.get("steps") or [])]
+            if ev.get("type") == "step":
+                steps.append({"tool": ev.get("tool", ""), "args": str(ev.get("args") or "")[:120],
+                              "t0": time.time(), "done": False,
+                              "background": ev.get("background") or ""})
+            else:
+                for s in reversed(steps):
+                    if s.get("tool") == ev.get("tool") and not s.get("done"):
+                        s["done"] = True
+                        s["duration"] = float(ev.get("duration_s") or 0)
+                        s["ok"] = bool(ev.get("ok", True))
+                        break
+            c["steps"] = steps[-12:]
+            hit = True
+        if hit:
+            ctx.agents = cards
+            if getattr(self, "agents_panel", None) is not None:
+                self.agents_panel.update_state(self._agents_cards_for_active())
 
     def _set_subtask_intent(self, sid, items):
         ctx = self._turn_ctx()
@@ -15123,9 +15328,11 @@ enabled = true
                  or by_tab.get(self._bg_tab_key(tid, c)))
             n = int(r.get("n", 0) or 0) if r else 0
             labels = [str(x) for x in (r.get("labels") or [])] if r else []
+            jobs = [j for j in (r.get("jobs") or []) if isinstance(j, dict)] if r else []
             if n != getattr(c, "bg_live", 0) or labels != getattr(c, "bg_labels", []):
                 c.bg_live, c.bg_labels = n, labels
                 changed = True
+            c.bg_jobs = jobs
         if changed:
             self._render_chat_tabs()
 
@@ -16872,6 +17079,9 @@ enabled = true
         if et == "intent":
             self._set_subtask_intent(ev.get("id"), ev.get("items"))
             return
+        if et in ("step", "step_done"):
+            self._set_subtask_step(ev)
+            return
         if et == "note":
             key = ev.get("key", "")
             self.thread_msg(t(key, **(ev.get("args") or {})), "system")
@@ -16901,6 +17111,7 @@ enabled = true
             self.thread_msg(t("msg.subtask_done", id=ev.get("id"),
                               n=ev.get("attempts", 1)), "system")
         elif et == "subtask_acted":
+            self._set_subtask_field(ev.get("id"), "tools", int(ev.get("tools", 0) or 0))
             if int(ev.get("tools", 0) or 0) == 0:
                 self.thread_msg(t("msg.subtask_no_tools", id=ev.get("id")),
                                 "system")
@@ -17665,6 +17876,9 @@ enabled = true
                                   else json.dumps(result, ensure_ascii=False))
                         _p["result"] = _text[:400]
                         _p["result_len"] = len(_text)
+                        _p["done"] = True
+                        _p["duration"] = time.time() - float(_p.get("t0") or time.time())
+                        _p["ok"] = not _text.lstrip().startswith(('{"error"', "❌"))
                         break
             except Exception:
                 pass
@@ -17734,6 +17948,11 @@ enabled = true
                                                       tools=", ".join(_miss)), "error")
                     elif et == "iteration":
                         tool_idx = 0
+                        try:
+                            self._turn_ctx().turn_iter = (int(ev.get("n") or 0),
+                                                          int(ev.get("max") or 0))
+                        except Exception:
+                            pass
                         self.thread_msg(t("chat.iteration", n=ev.get("n"),
                                           max=ev.get("max")))
                     elif et == "injected":
@@ -17948,7 +18167,8 @@ enabled = true
                                 _sctx.turn_steps = []
                             _sctx.turn_steps.append(
                                 {"step": tool_idx, "action": name,
-                                 "detail": str(ev.get("args") or {})[:200]})
+                                 "detail": str(ev.get("args") or {})[:200],
+                                 "t0": time.time()})
                         threading.Thread(target=_run_delegated, args=(ev,),
                                          daemon=True,
                                          name=f"tool-{name}").start()
@@ -17964,8 +18184,21 @@ enabled = true
                                 _sctx.turn_steps = []
                             _sctx.turn_steps.append(
                                 {"step": tool_idx, "action": name,
-                                 "detail": str(ev.get("args_preview") or "")[:200]})
+                                 "detail": str(ev.get("args_preview") or "")[:200],
+                                 "t0": time.time()})
                     elif et == "tool_result":
+                        if ev.get("delegated") is False:
+                            try:
+                                _sc2 = getattr(self, "_chat_ctxs", {}).get(tab)
+                                for _p in reversed(getattr(_sc2, "turn_steps", []) or []):
+                                    if _p.get("action") == ev.get("tool") and not _p.get("done"):
+                                        _p["done"] = True
+                                        _p["duration"] = float(ev.get("duration_s") or 0)
+                                        _p["ok"] = not str(ev.get("result_preview", "")) \
+                                            .lstrip().startswith(('{"error"', "❌"))
+                                        break
+                            except Exception:
+                                pass
                         if ev.get("tool") not in ("intent", "load_tools"):
                             _tcx = self._turn_ctx()
                             _tcx.turn_tools_used = getattr(_tcx, "turn_tools_used", 0) + 1

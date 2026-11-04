@@ -72,6 +72,8 @@ commands act on that session; anything else goes to the model.
 | `/clear` | Clear the screen |
 | `/quit` | Exit (`/q` and `/exit` too) |
 
+The CLI is one thread on purpose. A job the model starts in the background (`background_run`, `background_watch`) runs on the MCP; a report that lands while a turn runs enters that turn. One that lands between turns is announced on the prompt as it arrives, and handed to the model on the next Enter — or before whatever you type next, as the conversation's own message.
+
 ## CLI flags
 
 ```bash
