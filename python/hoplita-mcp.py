@@ -2135,6 +2135,8 @@ def _count_tokens(model, usage, sent=""):
                     sql = _get_sql()
                     if sql is not None:
                         sql.meta_set("tokens:ids", json.dumps(ids, ensure_ascii=False))
+        if sent:
+            model = sent
         u = usage or {}
         p = int(u.get("prompt_tokens") or 0)
         c = int(u.get("completion_tokens") or 0)
