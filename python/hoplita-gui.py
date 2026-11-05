@@ -17508,6 +17508,18 @@ enabled = true
         finally:
             self._task_end()
 
+    def _record_injections(self, tab, note, fresh):
+        full = note.get("full")
+        if not full:
+            return False
+        ctx = getattr(self, "_chat_ctxs", {}).get(tab)
+        if ctx is None:
+            return False
+        if fresh:
+            ctx.last_injections = []
+        ctx.last_injections.append((note.get("key", ""), list(full)))
+        return True
+
     def _handle_why_command(self, arg=""):
         ctx = self._view_ctx()
         inj = getattr(ctx, "last_injections", None)
@@ -17804,6 +17816,7 @@ enabled = true
         turn_id = None
         stop_sent = False
         tool_idx = 0
+        _prep_seen = False
         tab = getattr(self._tls, "tab_id", None) or self._active_tab_id
         if payload.get("council"):
             self._tls.council_tab = tab
@@ -17984,15 +17997,8 @@ enabled = true
                         n = ev.get("note") or {}
                         self.thread_msg(t(n.get("key", ""), **(n.get("args") or {})),
                                         "system")
-                        if n.get("full"):
-                            _sctx = self._chat_ctxs.get(tab)
-                            if _sctx is not None:
-                                if not getattr(_sctx, "_prep_turn", None) \
-                                        or _sctx._prep_turn != turn_id:
-                                    _sctx._prep_turn = turn_id
-                                    _sctx.last_injections = []
-                                _sctx.last_injections.append(
-                                    (n.get("key", ""), list(n["full"])))
+                        if self._record_injections(tab, n, fresh=not _prep_seen):
+                            _prep_seen = True
                     elif et == "orch":
                         self._paint_orch_event(ev.get("orch") or {})
                     elif et == "council":
