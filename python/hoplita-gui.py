@@ -17711,8 +17711,12 @@ enabled = true
         self._task_begin()
         try:
             base_url, api_key, model = self._chat_base_endpoint()
+            _hist = list(self.conversation_history)
+            if not already_in_history:
+                _hist.append({"role": "user", "content": task})
             final = self._stream_turn(
                 {"orchestrate": task,
+                 "messages": _hist,
                  "endpoint": {"base_url": base_url, "api_key": api_key,
                               "model": model}}, model=model)
             if not already_in_history:

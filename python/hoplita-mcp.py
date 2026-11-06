@@ -14309,14 +14309,20 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
     _prev = {k_: getattr(_TURN_SESSION, k_, None) for k_ in _TURN_SNAPSHOT_FIELDS}
     for k_, v_ in _snap.items():
         setattr(_TURN_SESSION, k_, v_)
+    _has_conv = bool(_turn_messages_of(
+        (getattr(ctx, "turn_id", "") or "").strip()))
+    _names = set(tool_names if tool_names is not None
+                 else _profile_tool_names(profile, terminal))
+    if not _has_conv:
+        _names.discard("search_conversation")
+    _brief = bool(_has_conv and not messages)
     try:
-        _sub_is_blocked, _sub_allowed = _sub_agent_wall(
-            ctx, tool_names if tool_names is not None
-            else _profile_tool_names(profile, terminal))
+        _sub_is_blocked, _sub_allowed = _sub_agent_wall(ctx, _names)
         res = fed_agent.run_agentic_turn(
             user_message=None if messages else prompt, messages=messages,
-            system=(None if messages else _tr("prompts.subagent_brief")
-                    + "\n\n" + _tr("prompts.background")),
+            system=(None if messages else
+                    ((_tr("prompts.subagent_brief") + "\n\n") if _brief else "")
+                    + _tr("prompts.background")),
             given=given, max_iterations=max_iter,
             on_event=on_event, cancel=ctx.cancel,
             turn_id=f"{ctx.turn_id}~{sid}", llm_chat=chat,
@@ -14325,7 +14331,7 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
             qa=qa_mode, qa_chat=qa_chat, qa_max_rounds=1,
             qa_self=(qa_model or "").strip() == (model or "").strip(),
             allowed_tools=_sub_allowed,
-            expanded_extra=(None if messages else ("search_conversation",)))
+            expanded_extra=(("search_conversation",) if _brief else None))
     except Exception as e:
         return f"[sub-agent error: {e}]"
     finally:

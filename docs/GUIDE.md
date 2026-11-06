@@ -1175,7 +1175,9 @@ server. So the sub-agent searches instead: `search_conversation(query)` looks
 inside the messages the turn put in front of its model, and
 `search_working_memory` inside the texts that conversation digested; its
 prompt says the brief is a summary, to search before assuming, and that the
-conversation wins over the brief.
+conversation wins over the brief. A plan typed as `@multi` sends the
+conversation with it, as any turn does; where nothing is filed behind a turn,
+no door is promised.
 
 Three rules it lives by:
 
