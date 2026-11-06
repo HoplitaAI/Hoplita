@@ -441,7 +441,7 @@ func meterName(name, sent, model string) string {
 
 func showHelp() {
 	fmt.Println(`Commands:
-  /help      this help
+  /help      this help (/? too)
   /info      config and MCP status
   /tools     list the MCP's available tools
   /facts     list the user's accumulated facts
@@ -457,7 +457,7 @@ func showHelp() {
   /memory    the weekly pass: pending proposals + what it applied
              (/memory run | ok <id> | no <id> | undo <id>)
   /clear     clear the screen
-  /quit      exit
+  /quit      exit (/q and /exit too)
 
 Anything else goes to the LLM in agentic mode.
 The LLM has full access to the MCP's tools — to invoke a skill,

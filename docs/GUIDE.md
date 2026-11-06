@@ -592,7 +592,7 @@ All of them, plus the CLI's own commands and flags, on one page: **[docs/COMMAND
 | `/model base` | Pin the base model; the router is bypassed |
 | `/model auto` | Hand the choice back to the router |
 | `/verify <cmd>` | This tab's definition of done in commands: while it exits ≠ 0, the loop does not accept «finished». `off` clears it. The same command as on the VERIFY page |
-| `/goal <text>` | The definition of done in words, for what no command checks. The model reads it before starting and the reviewer uses it as the acceptance criterion |
+| `/goal <text>` | The definition of done in words, for what no command checks. The model reads it before starting and the reviewer uses it as the acceptance criterion. `/goal off` clears it, bare `/goal` shows it |
 | `/qa <alias\|off\|auto\|base>` | Who reviews this tab's answers before they are accepted. `<alias>` names a pool model, `base` pins the base model, `off` removes the reviewer here, `auto` returns to the config's judge. Naming a judge does not make that model answer the turn — that is `/model` |
 | `/pin` | Tie this tab to this machine: the conversation stays visible everywhere, and its turns run here, where its files, services and networks are. `/pin off` releases it, `/pin ?` says which machine it is tied to |
 | `/why` | What was put in front of the model on this tab's last turn: the trail behind its answer |
