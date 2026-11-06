@@ -14861,6 +14861,8 @@ def _agent_turn_events(req):
     _conv_key = (req.session or req.session_uuid or "").strip()
     if req.compact and not (ep.get("base_url") and ep.get("model")):
         ep = dict(_LAST_TURN_EP.get(_conv_key) or {})
+    elif req.orchestrate or req.council:
+        pass
     elif not (ep.get("base_url") and ep.get("model")):
         route_q = req.message or ""
         if not route_q and req.messages:

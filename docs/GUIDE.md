@@ -702,7 +702,7 @@ is one giving an opinion.
 
 **The reviewer stays on inside every member.** The council and the quality reviewer do different jobs and neither replaces the other: the members judge the content against two criteria, while the reviewer refuses an answer that is not an answer — a turn reporting on itself, a pasted record — so a status report never reaches the bench as the first speaker's answer.
 
-**Nobody sitting has read your conversation.** Each member receives the matter framed explicitly as somebody else's request, so no member mistakes an earlier turn for its own history and replies that it already answered.
+**Nobody sitting has read your conversation.** Each member receives the matter framed explicitly as somebody else's request, so no member mistakes an earlier turn for its own history and replies that it already answered. With the page's context tick on, the tail of the conversation goes in as a briefing, shown on the page before anyone speaks, and the whole of it sits behind `search_conversation` for any seat that wants to look something up; untick it and the seats come in clean, with the matter alone.
 
 **A split vote does not silently repeat.** The council stops and asks: another
 round, or leave it here? Spending more models is the one thing here that is
@@ -1176,8 +1176,9 @@ inside the messages the turn put in front of its model, and
 `search_working_memory` inside the texts that conversation digested; its
 prompt says the brief is a summary, to search before assuming, and that the
 conversation wins over the brief. A plan typed as `@multi` sends the
-conversation with it, as any turn does; where nothing is filed behind a turn,
-no door is promised.
+conversation with it, as any turn does, and so does a council convened from
+its page with the context tick on; where nothing is filed behind a turn, no
+door is promised.
 
 Three rules it lives by:
 

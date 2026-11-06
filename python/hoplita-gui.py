@@ -7353,9 +7353,10 @@ enabled = true
         if not members:
             self.thread_msg(t("council.err_no_members"), "error")
             return
-        context = ""
+        context, _hist = "", None
         if getattr(ctx, "council_context", True):
             context = self._council_context_text(ctx)
+            _hist = self._council_messages(ctx, topic, already_in_history)
         self.signals.council_event.emit(tab, {"type": "clear"})
         self.signals.council_event.emit(tab, {"type": "briefing",
                                               "text": context})
@@ -7364,11 +7365,13 @@ enabled = true
         self._task_begin()
         try:
             base_url, api_key, model = self._chat_base_endpoint()
-            final = self._stream_turn(
-                {"council": {"topic": topic, "members": members,
-                             "first": first, "context": context},
-                 "endpoint": {"base_url": base_url, "api_key": api_key,
-                              "model": model}}, model=model)
+            _payload = {"council": {"topic": topic, "members": members,
+                                    "first": first, "context": context},
+                        "endpoint": {"base_url": base_url, "api_key": api_key,
+                                     "model": model}}
+            if _hist is not None:
+                _payload["messages"] = _hist
+            final = self._stream_turn(_payload, model=model)
             if not already_in_history:
                 self.conversation_history.append({"role": "user",
                                                   "content": topic})
@@ -7406,6 +7409,28 @@ enabled = true
             who = t("label.user") if role == "user" else "HOPLITA"
             out.append(f"{who}: {txt.strip()[:1200]}")
         return "\n\n".join(out)
+
+    def _council_messages(self, ctx, topic, already_in_history):
+        try:
+            from hoplita_council import strip_record as _strip
+        except Exception:
+            def _strip(x):
+                return x
+        hist = list(getattr(ctx, "history", None) or self.conversation_history)
+        out = []
+        for m in hist:
+            role = m.get("role") if isinstance(m, dict) else None
+            if role not in ("user", "assistant"):
+                continue
+            txt = m.get("content")
+            if role == "assistant" and isinstance(txt, str):
+                txt = _strip(txt)
+            if not txt or (isinstance(txt, str) and not txt.strip()):
+                continue
+            out.append({"role": role, "content": txt})
+        if not already_in_history:
+            out.append({"role": "user", "content": topic})
+        return out
 
     def _code_view_placeholder(self, on_code):
         if hasattr(self, "entry"):
