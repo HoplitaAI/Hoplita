@@ -12790,8 +12790,8 @@ def _inject_block(messages, block, stable=True):
     existing = out[idx].get("content", "")
     if isinstance(existing, str):
         out[idx] = {**out[idx],
-                    "content": (existing + "\n\n" + block) if sep_before
-                    else (glued + "\n\n---\n\n" + existing)}
+                    "content": ((existing + "\n\n" + block) if existing else block)
+                    if sep_before else (glued + "\n\n---\n\n" + existing)}
     elif isinstance(existing, list):
         part = {"type": "text",
                 "text": ("\n\n" + block) if sep_before else (glued + "\n\n---\n\n")}
@@ -12808,7 +12808,8 @@ def _prepend_system(messages, directive):
     if out and out[0].get("role") == "system":
         existing = out[0].get("content", "")
         if isinstance(existing, str):
-            out[0] = {**out[0], "content": directive + "\n\n" + existing}
+            out[0] = {**out[0], "content": (directive + "\n\n" + existing)
+                      if existing else directive}
             return out
     out.insert(0, {"role": "system", "content": directive})
     return out
@@ -13572,6 +13573,8 @@ def prepare_turn_messages(messages, pinned_skills=None, emit=None,
 
     out = list(messages or [])
 
+    if out and out[0].get("role") != "system":
+        out.insert(0, {"role": "system", "content": ""})
     out = _inject_block(out, _tr("inject.order"), stable=True)
     if _unavailable_tools() & set(_PICTURE_TOOLS):
         out = _inject_block(out, _tr("inject.no_pictures"), stable=True)
