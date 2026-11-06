@@ -5879,6 +5879,24 @@ def _turn_snapshot_file(turn_id):
 
 def _turn_snapshot_drop(turn_id):
     _TURN_SNAPSHOTS.pop(turn_id, None)
+    _TURN_MESSAGES.pop(turn_id, None)
+
+
+_TURN_MESSAGES = {}
+
+
+def _turn_messages_file(turn_id, messages):
+    if turn_id and messages:
+        _TURN_MESSAGES[turn_id] = messages
+
+
+def _turn_messages_of(turn_id=""):
+    tid = (turn_id or "").strip()
+    while tid:
+        if tid in _TURN_MESSAGES:
+            return _TURN_MESSAGES[tid]
+        tid = tid.rsplit("~", 1)[0] if "~" in tid else ""
+    return []
 
 
 def _turn_session():
@@ -10068,6 +10086,8 @@ def register_tools():
                                    "fn": lambda a: tool_project_write(a.get("path", ""), a.get("note", ""), a.get("text", ""), bool(a.get("replace", False)))},
         "search_working_memory":  {"desc": "Search INSIDE the full texts of the large results digested in this conversation (its working memory): the digest you got is an extract, the original is here whole. Words, a name, a figure — whatever you think of — and it returns the passages that mention it with the paragraphs around them and their lines; regex=true is grep. Use it before re-calling a tool for something an earlier result may already hold.",
                                    "fn": lambda a: tool_search_working_memory(a.get("query", ""), a.get("title", ""), bool(a.get("regex")), a.get("context", 1), a.get("k", 5))},
+        "search_conversation":    {"desc": "Search what was said in the conversation your task comes from, when you are a sub-agent of a plan: your brief is a summary, this is the original. Words, a name, a figure, a condition — it returns the passages of the conversation that mention them, with the paragraphs around them; regex=true is grep. Search before assuming what the person meant; where the brief and the conversation disagree, the conversation wins. From the turn itself there is nothing behind to search.",
+                                   "fn": lambda a: tool_search_conversation(a.get("query", ""), bool(a.get("regex")), a.get("context", 1), a.get("k", 5))},
         "read_note":              {"desc": "One note, by title (forgiving: exact, then unique substring) or id — whole when it fits, else BY LINES like code_read_range: the first window plus 'next', the exact call for the following lines. search_notes previews 500 chars; this is the text itself. A miss answers with the titles that DO exist.",
                                    "fn": lambda a: tool_read_note(a["category"], a.get("title", ""), a.get("note_id", ""), a.get("start_line"), a.get("end_line"))},
         "code_lint":              {"desc": "Real diagnostics: type errors, unused imports, compile errors — from each language's own checker.",
@@ -10582,6 +10602,7 @@ def register_tool_params():
                                    "required": ["path", "entry"]},
         "project_write":          {"properties": {"path": {"type": "string", "description": "The open project's directory (or its folder name)."}, "note": {"type": "string", "enum": ["spec", "future", "journal"]}, "text": {"type": "string", "description": "spec: one short truth (≤600 chars). future: one line per pending item. journal: the entry."}, "replace": {"type": "boolean", "description": "Rewrite the whole note instead of appending (default false)."}}, "required": ["path", "note", "text"]},
         "search_working_memory":  {"properties": {"query": {"type": "string", "description": "Words to look for (ranked by how many of the rarer ones a passage covers), or a pattern with regex=true."}, "title": {"type": "string", "description": "One stored text (its title, or part of it); empty searches all of this conversation's."}, "regex": {"type": "boolean"}, "context": {"type": "integer", "description": "Paragraphs before and after each hit (0-5, default 1)."}, "k": {"type": "integer", "description": "How many passages (default 5)."}}, "required": ["query"]},
+        "search_conversation":    {"properties": {"query": {"type": "string", "description": "Words to look for (ranked by how many of the rarer ones a passage covers), or a pattern with regex=true."}, "regex": {"type": "boolean"}, "context": {"type": "integer", "description": "Paragraphs before and after each hit (0-5, default 1)."}, "k": {"type": "integer", "description": "How many passages (default 5)."}}, "required": ["query"]},
         "read_note":              {"properties": {"category": {"type": "string", "description": "The notes folder."},
                                                   "title": {"type": "string", "description": "The note's title (exact or unique substring)."},
                                                   "note_id": {"type": "string", "description": "Exact id, when you have it (wins over title)."},
@@ -12895,6 +12916,54 @@ def tool_search_working_memory(query, title="", regex=False, context=1, k=5):
                          "start_line, end_line) around a passage's lines"}
 
 
+def tool_search_conversation(query, regex=False, context=1, k=5):
+    if not (query or "").strip():
+        return {"error": "query is empty: say what to look for (words, a "
+                         "name, a figure; or a pattern with regex=true)"}
+    try:
+        context = max(0, min(5, int(context)))
+    except Exception:
+        context = 1
+    try:
+        k = max(1, min(20, int(k)))
+    except Exception:
+        k = 5
+    tid = _turn_id_here()
+    if "~" not in (tid or ""):
+        return {"results": [], "count": 0,
+                "note": "you are the turn itself: the conversation is your "
+                        "own context, there is nothing behind it to search"}
+    docs = []
+    for i, m in enumerate(_turn_messages_of(tid)):
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        if isinstance(c, list):
+            c = "\n".join(p.get("text", "") for p in c
+                          if isinstance(p, dict) and p.get("type") == "text")
+        if not isinstance(c, str) or not c.strip():
+            continue
+        docs.append({"title": f"message {i + 1} ({m.get('role') or '?'})",
+                     "text": c})
+    if not docs:
+        return {"results": [], "count": 0,
+                "note": "no conversation is filed behind this task"}
+    from hoplita_search import find_passages
+    found = find_passages(query, docs, regex=bool(regex), context=context,
+                          k=k, budget=_note_window_chars() - 400)
+    out = [{k_: v for k_, v in r_.items() if k_ != "category"}
+           for r_ in _passage_rows(found, lambda d: "conversation")]
+    if not out:
+        return {"results": [], "count": 0,
+                "note": "nothing in the conversation matches"
+                        + (" (try other words, or regex=true for a pattern)"
+                           if not regex else " (try words without regex)")}
+    return {"results": out, "count": len(out),
+            **({"more": f"{found['total'] - len(out)} more passage(s): narrow "
+                        f"the query, context=0, or fewer words"}
+               if found["total"] > len(out) else {})}
+
+
 def wm_forget(session_uuid, orphans=False):
     if notes_mgr is None:
         return 0
@@ -13831,6 +13900,8 @@ _ALWAYS_IN_PROFILE = {"intent"}
 _BACKGROUND_IN_PROFILE = {"background_run", "background_watch",
                           "background_stop", "background_list"}
 
+_RETRIEVAL_IN_PROFILE = {"search_conversation", "search_working_memory"}
+
 _PROJECT_TOOLS = {"get_todo_context", "list_todo_projects", "add_task",
                   "update_task_progress", "task_depends"}
 
@@ -13850,7 +13921,7 @@ def _profile_tool_names(profile, terminal=False, may_orchestrate=False):
         names -= _SUBAGENT_SHARED_SURFACE_TOOLS
     names |= (_ALWAYS_IN_PROFILE & _all)
     if names - _ALWAYS_IN_PROFILE:
-        names |= (_BACKGROUND_IN_PROFILE & _all)
+        names |= ((_BACKGROUND_IN_PROFILE | _RETRIEVAL_IN_PROFILE) & _all)
     return names
 
 
@@ -14234,13 +14305,18 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
                 "items": [dict(it) for it in (ev.get("items") or [])
                           if isinstance(it, dict)]}})
 
+    _snap = _TURN_SNAPSHOTS.get((getattr(ctx, "turn_id", "") or "").strip()) or {}
+    _prev = {k_: getattr(_TURN_SESSION, k_, None) for k_ in _TURN_SNAPSHOT_FIELDS}
+    for k_, v_ in _snap.items():
+        setattr(_TURN_SESSION, k_, v_)
     try:
         _sub_is_blocked, _sub_allowed = _sub_agent_wall(
             ctx, tool_names if tool_names is not None
             else _profile_tool_names(profile, terminal))
         res = fed_agent.run_agentic_turn(
             user_message=None if messages else prompt, messages=messages,
-            system=(None if messages else _tr("prompts.background")),
+            system=(None if messages else _tr("prompts.subagent_brief")
+                    + "\n\n" + _tr("prompts.background")),
             given=given, max_iterations=max_iter,
             on_event=on_event, cancel=ctx.cancel,
             turn_id=f"{ctx.turn_id}~{sid}", llm_chat=chat,
@@ -14248,11 +14324,14 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
             is_blocked=_sub_is_blocked,
             qa=qa_mode, qa_chat=qa_chat, qa_max_rounds=1,
             qa_self=(qa_model or "").strip() == (model or "").strip(),
-            allowed_tools=_sub_allowed)
+            allowed_tools=_sub_allowed,
+            expanded_extra=(None if messages else ("search_conversation",)))
     except Exception as e:
         return f"[sub-agent error: {e}]"
     finally:
         fed_agent.forget_turn(f"{ctx.turn_id}~{sid}")
+        for k_, v_ in _prev.items():
+            setattr(_TURN_SESSION, k_, v_)
     try:
         _n_tools = len([t for t in (res.get("tool_trace") or [])
                         if (t.get("tool") or "") != "intent"])
@@ -14862,6 +14941,7 @@ def _agent_turn_events(req):
                           images=_attached_images_of(req.messages),
                           job=req.job_id or "")
         _turn_snapshot_file(turn_id)
+        _turn_messages_file(turn_id, req.messages)
         try:
             with _orchestration_ctx(orch_ctx):
                 if req.orchestrate:
@@ -14921,6 +15001,7 @@ def _agent_turn_events(req):
                     _verify = _verify or _meta.get("verify")
                     _given = _meta.get("given", "")
                     _last_user_sent = _meta.get("last_user_sent")
+                    _turn_messages_file(turn_id, _messages)
 
                 _lim_box = {}
 

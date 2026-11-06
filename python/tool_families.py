@@ -20,6 +20,7 @@ _EXACT = {
     "recall": "memory", "search_rag": "memory", "intent": "memory",
     "propose_memory_change": "memory", "working_memory_forget": "memory",
     "search_working_memory": "memory",
+    "search_conversation": "memory",
     "add_task": "tasks", "update_task_progress": "tasks",
     "task_depends": "tasks",
     "get_todo_context": "tasks", "project_journal": "tasks",

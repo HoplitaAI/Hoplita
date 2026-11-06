@@ -1431,6 +1431,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                      turn_id=None, messages=None, llm_chat=None,
                      delegate=None, delegate_names=(), verify=None, qa=None,
                      qa_chat=None, allowed_tools=None, qa_max_rounds=None,
+                     expanded_extra=None,
                      goal=None, verify_goal=None, escalate=None,
                      model_label="", is_blocked=None,
                      plan_gate=None,
@@ -1541,6 +1542,10 @@ def run_agentic_turn(user_message=None, history=None, system=None,
         expanded.add("intent")
         if allowed_tools is not None:
             expanded &= set(allowed_tools) | {"load_tools", "intent"}
+        if expanded_extra:
+            expanded |= (set(expanded_extra)
+                         & (set(allowed_tools) if allowed_tools is not None
+                            else set(expanded_extra)))
     all_tools = _tools_as_openai(allowed, expanded)
 
     def _catalogue_msg():

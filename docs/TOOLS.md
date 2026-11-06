@@ -119,6 +119,7 @@ The model working on the user's own screen. Two layers under one contract: the *
 | `add_note` | `category` `title` `content` | Adds a technical note to an existing category. Not for personal facts (that is `add_fact`). |
 | `update_note` | `category` `note_id` `title?` `content?` `changes?` | Edits a note in place, keeping its id: `content` rewrites it, `changes: [{old, new}]` edits a long note without rewriting it (each `old` must match exactly once). |
 | `delete_note` | `category` `note_id` | Deletes a note by category and id. |
+| `search_conversation` | `query` `regex?` `context?` `k?` | For a sub-agent of a plan: searches what was said in the conversation its task comes from (the messages the turn put in front of its model, filed while the turn lives): the passages that mention the words or match the pattern (`regex=true`), with `context` paragraphs around them. Its brief is a summary; this is the original. From the turn itself there is nothing behind to search. In every profile that calls anything, with `search_working_memory`, and its schema always travels with a sub-agent. |
 | `search_working_memory` | `query` `title?` `regex?` `context?` `k?` | Searches inside the full texts of the large results this conversation digested: the passages that mention the words (ranked by how many of the rarer ones they cover) or match the pattern (`regex=true`), each with `context` paragraphs around it (default 1) and its lines, for `read_note`. Always carried with the model. |
 | `read_note` | `category` `title?` `note_id?` `start_line?` `end_line?` | One note by title (exact, then unique substring) or id: whole when it fits, otherwise by lines (`start_line` / `end_line`, with the exact call for the next window). A miss answers with the titles that exist. |
 | `search_notes` | `search_term` `category?` | Searches the technical notes only (configs, commands, code). Each hit is the passage where the words are, with a paragraph either side and its lines (`read_note` reads around them); a note is also found by its title. The action log only when named as `category`. For every store at once use `recall`. |
@@ -463,6 +464,8 @@ An orchestrator sub-agent does not get every tool (the full set overwhelms a sma
 | `none` | `none` | no tools, reasoning only |
 
 Several capabilities combine into the most permissive profile they need (`browse` + `read` = `browse_read`; anything with `full` is `full`).
+
+Every profile that calls anything also carries the two retrieval tools, `search_conversation` and `search_working_memory`. A sub-agent is born from its brief, the planner's summary of a conversation it never saw, and a summary loses; so it is told so (its system prompt says the brief is a summary, names the two tools, says to search before assuming and that the conversation wins over the brief), and `search_conversation` travels with its full schema whatever the measured hot set says. Reading the conversation grants no capability the profile lacked. The sub-agent also wears the plan's turn on its own thread: the tools it calls see the tab's conversation and project, so its working-memory search finds the tab's texts and what it spills is tagged as the conversation's.
 
 Profiles resolve to concrete sets in the MCP (`hoplita-mcp.py` → `TOOL_PROFILES`), the single source for both faces:
 

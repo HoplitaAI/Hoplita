@@ -1166,6 +1166,17 @@ it to one text, and `read_note('working-memory', <title>, start_line,
 end_line)` reads around a passage. The tool always travels with the model,
 and a JSON result is stored indented so it has lines to find.
 
+A sub-agent of a plan has the same door, and one more. It is born from its
+brief, the planner's summary of a conversation it never saw, and a summary
+loses: a figure said three turns earlier, a condition the person put once.
+Carrying the whole conversation into every sub-agent keeps all of that at the
+price of the whole prefix per sub-agent, a full prefill each on a local
+server. So the sub-agent searches instead: `search_conversation(query)` looks
+inside the messages the turn put in front of its model, and
+`search_working_memory` inside the texts that conversation digested; its
+prompt says the brief is a summary, to search before assuming, and that the
+conversation wins over the brief.
+
 Three rules it lives by:
 
 - **Nothing is cut on the way in.** If the tool returned 100k, that is the
