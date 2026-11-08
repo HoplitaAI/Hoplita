@@ -1561,9 +1561,12 @@ generic answer is not good enough. HOPLITA ships none; you write your own.
 - The password is requested when the MCP starts (every manager shares the same one)
 - It can be changed with the server running, from **Configuration → App →
   Vault** or `python/hoplita_passwd.py` (`POST /vault/password`, this machine
-  only, never a tool): the database is re-keyed in one transaction with its
-  note bodies, the identity file is sealed again, and a copy of both that
-  opens with the old password goes to `backups/` first
+  only, never a tool), all or nothing: the identity file sealed under the
+  new password is written beside the old one and read back, the database is
+  re-keyed in one transaction with its note bodies, and the file takes its
+  new seal in one rename; a copy of both that opens with the old password
+  goes to `backups/` first. It is this machine's password: another machine
+  carrying the same identity keeps its own
 - One implementation for every store: the `EncryptedStorageManager` base class
 - The database keeps rolling backups (the newest 30)
 - Note bodies carry a second, content-level encryption layer inside the

@@ -45,8 +45,6 @@ def explain(result, t, url=""):
 
 def outcome(result, t):
     lines = [t("vault.changed", backup=result.get("backup") or "backups/")]
-    if result.get("identity") is False:
-        lines.append(t("vault.identity_not_resealed"))
     lines.append(t("vault.changed_env"))
     return lines
 

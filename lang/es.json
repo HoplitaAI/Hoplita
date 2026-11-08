@@ -2335,7 +2335,6 @@
   "vault.mismatch": "Las dos contraseñas nuevas no coinciden.",
   "vault.changed": "Contraseña cambiada. El próximo arranque pedirá la nueva. Las copias de seguridad anteriores a este momento se abren con la antigua; la hecha justo antes del cambio está en {backup}.",
   "vault.changed_env": "Si esta máquina arranca sola con HOPLITA_VAULT_PASSWORD, escribe allí la nueva.",
-  "vault.identity_not_resealed": "La base de datos ya tiene la contraseña nueva, pero el fichero de identidad federada no se pudo volver a sellar y sigue con la antigua. Su copia está junto a la de la base de datos.",
   "vault.err_wrong_current": "Esa no es la contraseña actual de la bóveda.",
   "vault.err_open_vault": "Esta bóveda es abierta: su clave es el fichero vault.key, a su lado. No hay contraseña que cambiar.",
   "vault.err_same": "La contraseña nueva es la misma que la actual.",

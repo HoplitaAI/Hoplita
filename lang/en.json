@@ -2335,7 +2335,6 @@
   "vault.mismatch": "The two new passwords do not match.",
   "vault.changed": "Password changed. The next start asks for the new one. Backups made before this moment open with the old one; the copy made right before the change is {backup}.",
   "vault.changed_env": "If this machine starts unattended with HOPLITA_VAULT_PASSWORD, write the new one there.",
-  "vault.identity_not_resealed": "The database now has the new password, but the federation identity file could not be sealed again and keeps the old one. Its copy is next to the database's.",
   "vault.err_wrong_current": "That is not the vault's current password.",
   "vault.err_open_vault": "This vault is open: its key is the file vault.key beside it. There is no password to change.",
   "vault.err_same": "The new password is the same as the current one.",

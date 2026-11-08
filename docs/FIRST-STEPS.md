@@ -72,10 +72,13 @@ safe**: the data is encrypted with it.
 
 To change it later, with the server running: **Configuration** → **App** →
 **Vault** → **Change the password**, or from a terminal
-`python python/hoplita_passwd.py`. The database is sealed again with the new
-one in place; the backups made before that moment still open with the old
-one. A machine that starts unattended with `HOPLITA_VAULT_PASSWORD` needs the
-new one written there too.
+`python python/hoplita_passwd.py`. The database and the identity file are
+sealed again with the new one in place, all or nothing; the backups made
+before that moment still open with the old one. A machine that starts
+unattended with `HOPLITA_VAULT_PASSWORD` needs the new one written there too.
+The password belongs to this machine: your other machines carrying the same
+identity keep theirs, and keep syncing (section *Use the same identity on a
+second machine* in [FEDERATION.md](FEDERATION.md)).
 
 ## That is all you need
 

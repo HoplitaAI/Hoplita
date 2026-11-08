@@ -118,6 +118,19 @@ chat («call this machine home»).
 Do not run `fed_register` on the second machine: that would create a second,
 different identity.
 
+### Changing the password when the identity is on several machines
+
+The vault password belongs to a machine, not to the identity. Changing it on
+one machine (**Configuration → App → Vault**, or `hoplita_passwd.py`) seals
+that machine's database and that machine's copy of the identity file under the
+new password, and nothing else: your other machines keep opening with theirs.
+Syncing does not depend on it either: the snapshot and everything that travels
+are sealed with the identity's keys, which are the same on every machine, so
+two machines with different passwords keep exchanging notes, tasks and the
+rest. The only moment the password matters across machines is step 3 above:
+the file you copy opens with the password of the machine it came from. To keep
+one password everywhere, change it on each machine; nothing forces you to.
+
 ### Leave the federation, or move to another server
 
 **Contacts** → **🚪 Leave**, then confirm. Chat: «leave the federation»

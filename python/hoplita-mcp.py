@@ -16148,9 +16148,31 @@ def change_vault_password(current, new):
         if os.path.exists(ident):
             shutil.copy2(ident, os.path.join(os.path.dirname(backup),
                                              os.path.basename(ident) + stamp))
+        def _drop(path):
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+
+        tmp = None
+        if fed_store is not None:
+            tmp = ident + ".tmp"
+            fed_store._password = new
+            try:
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(fed_store._encrypt_blob(fed_store.data), fh, indent=2)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                with open(tmp, "r", encoding="utf-8") as fh:
+                    fed_store._decrypt_blob(json.load(fh))
+            except Exception as e:
+                fed_store._password = held
+                _drop(tmp)
+                raise RuntimeError(f"the identity file could not be sealed again: {e}") from e
         keep = json.loads(json.dumps(notes_mgr.data))
-        try:
-            resealed, unreadable = notes_mgr.rekey_note_contents(new)
+
+        def _rekey(password):
             rows = notes_mgr._sql_serialize()
             shadow = notes_mgr._sql_shadow or {}
             new_shadow = {}
@@ -16159,28 +16181,33 @@ def change_vault_password(current, new):
                 for store, cur_rows in rows.items():
                     sql.write_rows(cur, store, cur_rows, shadow.get(store, {}))
                     new_shadow[store] = dict(cur_rows)
-            sql.rekey(new, _rows)
+            sql.rekey(password, _rows)
+            notes_mgr._sql_shadow = new_shadow
+
+        try:
+            resealed, unreadable = notes_mgr.rekey_note_contents(new)
+            _rekey(new)
         except Exception:
             notes_mgr.data = keep
+            if fed_store is not None:
+                fed_store._password = held
+            _drop(tmp)
             raise
-        notes_mgr._sql_shadow = new_shadow
-        for m in (todo_mgr, notes_mgr, cred_mgr, cron_mgr, fed_store):
+        if tmp is not None:
+            try:
+                os.replace(tmp, ident)
+            except Exception as e:
+                notes_mgr.data = keep
+                fed_store._password = held
+                _rekey(held)
+                _drop(tmp)
+                raise RuntimeError(f"the identity file could not take its new seal: {e}") from e
+        for m in (todo_mgr, notes_mgr, cred_mgr, cron_mgr):
             if m is not None:
                 m._password = new
-        identity = None
-        if fed_store is not None:
-            fed_store.save_data()
-            try:
-                with open(ident, "r", encoding="utf-8") as fh:
-                    fed_store._decrypt_blob(json.load(fh))
-                identity = True
-            except Exception:
-                identity = False
         print(f"[VAULT] password changed: {resealed} note bodies re-sealed"
-              + (f", {unreadable} unreadable left as they were" if unreadable else "")
-              + ("" if identity is not False else "; the identity file did NOT re-seal"))
-        return {"ok": True, "backup": backup, "notes": resealed,
-                "unreadable": unreadable, "identity": identity}
+              + (f", {unreadable} unreadable left as they were" if unreadable else ""))
+        return {"ok": True, "backup": backup, "notes": resealed, "unreadable": unreadable}
     finally:
         _VAULT_LOCK.release()
 
