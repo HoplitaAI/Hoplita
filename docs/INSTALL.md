@@ -143,6 +143,22 @@ terminal, they go to that terminal (Terminal, iTerm…) instead. Chat, the
 Terminal tab, the canvas, the whiteboard, the web browser and the CLI need
 none of them.
 
+In order, the first time a turn uses the desktop hands:
+
+1. If the turn's model is not on this machine or your local network, HOPLITA
+   asks first, in a window of its own: *Your screen would leave this
+   machine*, with **Allow for this turn** or **No**. A model on this machine
+   or your network is not asked. To stop being asked on every turn, set
+   `remote_model = allow` under `[HANDS]` in `config.ini` (see
+   [CONFIG.md](CONFIG.md)).
+2. macOS shows its two notices, Accessibility and Screen Recording. Each
+   opens System Settings at its list, with HOPLITA in it: turn HOPLITA on.
+   Accessibility asks your Mac password; Screen Recording does not.
+3. Screen Recording works at once. For Accessibility, quit HOPLITA (⌘Q) and
+   open it again. That first turn ends by saying which permission was
+   missing; the next one has both.
+4. Nothing is asked again: the switches stay on until you turn them off.
+
 | macOS asks | Answer | What it is for | Without it |
 |---|---|---|---|
 | «HOPLITA» would like to record this computer's screen (**Screen Recording**) | **Open System Settings**: HOPLITA is in the list, turn it on (if it is not, press **+** and pick `venv/bin/HOPLITA` inside the install folder, `~/hoplita`) | The desktop hands look at the screen (`hands_screenshot`, and the check after each action) | The model sees only the desktop background, no windows |
@@ -152,10 +168,8 @@ none of them.
 | «Google Chrome for Testing» notifications | Either | It is the browser HOPLITA browses with; nothing of HOPLITA uses its notifications | Nothing changes |
 | HOPLITA would like to find devices on your local network (**Local Network**) | **Allow**, if your model runs on another machine of your network | Reaching that machine | HOPLITA cannot reach the model there |
 
-Screen Recording works from the moment it is turned on: the next capture
-shows the screen. Accessibility does not: macOS keeps answering a running
-HOPLITA with what the switch said when it started, so after turning it on,
-quit HOPLITA (⌘Q) and open it again. To check, ask HOPLITA for
+Why Accessibility wants the restart: macOS keeps answering a running
+HOPLITA with what the switch said when it started. To check, ask HOPLITA for
 `hands_status`: it says `accessibility permission: granted` and `screen
 recording permission: granted`, or which one is missing. Both permissions
 can be turned off again at any time in **System Settings → Privacy &
