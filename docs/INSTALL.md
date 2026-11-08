@@ -33,8 +33,9 @@ irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1 | iex
 It downloads HOPLITA, uses the machine's Python when it is 3.11 or newer and
 can make a virtual environment, and otherwise fetches a standalone Python 3.12
 (with [uv](https://github.com/astral-sh/uv)) into the install folder: no
-administrator, nothing installed system-wide, no change to `PATH`. On Windows
-it always uses that standalone Python. Then it runs `install.py`.
+administrator, nothing installed system-wide, no change to `PATH`. On macOS
+and Windows it always uses that standalone Python (on a Mac, the reason is
+under [macOS](#macos)). Then it runs `install.py`.
 
 Options go after `sh -s --` on Linux and macOS:
 
@@ -179,7 +180,9 @@ On macOS the desktop hands have both layers: the window-and-element layer
 through the accessibility API (the same one Linux drives through AT-SPI and
 Windows through UI Automation, so a window's buttons and fields are read and
 acted on by name), and the pixel layer for captures, clicks by coordinates
-and keys. Both need the two permissions above.
+and keys. Both need the two permissions above and nothing more to install:
+the plain install brings the capture library, so `--desktop` is not needed
+on a Mac.
 
 ## Windows
 
@@ -214,7 +217,7 @@ one can also be added later.
 |---|---|---|
 | `--browser` | The browsing agent and the scraper (Playwright with its Chromium, browser-use, crawl4ai) | A large download |
 | `--cli` | The command-line client | [Go](https://go.dev/dl/) |
-| `--desktop` | The desktop hands: the model sees and uses your screen | See the [guide](GUIDE.md) |
+| `--desktop` | The desktop hands on Linux and Windows: the model sees and uses your screen (a Mac has them from the plain install) | See the [guide](GUIDE.md) |
 | `--lsp` | Diagnostics and navigation in the code editor | — |
 | `--diffr` | The structural diff in the whiteboard | — |
 | `--system-libs` | Linux system libraries for the canvas, the tray and the hands | `sudo` |

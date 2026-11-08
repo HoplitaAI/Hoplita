@@ -17,3 +17,4 @@ python-pptx>=1.0
 pyyaml>=6.0
 websocket-client>=1.6
 sqlcipher3-wheels
+mss; sys_platform == "darwin"
