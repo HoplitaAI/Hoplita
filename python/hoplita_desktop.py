@@ -1780,9 +1780,11 @@ class Hands:
                         "hint": "prefer an element action (hands_click on the "
                                 "menu item or button) on this session"}
         if not sent:
-            return {"error": f"no way to send keys on this session: {px.input_why}",
-                    "hint": "prefer an element action (hands_click on the menu "
-                            "item or button)"}
+            why = facts.get("pixels_failed") or px.input_why
+            return {"error": f"could not send '{keys}': {why}",
+                    "hint": "keys is ONE string joined with '+', e.g. cmd+space "
+                            "or Return; prefer an element action (hands_click "
+                            "on the menu item or button) when it exists"}
         verified, ev = self._verify(session, before, facts)
         session.actions += 1
         return {"ok": True, "verified": verified, "evidence": ev}
