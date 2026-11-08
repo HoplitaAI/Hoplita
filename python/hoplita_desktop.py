@@ -1426,7 +1426,8 @@ def mac_permissions_note():
                      "NOT granted to the app that launched this server — "
                      "System Settings → Privacy & Security → Accessibility, "
                      "turn that app on (HOPLITA when started from HOPLITA.app; "
-                     "Terminal when started from a terminal)"))
+                     "Terminal when started from a terminal), then quit HOPLITA "
+                     "and open it again: macOS applies this one at the next start"))
     except Exception as e:
         notes.append(f"accessibility permission: unknown ({e})")
     try:
@@ -1440,8 +1441,7 @@ def mac_permissions_note():
                      "if it is not in the list, add it with + (the install's "
                      "venv/bin/HOPLITA when started from HOPLITA.app; "
                      "Applications → Utilities → Terminal when started from a "
-                     "terminal), turn it on, then quit HOPLITA and start it "
-                     "again"))
+                     "terminal) and turn it on: the next capture has it"))
     except Exception as e:
         notes.append(f"screen recording permission: unknown ({e})")
     return "; ".join(notes)

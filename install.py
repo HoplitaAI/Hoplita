@@ -1096,6 +1096,61 @@ def install_system_libs():
         warn("may fail. Check your package manager.")
 
 
+UV_VERSION = "0.13.6"
+PY_WANT = "3.12"
+
+
+def _is_framework_python():
+    import sysconfig
+    return bool(sysconfig.get_config_var("PYTHONFRAMEWORK"))
+
+
+def _mac_standalone_python(prefix):
+    if not _is_framework_python() and sys.version_info >= (3, 11) \
+            and os.path.realpath(sys.executable).startswith(os.path.realpath(prefix) + os.sep):
+        return None
+    pydir = os.path.join(prefix, "python")
+    import glob as _glob
+    have = sorted(_glob.glob(os.path.join(pydir, f"cpython-{PY_WANT}*", "bin", f"python{PY_WANT}")))
+    if have:
+        return have[-1]
+    step("Fetching HOPLITA's own Python for macOS")
+    print(f"   this Python ({sys.version_info.major}.{sys.version_info.minor}"
+          + (", a framework build" if _is_framework_python() else "")
+          + f") only starts the installer; HOPLITA runs on a standalone {PY_WANT}")
+    import tarfile
+    import tempfile
+    import urllib.request
+    arch = "aarch64" if platform.machine() in ("arm64", "aarch64") else "x86_64"
+    target = f"{arch}-apple-darwin"
+    work = tempfile.mkdtemp(prefix="hoplita-uv-")
+    try:
+        tgz = os.path.join(work, "uv.tar.gz")
+        urllib.request.urlretrieve(
+            f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/uv-{target}.tar.gz", tgz)
+        with tarfile.open(tgz) as t:
+            t.extractall(work)
+        uv = os.path.join(work, f"uv-{target}", "uv")
+        os.makedirs(pydir, exist_ok=True)
+        env = {**os.environ, "UV_PYTHON_INSTALL_DIR": pydir,
+               "UV_CACHE_DIR": os.path.join(work, "uv-cache")}
+        run([uv, "python", "install", "--quiet", "--no-bin", PY_WANT], env=env, check=True)
+        r = run([uv, "python", "find", "--managed-python", PY_WANT], env=env,
+                capture_output=True, text=True, check=True)
+        py = r.stdout.strip()
+        if not py or not os.access(py, os.X_OK):
+            err(f"uv could not provide Python {PY_WANT}")
+            sys.exit(1)
+        ok(f"Python {PY_WANT} in {pydir}")
+        return py
+    except Exception as e:
+        err(f"could not fetch the standalone Python: {e}")
+        err("  Install Python 3.12 (python.org) and run: python3.12 install.py")
+        sys.exit(1)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def run(cmd, **kw):
     return subprocess.run(cmd, **kw)
 
@@ -1198,6 +1253,11 @@ def main():
         args.prefix = child_prefix(spawn["HOPLITA_SPAWN_HANDLE"])
 
     prefix = resolve_prefix(args.prefix)
+    if IS_MAC and not args.uninstall and not os.environ.get("HOPLITA_STANDALONE_PY"):
+        _std = _mac_standalone_python(prefix)
+        if _std and os.path.realpath(_std) != os.path.realpath(sys.executable):
+            os.environ["HOPLITA_STANDALONE_PY"] = _std
+            os.execve(_std, [_std, os.path.abspath(__file__)] + sys.argv[1:], os.environ)
     if child_mark(prefix) and not args.uninstall:
         args.child = True
     if args.child:
@@ -1292,6 +1352,18 @@ def main():
                  "--system-libs, or install them by hand; see README.md.)"))
 
     venv_dir = os.path.join(prefix, "venv")
+    if IS_MAC and os.path.isdir(venv_dir):
+        _home = ""
+        try:
+            for _l in open(os.path.join(venv_dir, "pyvenv.cfg"), encoding="utf-8"):
+                if _l.startswith("home ="):
+                    _home = _l.split("=", 1)[1].strip()
+        except Exception:
+            pass
+        _own = os.path.realpath(os.path.join(prefix, "python")) + os.sep
+        if _home and not os.path.realpath(_home).startswith(_own):
+            warn("the venv stands on another Python; rebuilding it on HOPLITA's own")
+            shutil.rmtree(venv_dir, ignore_errors=True)
     if not os.path.isdir(venv_dir):
         base = os.path.realpath(sys.executable) if IS_MAC else sys.executable
         run([base, "-m", "venv", venv_dir], check=True)

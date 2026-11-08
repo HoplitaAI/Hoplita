@@ -67,12 +67,23 @@ main() {
         "$1" -c 'import sys, venv, ensurepip; sys.exit(sys.version_info < (3, 11))' \
             >/dev/null 2>&1
     }
+    standalone() {
+        "$1" -c 'import sys, sysconfig; sys.exit(bool(sysconfig.get_config_var("PYTHONFRAMEWORK")))' \
+            >/dev/null 2>&1
+    }
     py=""
     for c in "$prefix/venv/bin/python" python3.14 python3.13 python3.12 python3.11 python3; do
         if have "$c" || [ -x "$c" ]; then
             if [ "$c" = "$prefix/venv/bin/python" ]; then
+                if [ "$(uname -s)" = Darwin ] && ! standalone "$c"; then
+                    say "HOPLITA: the venv runs on a framework Python; a standalone one replaces it"
+                    rm -rf "$prefix/venv"
+                    continue
+                fi
                 "$c" -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
                     >/dev/null 2>&1 && py="$c" && break
+            elif [ "$(uname -s)" = Darwin ]; then
+                continue
             elif usable "$c"; then
                 py=$(command -v "$c")
                 break

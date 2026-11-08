@@ -99,26 +99,24 @@ which also stops the scheduled jobs.
 
 ## macOS
 
-macOS 13 (Ventura) or newer. The `python3` that comes with the Command Line
-Tools is too old, so install a current one. With [Homebrew](https://brew.sh):
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-brew install python@3.12 git
-```
-
-Homebrew installs Apple's Command Line Tools on the way if they are missing.
-Without Homebrew, the installer from
-[python.org](https://www.python.org/downloads/macos/) works too, and
-`xcode-select --install` gives you git.
-
-Then:
+macOS 13 (Ventura) or newer. Nothing to install first: the installer brings
+its own Python. The `python3` that comes with macOS only starts it; if it
+is missing, macOS offers the Command Line Tools on the first `git` or
+`python3`, and that is all you need.
 
 ```bash
 git clone https://github.com/HoplitaAI/Hoplita.git hoplita-src
 cd hoplita-src
-python3.12 install.py
+python3 install.py
 ```
+
+The installer fetches a standalone Python 3.12 into the install folder and
+continues on it, whatever Python the machine has. On a Mac it never uses
+Homebrew's or python.org's Python even when they are there: those are
+*framework* builds, under which HOPLITA's processes run as «Python» and
+macOS attributes the Screen Recording and Accessibility permissions to that
+Python, not to HOPLITA. The standalone one keeps HOPLITA's name on every
+notice and every switch.
 
 The clone gets its own name because macOS folder names ignore letter case: a
 clone called `Hoplita` in your home folder would be the same folder as the
@@ -147,18 +145,21 @@ none of them.
 
 | macOS asks | Answer | What it is for | Without it |
 |---|---|---|---|
-| «HOPLITA» would like to record this computer's screen (**Screen Recording**) | **Open System Settings**, turn **HOPLITA** on; if it is not in the list, press **+** and pick `venv/bin/HOPLITA` inside the install folder (`~/hoplita`) | The desktop hands look at the screen (`hands_screenshot`, and the check after each action) | The model sees only the desktop background, no windows |
+| «HOPLITA» would like to record this computer's screen (**Screen Recording**) | **Open System Settings**: HOPLITA is in the list, turn it on (if it is not, press **+** and pick `venv/bin/HOPLITA` inside the install folder, `~/hoplita`) | The desktop hands look at the screen (`hands_screenshot`, and the check after each action) | The model sees only the desktop background, no windows |
 | «HOPLITA» would like to control this computer using accessibility features (**Accessibility**) | **Open System Settings**: HOPLITA is already in the list, turn it on | The desktop hands click and type for you (`hands_click`, `hands_type`, `hands_key`) | Clicks and keys do nothing (each action reports `verified: false`) |
 | «HOPLITA» is requesting to bypass the system private window picker and directly access your screen and audio (macOS 15 and later) | **Allow** | The same Screen Recording, confirmed again: macOS asks it of apps that capture the whole screen, after the permission is on and from time to time later (about monthly) | Captures go on while the notice is open; what refusing it does has not been tried |
 | «HOPLITA» would like to access Apple Music… (or Photos, Contacts, Calendars, Reminders…) | **Don't Allow**, unless you asked HOPLITA for something kept there | A command the model ran in the terminal went through your home folder, and macOS guards those folders and libraries one by one | That command does not see those folders. While the notice is unanswered the command waits: one waited until the terminal's time limit (5 minutes) |
 | «Google Chrome for Testing» notifications | Either | It is the browser HOPLITA browses with; nothing of HOPLITA uses its notifications | Nothing changes |
 | HOPLITA would like to find devices on your local network (**Local Network**) | **Allow**, if your model runs on another machine of your network | Reaching that machine | HOPLITA cannot reach the model there |
 
-After turning a permission on, quit HOPLITA (⌘Q) and open it again: macOS
-applies it to the next start. To check, ask HOPLITA for `hands_status`: it
-says `accessibility permission: granted` and `screen recording permission:
-granted`, or which one is missing. Both permissions can be turned off again
-at any time in **System Settings → Privacy & Security**.
+Screen Recording works from the moment it is turned on: the next capture
+shows the screen. Accessibility does not: macOS keeps answering a running
+HOPLITA with what the switch said when it started, so after turning it on,
+quit HOPLITA (⌘Q) and open it again. To check, ask HOPLITA for
+`hands_status`: it says `accessibility permission: granted` and `screen
+recording permission: granted`, or which one is missing. Both permissions
+can be turned off again at any time in **System Settings → Privacy &
+Security**.
 
 On macOS the desktop hands have both layers: the window-and-element layer
 through the accessibility API (the same one Linux drives through AT-SPI and
