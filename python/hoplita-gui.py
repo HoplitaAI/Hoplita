@@ -8895,6 +8895,19 @@ enabled = true
         proj_widget = QWidget()
         proj_layout = QVBoxLayout(proj_widget)
         proj_layout.setContentsMargins(8, 8, 8, 8)
+        self._cal_btn = QPushButton(t("cal.title"))
+        self._cal_btn.setCheckable(True)
+        self._cal_btn.setIcon(self._svg_icon("calendar", "#e6edf7", 16))
+        self._cal_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cal_btn.setStyleSheet(
+            "QPushButton{text-align:left;background:transparent;border:1px solid transparent;"
+            "border-radius:9px;padding:8px 10px;font-size:13px;font-weight:600;"
+            "color:#f1f5f9;min-height:0;}"
+            "QPushButton:hover{border-color:#2a3547;}"
+            "QPushButton:checked{background:#1d2a44;border-color:#3b82f6;font-weight:700;}")
+        self._cal_btn.clicked.connect(self._todo_show_calendar)
+        proj_layout.addWidget(self._cal_btn)
+        proj_layout.addSpacing(10)
         proj_layout.addWidget(QLabel(t("lbl.projects")))
 
         proj_btns = QHBoxLayout()
@@ -8927,8 +8940,6 @@ enabled = true
 
         splitter.addWidget(proj_widget)
 
-        right_splitter = QSplitter(Qt.Orientation.Vertical)
-
         task_widget = QWidget()
         task_layout = QVBoxLayout(task_widget)
         task_layout.setContentsMargins(8, 8, 8, 8)
@@ -8945,28 +8956,6 @@ enabled = true
         QShortcut(QKeySequence(QKeySequence.StandardKey.Delete), self.tasks_list,
                   activated=lambda: self._delete_selected_tasks())
         task_layout.addWidget(self.tasks_list, 1)
-
-        apt_widget = QWidget()
-        apt_layout = QVBoxLayout(apt_widget)
-        apt_layout.setContentsMargins(8, 8, 8, 8)
-        apt_header = QHBoxLayout()
-        apt_header.addWidget(QLabel(f"<b>📅 {t('todo.appointments')}</b>"))
-        apt_header.addStretch()
-        pending_apt_btn = QPushButton("📥 " + t("fed.pending_appts"))
-        pending_apt_btn.setToolTip(t("fed.pending_appts_tip"))
-        pending_apt_btn.clicked.connect(self._show_pending_appointments)
-        apt_header.addWidget(pending_apt_btn)
-        new_apt_btn = QPushButton(t("todo.new_apt"))
-        new_apt_btn.setIcon(self._svg_icon("plus", "#e6edf7", 16))
-        new_apt_btn.clicked.connect(self._new_apt_dialog)
-        apt_header.addWidget(new_apt_btn)
-        apt_layout.addLayout(apt_header)
-        self.appointments_list = QListWidget()
-        apt_layout.addWidget(self.appointments_list, 1)
-
-        right_splitter.addWidget(task_widget)
-        right_splitter.addWidget(apt_widget)
-        right_splitter.setSizes([400, 280])
 
         from PyQt6.QtWidgets import QStackedWidget
         right_holder = QWidget()
@@ -8996,7 +8985,7 @@ enabled = true
         sub_bar.addStretch()
         rh.addLayout(sub_bar)
         self._proj_stack = QStackedWidget()
-        self._proj_stack.addWidget(right_splitter)
+        self._proj_stack.addWidget(task_widget)
         try:
             from projects_widget import ProjectsBoardWidget
             self._proj_board = ProjectsBoardWidget()
@@ -9009,7 +8998,42 @@ enabled = true
         rh.addWidget(self._proj_stack, 1)
         self._proj_sub_btns[0].setChecked(True)
         self._proj_view = "list"
-        splitter.addWidget(right_holder)
+        self._todo_right = QStackedWidget()
+        self._todo_right.addWidget(right_holder)
+        self._cal_active = False
+        self._cal_last_apts = []
+        self._todo_project_names = []
+        self.appointments_list = None
+        try:
+            from calendar_widget import CalendarWidget, labels as _cal_labels
+            self._calendar = CalendarWidget()
+            self._calendar.set_labels(_cal_labels(t))
+            self._calendar.action.connect(self._on_calendar_action)
+            self._todo_right.addWidget(self._calendar)
+        except Exception as e:
+            self._calendar = None
+            print(f"[calendar] page unavailable: {e}", file=sys.stderr)
+            apt_widget = QWidget()
+            apt_layout = QVBoxLayout(apt_widget)
+            apt_layout.setContentsMargins(8, 8, 8, 8)
+            apt_header = QHBoxLayout()
+            apt_header.addWidget(QLabel(f"<b>{t('todo.appointments')}</b>"))
+            apt_header.addStretch()
+            pending_apt_btn = QPushButton(t("fed.pending_appts"))
+            pending_apt_btn.setToolTip(t("fed.pending_appts_tip"))
+            pending_apt_btn.clicked.connect(self._show_pending_appointments)
+            apt_header.addWidget(pending_apt_btn)
+            new_apt_btn = QPushButton(t("todo.new_apt"))
+            new_apt_btn.setIcon(self._svg_icon("plus", "#e6edf7", 16))
+            new_apt_btn.clicked.connect(lambda _c=False: self._new_apt_dialog())
+            apt_header.addWidget(new_apt_btn)
+            apt_layout.addLayout(apt_header)
+            self.appointments_list = QListWidget()
+            self.appointments_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.appointments_list.customContextMenuRequested.connect(self._apt_context_menu)
+            apt_layout.addWidget(self.appointments_list, 1)
+            self._todo_right.addWidget(apt_widget)
+        splitter.addWidget(self._todo_right)
 
         splitter.setSizes([200, 700])
 
@@ -13132,6 +13156,15 @@ enabled = true
         QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
         QSplitter::handle { background: #334155; width: 2px; }
         QCalendarWidget { background: #1e293b; color: #f1f5f9; }
+        QDateTimeEdit { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; border-radius: 8px; padding: 6px 10px; }
+        QDateTimeEdit::drop-down { border: none; width: 22px; }
+        QCalendarWidget QWidget#qt_calendar_navigationbar { background: #0f172a; }
+        QCalendarWidget QToolButton { color: #f1f5f9; background: transparent; border: none; padding: 4px 8px; }
+        QCalendarWidget QToolButton:hover { background: #334155; border-radius: 6px; }
+        QCalendarWidget QMenu { background: #1e293b; color: #f1f5f9; }
+        QCalendarWidget QSpinBox { background: #1e293b; color: #f1f5f9; }
+        QCalendarWidget QAbstractItemView { background: #0f172a; color: #f1f5f9; selection-background-color: #3b82f6; selection-color: #ffffff; alternate-background-color: #0f172a; }
+        QCalendarWidget QAbstractItemView:disabled { color: #64748b; }
         QSpinBox { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; border-radius: 4px; padding: 4px; }
         QMessageBox { background: #1e293b; color: #f1f5f9; }
         QDialog { background: #1e293b; color: #f1f5f9; }
@@ -13818,7 +13851,7 @@ enabled = true
             self._bg(lambda: self.todo_manager.add_task(*_args),
                      lambda _r: (self._busy(False), self.refresh_todo_lists()))
 
-    def _new_apt_dialog(self):
+    def _new_apt_dialog(self, preset_date=None):
         project = self._selected_project or "general"
         dlg = QDialog(self)
         dlg.setWindowTitle(t("gui.new_appt_in", project=project))
@@ -13826,34 +13859,8 @@ enabled = true
         layout = QVBoxLayout(dlg)
         date_row = QHBoxLayout()
         date_row.addWidget(QLabel(t("lbl.date")))
-        date_entry = QLineEdit()
-        date_entry.setPlaceholderText("YYYY-MM-DD HH:MM")
-        date_entry.setReadOnly(True)
-        date_row.addWidget(date_entry, 1)
-        cal_btn = QPushButton("📅")
-        def _pick_date():
-            cal_dlg = QDialog(dlg)
-            cal_dlg.setWindowTitle(t("btn.select_date"))
-            cal_layout = QVBoxLayout(cal_dlg)
-            cal = QCalendarWidget()
-            cal_layout.addWidget(cal)
-            time_row = QHBoxLayout()
-            time_row.addWidget(QLabel("Time:"))
-            hour_spin = QSpinBox(); hour_spin.setRange(0, 23); hour_spin.setValue(9)
-            min_spin = QSpinBox(); min_spin.setRange(0, 59); min_spin.setValue(0)
-            time_row.addWidget(hour_spin); time_row.addWidget(QLabel(":")); time_row.addWidget(min_spin)
-            time_row.addStretch()
-            cal_layout.addLayout(time_row)
-            cal_btns = QDialogButtonBox(
-                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-            cal_btns.accepted.connect(cal_dlg.accept)
-            cal_btns.rejected.connect(cal_dlg.reject)
-            cal_layout.addWidget(cal_btns)
-            if cal_dlg.exec() == QDialog.DialogCode.Accepted:
-                d = cal.selectedDate()
-                date_entry.setText(f"{d.toString('yyyy-MM-dd')} {hour_spin.value():02d}:{min_spin.value():02d}")
-        cal_btn.clicked.connect(_pick_date)
-        date_row.addWidget(cal_btn)
+        date_edit = self._apt_date_edit(preset_date if isinstance(preset_date, str) else None)
+        date_row.addWidget(date_edit, 1)
         layout.addLayout(date_row)
         urg_row = QHBoxLayout()
         urg_row.addWidget(QLabel(t("todo.urgency")))
@@ -13888,7 +13895,7 @@ enabled = true
         btns.rejected.connect(dlg.reject)
         layout.addWidget(btns)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            date = date_entry.text().strip()
+            date = date_edit.dateTime().toString("yyyy-MM-dd HH:mm")
             title = title_entry.text().strip()
             if not date or not title:
                 QMessageBox.warning(self, t("dlg.missing_fields"), t("dlg.date_title_required"))
@@ -13938,8 +13945,13 @@ enabled = true
                 if p == prev:
                     target_idx = i
                     break
-        self.todo_projects_list.setCurrentRow(target_idx)
-        self._selected_project = projects[target_idx] if projects else None
+        if self._cal_active:
+            self.todo_projects_list.setCurrentRow(-1)
+            self._selected_project = None
+        else:
+            self.todo_projects_list.setCurrentRow(target_idx)
+            self._selected_project = projects[target_idx] if projects else None
+        self._todo_project_names = list(projects)
         self.todo_projects_list.blockSignals(False)
 
     def _on_project_selected(self, row):
@@ -13949,9 +13961,86 @@ enabled = true
         item = self.todo_projects_list.item(row)
         if not item:
             return
+        self._cal_active = False
+        self._cal_btn.setChecked(False)
+        self._todo_right.setCurrentIndex(0)
         self._selected_project = item.data(Qt.ItemDataRole.UserRole)
         self._refresh_todo_items_only()
         self._refresh_project_board()
+
+    def _todo_show_calendar(self):
+        self._cal_active = True
+        self._cal_btn.setChecked(True)
+        self.todo_projects_list.blockSignals(True)
+        self.todo_projects_list.setCurrentRow(-1)
+        self.todo_projects_list.blockSignals(False)
+        self._selected_project = None
+        self._todo_right.setCurrentIndex(1)
+        if self._calendar is not None:
+            self._cal_push()
+            self._cal_refresh_pending()
+
+    def _cal_push(self):
+        if self._calendar is None:
+            return
+        apts = [{"id": a.get("id"), "date": a.get("date", ""),
+                 "title": a.get("title", ""),
+                 "description": a.get("description", ""),
+                 "urgency": normalize_apt_urgency(a.get("urgency")),
+                 "project": a.get("project", "general")}
+                for a in self._cal_last_apts]
+        self._calendar.set_state({"appointments": apts,
+                                  "projects": list(self._todo_project_names)})
+
+    def _cal_refresh_pending(self):
+        if self._calendar is None:
+            return
+
+        def work():
+            import json as _js
+            try:
+                raw = self._mcp_call("fed_list_incoming_appointments", {})
+                data = (_js.loads(raw) if isinstance(raw, str)
+                        and not raw.startswith("❌") else {})
+                return (len(data.get("appointments", []) or [])
+                        if isinstance(data, dict) else 0)
+            except Exception:
+                return 0
+        self._bg(work, lambda n: self._calendar.set_pending(n))
+
+    def _on_calendar_action(self, a):
+        op = a.get("op")
+        wanted = str(a.get("id"))
+        apt = next((x for x in self._cal_last_apts
+                    if str(x.get("id")) == wanted), None)
+        if op == "new":
+            self._new_apt_dialog(a.get("date") or None)
+        elif op == "edit" and apt:
+            self.edit_appointment(apt)
+        elif op == "delete" and apt:
+            self.todo_manager.delete_appointment(apt["id"])
+            self.refresh_todo_lists()
+        elif op == "pending":
+            self._show_pending_appointments()
+            self._cal_refresh_pending()
+
+    def _apt_date_edit(self, preset=None):
+        from PyQt6.QtWidgets import QDateTimeEdit
+        from PyQt6.QtCore import QDateTime, QTime
+        w = QDateTimeEdit()
+        w.setCalendarPopup(True)
+        w.setDisplayFormat("yyyy-MM-dd HH:mm")
+        dt = QDateTime()
+        if preset:
+            text = str(preset).strip()
+            dt = QDateTime.fromString(text[:16], "yyyy-MM-dd HH:mm")
+            if not dt.isValid():
+                dt = QDateTime.fromString(text[:10], "yyyy-MM-dd")
+        if not dt.isValid():
+            now = QDateTime.currentDateTime()
+            dt = QDateTime(now.date(), QTime((now.time().hour() + 1) % 24, 0))
+        w.setDateTime(dt)
+        return w
 
     def _todo_add_project(self):
         name, ok = QInputDialog.getText(self, t("btn.new_project"),
@@ -14028,12 +14117,11 @@ enabled = true
         self._todo_snapshot = snap
 
         def _sel_id(lst):
-            it = lst.currentItem()
+            it = lst.currentItem() if lst is not None else None
             return (it.data(Qt.ItemDataRole.UserRole) or {}).get("id") if it else None
         sel_task = _sel_id(self.tasks_list)
         sel_apt = _sel_id(self.appointments_list)
         self.tasks_list.blockSignals(True)
-        self.appointments_list.blockSignals(True)
 
         self.tasks_list.clear()
         for task in tasks:
@@ -14044,18 +14132,23 @@ enabled = true
             if task['description']: text += f"\n  {task['description'][:80]}"
             item = QListWidgetItem(text); item.setData(Qt.ItemDataRole.UserRole, task)
             self.tasks_list.addItem(item)
-        self.appointments_list.clear()
-        for apt in apts:
-            urg = normalize_apt_urgency(apt.get("urgency"))
-            emoji = {"low": "🟢", "normal": "🔵", "high": "🟡", "critical": "🔴"}.get(urg, "⚪")
-            apt_proj = apt.get("project", "general")
-            text = f"{emoji} ⟨{apt_proj}⟩ [{urgency_label(urg)}] {apt['date']} - {apt['title']}"
-            if apt['description']: text += f"\n  {apt['description'][:80]}"
-            item = QListWidgetItem(text); item.setData(Qt.ItemDataRole.UserRole, apt)
-            self.appointments_list.addItem(item)
+        self._cal_last_apts = list(apts)
+        if self._calendar is not None:
+            self._cal_push()
+        else:
+            self.appointments_list.blockSignals(True)
+            self.appointments_list.clear()
+            for apt in apts:
+                urg = normalize_apt_urgency(apt.get("urgency"))
+                emoji = {"low": "🟢", "normal": "🔵", "high": "🟡", "critical": "🔴"}.get(urg, "⚪")
+                apt_proj = apt.get("project", "general")
+                text = f"{emoji} ⟨{apt_proj}⟩ [{urgency_label(urg)}] {apt['date']} - {apt['title']}"
+                if apt['description']: text += f"\n  {apt['description'][:80]}"
+                item = QListWidgetItem(text); item.setData(Qt.ItemDataRole.UserRole, apt)
+                self.appointments_list.addItem(item)
 
         def _restore(lst, sid):
-            if sid is None:
+            if lst is None or sid is None:
                 return
             for i in range(lst.count()):
                 d = lst.item(i).data(Qt.ItemDataRole.UserRole) or {}
@@ -14064,11 +14157,8 @@ enabled = true
         _restore(self.tasks_list, sel_task)
         _restore(self.appointments_list, sel_apt)
         self.tasks_list.blockSignals(False)
-        self.appointments_list.blockSignals(False)
-        self.appointments_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        try: self.appointments_list.customContextMenuRequested.disconnect()
-        except: pass
-        self.appointments_list.customContextMenuRequested.connect(self._apt_context_menu)
+        if self.appointments_list is not None:
+            self.appointments_list.blockSignals(False)
         self.tasks_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         try: self.tasks_list.customContextMenuRequested.disconnect()
         except: pass
@@ -14326,18 +14416,8 @@ enabled = true
     def edit_appointment(self, apt):
         dlg = QDialog(self); dlg.setWindowTitle(t("dlg.edit_appointment", title=apt["title"])); dlg.resize(500, 400)
         layout = QVBoxLayout(dlg)
-        date_row = QHBoxLayout(); date_entry = QLineEdit(apt["date"]); date_entry.setReadOnly(True)
-        date_row.addWidget(date_entry, 1)
-        cal_btn = QPushButton("📅")
-        def show_cal():
-            d2 = QDialog(dlg); d2.setWindowTitle(t("dlg.date")); l2 = QVBoxLayout(d2); c = QCalendarWidget(); l2.addWidget(c)
-            tr = QHBoxLayout(); tr.addWidget(QLabel(t("cron.time"))); hs = QSpinBox(); hs.setRange(0,23); hs.setValue(datetime.now().hour)
-            tr.addWidget(hs); tr.addWidget(QLabel(":")); ms = QSpinBox(); ms.setRange(0,59); ms.setSingleStep(15); tr.addWidget(ms); l2.addLayout(tr)
-            bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-            bb.accepted.connect(d2.accept); bb.rejected.connect(d2.reject); l2.addWidget(bb)
-            if d2.exec() == QDialog.DialogCode.Accepted:
-                dd = c.selectedDate(); date_entry.setText(f"{dd.year():04d}-{dd.month():02d}-{dd.day():02d} {hs.value():02d}:{ms.value():02d}")
-        cal_btn.clicked.connect(show_cal); date_row.addWidget(cal_btn); layout.addLayout(date_row)
+        date_row = QHBoxLayout(); date_row.addWidget(QLabel(t("lbl.date")))
+        date_edit = self._apt_date_edit(apt.get("date")); date_row.addWidget(date_edit, 1); layout.addLayout(date_row)
         title_entry = QLineEdit(apt["title"]); layout.addWidget(QLabel(t("todo.title_field"))); layout.addWidget(title_entry)
         desc_edit = QTextEdit(); desc_edit.setAcceptRichText(False); desc_edit.setPlainText(apt["description"]); layout.addWidget(QLabel(t("todo.description"))); layout.addWidget(desc_edit, 1)
         urls_entry = QLineEdit(apt["rag_urls"]); layout.addWidget(QLabel("RAG URLs:")); layout.addWidget(urls_entry)
@@ -14358,7 +14438,7 @@ enabled = true
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject); layout.addWidget(btns)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            new_date = date_entry.text().strip()
+            new_date = date_edit.dateTime().toString("yyyy-MM-dd HH:mm")
             if new_date != apt.get("date", "").strip():
                 conflict = self._find_apt_conflict(new_date, exclude_id=apt["id"])
                 if conflict:

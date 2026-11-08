@@ -606,7 +606,7 @@ def install_child(prefix, py, spawn):
 
 
 _OURS_DIRS = ("venv", "lang", "icons", "cli", "docs", "bin", "wb_canvas",
-              "wb_instructions", "council_view", "__pycache__",
+              "wb_instructions", "council_view", "calendar_view", "__pycache__",
               "python")
 _OURS_FILES = ("config.ini.example", "README.md", "requirements.txt", MANIFEST,
                CHILD_MARK, ".requirements-child.txt", "hoplita-child.pid", SPAWN_FILE)
@@ -1000,7 +1000,7 @@ def copy_payload(prefix):
         if f.endswith(".py"):
             shutil.copy(os.path.join(SRC_DIR, "python", f), prefix)
             shipped.append(f)
-    for d in ("wb_canvas", "wb_instructions", "council_view"):
+    for d in ("wb_canvas", "wb_instructions", "council_view", "calendar_view"):
         src = os.path.join(SRC_DIR, "python", d)
         if os.path.isdir(src):
             shutil.copytree(src, os.path.join(prefix, d), dirs_exist_ok=True)

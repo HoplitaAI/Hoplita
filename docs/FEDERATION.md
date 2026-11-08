@@ -277,7 +277,7 @@ has one row per resource. Each row is set to **auto-accept**, **review** or
 | Row | auto-accept | review | no |
 |---|---|---|---|
 | **Notes** and **Projects** (folder and project offers) | Accepted on their own, when the offer is signed by that contact | The offer waits under **Pending your approval** for you to accept or decline | Same as review: an offer is never declined in the background, so you still decide |
-| **Appointments** | Go straight into your calendar | Wait under **📥 Pending** in the TODO tab | Refused, and the sender is told *you don't have permission* |
+| **Appointments** | Go straight into your calendar | Wait under **Pending** in the TODO tab's calendar | Refused, and the sender is told *you don't have permission* |
 | **Remote sessions** | Their agent requests run without asking | You get an approval prompt | Declined |
 
 Appointments are refused until you set their row. When **Remote sessions** is
@@ -365,7 +365,7 @@ What happens on bob's side depends on bob's **Appointments** permission for you
 (section 4):
 
 - **auto-accept**: the appointment goes straight into bob's calendar.
-- **review**: it waits under **TODO → 📥 Pending** until bob accepts it.
+- **review**: it waits under **TODO → Appointments → Pending** until bob accepts it.
 - **no** or not set: it is refused. Your **Contacts** tab then shows
   *Appointment rejected — You don't have permission to send appointments to:
   bob.*
