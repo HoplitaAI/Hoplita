@@ -974,7 +974,8 @@ def install_desktop(prefix, system_libs=False):
     probe = ("import json, sys; sys.path.insert(0, %r); import hoplita_desktop as d; "
              "s = d.Hands().status(); print(json.dumps({k: s[k] for k in "
              "('session', 'elements', 'pixels')}))" % prefix)
-    r = run([py, "-c", probe], capture_output=True, text=True)
+    r = run([py, "-c", probe], capture_output=True, text=True,
+            env={**os.environ, "HOPLITA_HANDS_QUIET": "1"})
     if r.returncode == 0 and r.stdout.strip():
         try:
             st = json.loads(r.stdout.strip().splitlines()[-1])
@@ -1110,12 +1111,18 @@ def align_qt(py):
     qt, we = have.get("PyQt6", "").strip(), have.get("PyQt6-WebEngine", "").strip()
     if not qt or not we:
         return
-    minor = ".".join(we.split(".")[:2])
-    if ".".join(qt.split(".")[:2]) == minor:
+    probe_import = "from PyQt6 import QtWebEngineWidgets\n"
+    if run([py, "-c", probe_import], capture_output=True, text=True).returncode == 0:
         return
-    warn(f"PyQt6 {qt} does not match PyQt6-WebEngine {we}: taking PyQt6 {minor}")
-    if pip_install(py, [f"PyQt6=={minor}.*", f"PyQt6-Qt6=={minor}.*"]).returncode != 0:
-        warn(f"Could not align PyQt6 to {minor}; the canvas and dashboards may not load")
+    minor = ".".join(we.split(".")[:2])
+    qt_minor = ".".join(qt.split(".")[:2])
+    warn(f"PyQt6 {qt} does not load with PyQt6-WebEngine {we}: aligning the pair")
+    if pip_install(py, [f"PyQt6=={minor}.*", f"PyQt6-Qt6=={minor}.*"], quiet=True).returncode == 0:
+        return
+    if pip_install(py, [f"PyQt6-WebEngine=={qt_minor}.*",
+                        f"PyQt6-WebEngine-Qt6=={qt_minor}.*"], quiet=True).returncode == 0:
+        return
+    warn("Could not align PyQt6 with PyQt6-WebEngine; the canvas and dashboards may not load")
 
 
 def pip_install(py, pip_args, quiet=False):

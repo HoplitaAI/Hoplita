@@ -160,9 +160,11 @@ says `accessibility permission: granted` and `screen recording permission:
 granted`, or which one is missing. Both permissions can be turned off again
 at any time in **System Settings → Privacy & Security**.
 
-The desktop hands drive the screen by pixels on macOS: the window-and-element
-layer they use on Linux and Windows is detected but not driven on this
-version.
+On macOS the desktop hands have both layers: the window-and-element layer
+through the accessibility API (the same one Linux drives through AT-SPI and
+Windows through UI Automation, so a window's buttons and fields are read and
+acted on by name), and the pixel layer for captures, clicks by coordinates
+and keys. Both need the two permissions above.
 
 ## Windows
 

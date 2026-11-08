@@ -1367,6 +1367,8 @@ def mac_ask_permissions():
     global _MAC_ASKED
     if not IS_MAC or _MAC_ASKED:
         return []
+    if os.environ.get("HOPLITA_HANDS_QUIET"):
+        return []
     _MAC_ASKED = True
     import ctypes
     asked = []
