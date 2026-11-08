@@ -111,3 +111,22 @@ def activate_app():
         send(app, objc.sel_registerName(b"activateIgnoringOtherApps:"), True)
     except Exception as e:
         print(f"[MAC] could not become the active app: {e}", file=sys.stderr)
+
+
+def retire_app():
+    try:
+        import ctypes
+        import ctypes.util
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        ctypes.cdll.LoadLibrary("/System/Library/Frameworks/AppKit.framework/AppKit")
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.sel_registerName.restype = ctypes.c_void_p
+        send = objc.objc_msgSend
+        send.restype = ctypes.c_void_p
+        send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        app = send(objc.objc_getClass(b"NSApplication"),
+                   objc.sel_registerName(b"sharedApplication"))
+        send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+        send(app, objc.sel_registerName(b"setActivationPolicy:"), 2)
+    except Exception as e:
+        print(f"[MAC] could not retire the app: {e}", file=sys.stderr)

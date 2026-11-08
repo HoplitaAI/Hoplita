@@ -16553,6 +16553,18 @@ def _get_vault_password(note=""):
         _keep.start(1500)
         _QT.singleShot(15000, _keep.stop)
 
+        def _dispose():
+            _keep.stop()
+            dlg.close()
+            dlg.deleteLater()
+            for _ in range(6):
+                app.processEvents()
+                app.sendPostedEvents()
+                time.sleep(0.05)
+            if sys.platform == "darwin":
+                import mac_dialogs
+                mac_dialogs.retire_app()
+
         def _ask(label):
             dlg.setTextValue("")
             dlg.setLabelText(label)
@@ -16567,15 +16579,19 @@ def _get_vault_password(note=""):
             return dlg.textValue()
 
         if not _new:
-            return _ask((note + "\n\n" if note else "") + "🔐 " + _t("mcp.vault_prompt_known"))
+            _r = _ask((note + "\n\n" if note else "") + "🔐 " + _t("mcp.vault_prompt_known"))
+            _dispose()
+            return _r
         if _joins:
             import html as _html_mod
             dlg.setWindowTitle(_t("mcp.vault_join_title"))
-            return _ask('<p style="color:#93c5fd;font-weight:bold;font-size:15px;">'
+            _r = _ask('<p style="color:#93c5fd;font-weight:bold;font-size:15px;">'
                         + _html_mod.escape(_t("mcp.vault_join_head")) + "</p><p>"
                         + _html_mod.escape(_t("mcp.vault_join")) + "</p>"
                         + ('<p style="color:#f87171;">' + _html_mod.escape(note) + "</p>" if note else "")
                         + "<p>🔐 " + _html_mod.escape(_t("mcp.vault_join_prompt")) + "</p>")
+            _dispose()
+            return _r
         import html as _html_mod
         dlg.setWindowTitle(_t("mcp.vault_new_title"))
         _warn = ('<p style="color:#fbbf24;font-weight:bold;font-size:15px;">'
@@ -16586,6 +16602,7 @@ def _get_vault_password(note=""):
             p1 = _ask(_warn + ('<p style="color:#f87171;">' + _html_mod.escape(_note) + "</p>" if _note else "")
                       + "<p>🔐 " + _html_mod.escape(_t("mcp.vault_new_prompt")) + "</p>")
             if p1 and p1 == _ask(_warn + "<p>🔐 " + _html_mod.escape(_t("mcp.vault_again")) + "</p>"):
+                _dispose()
                 return p1
             _note = _t("mcp.vault_mismatch")
     except ImportError:

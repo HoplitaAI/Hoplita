@@ -183,7 +183,6 @@ def _make_mac_app(desk, prefix, py, icon_png):
                     "  <key>CFBundleExecutable</key><string>HOPLITA</string>\n"
                     "  <key>CFBundlePackageType</key><string>APPL</string>\n"
                     "  <key>CFBundleShortVersionString</key><string>1.0</string>\n"
-                    "  <key>LSUIElement</key><true/>\n"
                     + icon_key +
                     "</dict></plist>\n")
         created.append(app)
