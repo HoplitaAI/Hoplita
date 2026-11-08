@@ -555,7 +555,7 @@ A whiteboard belongs to its repository's project and is its way of **seeing and 
 
 ## Desktop hands — the model on your screen, and a hoplite to stop it
 
-`hands_*` tools let a turn work on your desktop: list windows, read a window's elements, press buttons and fill fields through the accessibility layer, click and type by raw input where the session offers it, capture the screen and **verify** that each action changed something (a capture before and after, an element's state or text read back — `verified: true/false`, or `null` when nothing could measure it). Full list: `docs/TOOLS.md`, section *Desktop hands*.
+`hands_*` tools let a turn work on your desktop: list windows, read a window's elements, press buttons and fill fields through the accessibility layer (AT-SPI on Linux, UI Automation on Windows, the AX API on macOS), click and type by raw input where the session offers it, capture the screen and **verify** that each action changed something (a capture before and after, an element's state or text read back — `verified: true/false`, or `null` when nothing could measure it). Full list: `docs/TOOLS.md`, section *Desktop hands*.
 
 **Coordinates are read in what the model saw.** The capture a model is shown is shrunk to `[HANDS] screenshot_max_width` (with the default 1280, a 2560×1440 screen arrives as 1280×720) and may be cropped to a window or region; `hands_click(x, y)` and `hands_screenshot(region=…)` take the pixel in the last image shown, and the hands undo the scale and the crop. The model never does the arithmetic.
 

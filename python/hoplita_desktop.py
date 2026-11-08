@@ -3,6 +3,7 @@ import glob
 import io
 import json
 import os
+import re
 import platform
 import shutil
 import subprocess
@@ -817,6 +818,537 @@ class MissingElementBackend:
         self.available = False
 
 
+
+_AX_ROLES = {
+    "AXApplication": "application", "AXWindow": "frame", "AXSheet": "dialog",
+    "AXDrawer": "panel", "AXGroup": "panel", "AXScrollArea": "scroll pane",
+    "AXSplitGroup": "split pane", "AXSplitter": "separator",
+    "AXLayoutArea": "filler", "AXLayoutItem": "filler", "AXUnknown": "unknown",
+    "AXButton": "button", "AXPopUpButton": "combo box", "AXMenuButton": "button",
+    "AXComboBox": "combo box", "AXCheckBox": "check box",
+    "AXRadioButton": "radio button", "AXRadioGroup": "panel",
+    "AXDisclosureTriangle": "toggle button", "AXTextField": "text",
+    "AXTextArea": "document text", "AXStaticText": "label", "AXHeading": "heading",
+    "AXLink": "link", "AXImage": "image", "AXMenuBar": "menu bar",
+    "AXMenuBarItem": "menu item", "AXMenu": "menu", "AXMenuItem": "menu item",
+    "AXList": "list", "AXOutline": "tree", "AXTable": "table", "AXRow": "table row",
+    "AXColumn": "column", "AXCell": "table cell", "AXTabGroup": "page tab list",
+    "AXToolbar": "tool bar", "AXSlider": "slider", "AXIncrementor": "spin button",
+    "AXProgressIndicator": "progress bar", "AXScrollBar": "scroll bar",
+    "AXValueIndicator": "slider", "AXWebArea": "document web",
+    "AXBrowser": "panel", "AXBusyIndicator": "progress bar",
+    "AXRelevanceIndicator": "progress bar", "AXColorWell": "color chooser",
+    "AXDateField": "text", "AXTimeField": "text", "AXHelpTag": "tool tip",
+    "AXMatte": "filler", "AXRuler": "ruler", "AXRulerMarker": "ruler",
+    "AXGrid": "table", "AXLevelIndicator": "progress bar", "AXHandle": "separator",
+    "AXPopover": "dialog", "AXDockItem": "button", "AXSystemWide": "unknown",
+}
+_AX_SUBROLES = {
+    "AXDialog": "dialog", "AXSystemDialog": "dialog", "AXFloatingWindow": "frame",
+    "AXStandardWindow": "frame", "AXTabButton": "page tab", "AXSwitch": "toggle button",
+    "AXToggle": "toggle button", "AXSecureTextField": "password text",
+    "AXSearchField": "text", "AXOutlineRow": "tree item", "AXTableRow": "table row",
+    "AXCloseButton": "button", "AXMinimizeButton": "button", "AXZoomButton": "button",
+    "AXFullScreenButton": "button", "AXToolbarButton": "button",
+    "AXSortButton": "button", "AXTimeline": "slider", "AXRatingIndicator": "slider",
+    "AXContentList": "list", "AXDescriptionList": "list",
+    "AXDefinitionList": "list", "AXApplicationDockItem": "button",
+}
+_AX_WINDOW_ROLES = ("AXWindow", "AXSheet", "AXDrawer", "AXPopover")
+_AX_SUBROLE_NAMES = {"AXCloseButton": "close", "AXMinimizeButton": "minimize",
+                     "AXZoomButton": "zoom", "AXFullScreenButton": "full screen"}
+_AX_NOISE_ROLES = ("AXRulerMarker",)
+_AX_TEXT_ROLES = ("text", "password text", "document text", "label", "heading",
+                  "combo box", "link", "document web")
+_AX_LABELLED_BY_CHILDREN = ("button", "check box", "radio button", "link",
+                            "menu item", "page tab", "list item", "table cell",
+                            "table row", "tree item", "toggle button")
+_AX_ACTION_NAMES = {
+    "AXPress": "press", "AXConfirm": "confirm", "AXCancel": "cancel",
+    "AXShowMenu": "show menu", "AXPick": "pick", "AXRaise": "raise",
+    "AXIncrement": "increment", "AXDecrement": "decrement",
+    "AXShowAlternateUI": "show alternate ui", "AXShowDefaultUI": "show default ui",
+    "AXScrollToVisible": "scroll to visible",
+}
+
+
+def _ax_role(role, subrole=""):
+    if subrole and subrole in _AX_SUBROLES:
+        return _AX_SUBROLES[subrole]
+    if role in _AX_ROLES:
+        return _AX_ROLES[role]
+    r = role[2:] if role.startswith("AX") else role
+    words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", r).lower().strip()
+    return words or "unknown"
+
+
+def _ax_name(role, title="", description="", value=None, placeholder="",
+             child_labels=(), subrole=""):
+    for cand in (title, description):
+        if isinstance(cand, str) and cand.strip():
+            return cand.strip()
+    if subrole in _AX_SUBROLE_NAMES:
+        return _AX_SUBROLE_NAMES[subrole]
+    if role in ("label", "heading", "link", "menu item", "page tab") \
+            and isinstance(value, str) and value.strip():
+        return value.strip()[:200]
+    if isinstance(placeholder, str) and placeholder.strip():
+        return placeholder.strip()
+    if role in _AX_LABELLED_BY_CHILDREN:
+        labels = [c.strip() for c in child_labels if isinstance(c, str) and c.strip()]
+        if labels:
+            return " ".join(labels)[:120]
+    return ""
+
+
+class MacAxBackend:
+
+    name = "ax"
+    _ENC_UTF8 = 0x08000100
+
+    def __init__(self):
+        import ctypes
+        self.why = ""
+        self._ax = self._cf = self._cg = None
+        self._strs = {}
+        self._scale = None
+        self._apps = {}
+        if not IS_MAC:
+            self.why = "not macOS"
+            return
+        try:
+            ax = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+            cf = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+            cg = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        except Exception as e:
+            self.why = f"frameworks not loadable: {e}"
+            return
+        P, L, B, I = ctypes.c_void_p, ctypes.c_long, ctypes.c_bool, ctypes.c_int
+        ax.AXIsProcessTrusted.restype = B
+        ax.AXUIElementCreateApplication.restype = P
+        ax.AXUIElementCreateApplication.argtypes = [I]
+        ax.AXUIElementCopyAttributeValue.restype = I
+        ax.AXUIElementCopyAttributeValue.argtypes = [P, P, ctypes.POINTER(P)]
+        ax.AXUIElementCopyActionNames.restype = I
+        ax.AXUIElementCopyActionNames.argtypes = [P, ctypes.POINTER(P)]
+        ax.AXUIElementPerformAction.restype = I
+        ax.AXUIElementPerformAction.argtypes = [P, P]
+        ax.AXUIElementSetAttributeValue.restype = I
+        ax.AXUIElementSetAttributeValue.argtypes = [P, P, P]
+        ax.AXUIElementIsAttributeSettable.restype = I
+        ax.AXUIElementIsAttributeSettable.argtypes = [P, P, ctypes.POINTER(B)]
+        ax.AXUIElementGetPid.restype = I
+        ax.AXUIElementGetPid.argtypes = [P, ctypes.POINTER(I)]
+        ax.AXUIElementSetMessagingTimeout.restype = I
+        ax.AXUIElementSetMessagingTimeout.argtypes = [P, ctypes.c_float]
+        ax.AXValueGetValue.restype = B
+        ax.AXValueGetValue.argtypes = [P, I, P]
+        ax.AXValueGetTypeID.restype = ctypes.c_ulong
+        ax.AXUIElementGetTypeID.restype = ctypes.c_ulong
+        cf.CFStringCreateWithCString.restype = P
+        cf.CFStringCreateWithCString.argtypes = [P, ctypes.c_char_p, ctypes.c_uint32]
+        cf.CFStringGetCString.restype = B
+        cf.CFStringGetCString.argtypes = [P, ctypes.c_char_p, L, ctypes.c_uint32]
+        cf.CFStringGetLength.restype = L
+        cf.CFStringGetLength.argtypes = [P]
+        cf.CFGetTypeID.restype = ctypes.c_ulong
+        cf.CFGetTypeID.argtypes = [P]
+        for fn in ("CFStringGetTypeID", "CFArrayGetTypeID", "CFBooleanGetTypeID",
+                   "CFNumberGetTypeID"):
+            getattr(cf, fn).restype = ctypes.c_ulong
+        cf.CFArrayGetCount.restype = L
+        cf.CFArrayGetCount.argtypes = [P]
+        cf.CFArrayGetValueAtIndex.restype = P
+        cf.CFArrayGetValueAtIndex.argtypes = [P, L]
+        cf.CFBooleanGetValue.restype = B
+        cf.CFBooleanGetValue.argtypes = [P]
+        cf.CFNumberGetValue.restype = B
+        cf.CFNumberGetValue.argtypes = [P, I, P]
+        cf.CFRetain.restype = P
+        cf.CFRetain.argtypes = [P]
+        cf.CFRelease.argtypes = [P]
+        cf.CFDictionaryGetValue.restype = P
+        cf.CFDictionaryGetValue.argtypes = [P, P]
+        cg.CGWindowListCopyWindowInfo.restype = P
+        cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        cg.CGMainDisplayID.restype = ctypes.c_uint32
+        cg.CGDisplayPixelsWide.restype = ctypes.c_size_t
+        cg.CGDisplayPixelsWide.argtypes = [ctypes.c_uint32]
+
+        class _Pt(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+        class _Sz(ctypes.Structure):
+            _fields_ = [("w", ctypes.c_double), ("h", ctypes.c_double)]
+
+        class _Rect(ctypes.Structure):
+            _fields_ = [("origin", _Pt), ("size", _Sz)]
+        cg.CGDisplayBounds.restype = _Rect
+        cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+        self._ax, self._cf, self._cg = ax, cf, cg
+        self._Pt, self._Sz = _Pt, _Sz
+        self._tid = {"str": cf.CFStringGetTypeID(), "arr": cf.CFArrayGetTypeID(),
+                     "bool": cf.CFBooleanGetTypeID(), "num": cf.CFNumberGetTypeID(),
+                     "axv": ax.AXValueGetTypeID(), "el": ax.AXUIElementGetTypeID()}
+        self._true = ctypes.c_void_p.in_dll(cf, "kCFBooleanTrue").value
+        if not ax.AXIsProcessTrusted():
+            self.why = "accessibility not granted to this process; " + mac_permissions_note()
+
+    @property
+    def available(self):
+        return self._ax is not None and not self.why
+
+    def _s(self, name):
+        v = self._strs.get(name)
+        if v is None:
+            v = self._cf.CFStringCreateWithCString(None, name.encode("utf-8"), self._ENC_UTF8)
+            self._strs[name] = v
+        return v
+
+    def _str(self, ref):
+        import ctypes
+        n = self._cf.CFStringGetLength(ref)
+        buf = ctypes.create_string_buffer(int(n) * 4 + 1)
+        if self._cf.CFStringGetCString(ref, buf, len(buf), self._ENC_UTF8):
+            return buf.value.decode("utf-8", "replace")
+        return ""
+
+    def _decode(self, ref, keep_elements=True):
+        import ctypes
+        if not ref:
+            return None
+        cf, ax = self._cf, self._ax
+        tid = cf.CFGetTypeID(ref)
+        if tid == self._tid["str"]:
+            out = self._str(ref); cf.CFRelease(ref); return out
+        if tid == self._tid["bool"]:
+            out = bool(cf.CFBooleanGetValue(ref)); cf.CFRelease(ref); return out
+        if tid == self._tid["num"]:
+            d = ctypes.c_double(0)
+            ok = cf.CFNumberGetValue(ref, 13, ctypes.byref(d))
+            cf.CFRelease(ref)
+            if not ok:
+                return None
+            return int(d.value) if d.value == int(d.value) else d.value
+        if tid == self._tid["axv"]:
+            pt, sz = self._Pt(), self._Sz()
+            if ax.AXValueGetValue(ref, 1, ctypes.byref(pt)):
+                cf.CFRelease(ref); return ("point", pt.x, pt.y)
+            if ax.AXValueGetValue(ref, 2, ctypes.byref(sz)):
+                cf.CFRelease(ref); return ("size", sz.w, sz.h)
+            cf.CFRelease(ref); return None
+        if tid == self._tid["arr"]:
+            out = []
+            for i in range(int(cf.CFArrayGetCount(ref))):
+                item = cf.CFArrayGetValueAtIndex(ref, i)
+                if not item:
+                    continue
+                itid = cf.CFGetTypeID(item)
+                if itid == self._tid["el"]:
+                    out.append(cf.CFRetain(item) if keep_elements else item)
+                elif itid == self._tid["str"]:
+                    out.append(self._str(item))
+            cf.CFRelease(ref)
+            return out
+        if tid == self._tid["el"]:
+            return ref
+        cf.CFRelease(ref)
+        return None
+
+    def _attr(self, el, name):
+        import ctypes
+        out = ctypes.c_void_p()
+        if self._ax.AXUIElementCopyAttributeValue(el, self._s(name), ctypes.byref(out)) != 0:
+            return None
+        return self._decode(out.value)
+
+    def _text_attr(self, el, name, cap=None):
+        v = self._attr(el, name)
+        if isinstance(v, str):
+            return v[:cap] if cap else v
+        return ""
+
+    def _actions_raw(self, el):
+        import ctypes
+        out = ctypes.c_void_p()
+        if self._ax.AXUIElementCopyActionNames(el, ctypes.byref(out)) != 0:
+            return []
+        v = self._decode(out.value)
+        return [a for a in (v or []) if isinstance(a, str)]
+
+    def _pid(self, el):
+        import ctypes
+        pid = ctypes.c_int(0)
+        return int(pid.value) if self._ax.AXUIElementGetPid(el, ctypes.byref(pid)) == 0 else -1
+
+    def _app(self, pid):
+        app = self._apps.get(pid)
+        if app is None:
+            app = self._ax.AXUIElementCreateApplication(int(pid))
+            if app:
+                self._ax.AXUIElementSetMessagingTimeout(app, 1.5)
+                self._apps[pid] = app
+        return app
+
+    def _scale_factor(self):
+        if self._scale is None:
+            try:
+                d = self._cg.CGMainDisplayID()
+                pts = float(self._cg.CGDisplayBounds(d).size.w)
+                px = float(self._cg.CGDisplayPixelsWide(d))
+                self._scale = (px / pts) if pts else 1.0
+            except Exception:
+                self._scale = 1.0
+        return self._scale or 1.0
+
+    def _onscreen_pids(self, exclude):
+        cf, cg = self._cf, self._cg
+        seen, out = set(), []
+        arr = cg.CGWindowListCopyWindowInfo(1 | 16, 0)
+        if not arr:
+            return out
+        try:
+            import ctypes
+            for i in range(int(cf.CFArrayGetCount(arr))):
+                d = cf.CFArrayGetValueAtIndex(arr, i)
+                layer = cf.CFDictionaryGetValue(d, self._s("kCGWindowLayer"))
+                lv = ctypes.c_double(0)
+                if layer and cf.CFNumberGetValue(layer, 13, ctypes.byref(lv)) and int(lv.value) != 0:
+                    continue
+                pv = cf.CFDictionaryGetValue(d, self._s("kCGWindowOwnerPID"))
+                pid = ctypes.c_double(0)
+                if not pv or not cf.CFNumberGetValue(pv, 13, ctypes.byref(pid)):
+                    continue
+                pid = int(pid.value)
+                if pid in seen or pid in exclude:
+                    continue
+                seen.add(pid)
+                nm = cf.CFDictionaryGetValue(d, self._s("kCGWindowOwnerName"))
+                out.append((pid, self._str(nm) if nm else ""))
+        finally:
+            cf.CFRelease(arr)
+        return out
+
+    def _role(self, el):
+        return _ax_role(self._text_attr(el, "AXRole"), self._text_attr(el, "AXSubrole"))
+
+    def _children(self, el):
+        v = self._attr(el, "AXChildren")
+        return [c for c in (v or []) if isinstance(c, int)]
+
+    def _name(self, el, role, kids=None):
+        child_labels = ()
+        if role in _AX_LABELLED_BY_CHILDREN:
+            kids = self._children(el) if kids is None else kids
+            child_labels = tuple(self._text_attr(c, "AXValue", 80) for c in kids[:6]
+                                 if self._text_attr(c, "AXRole") == "AXStaticText")
+        return _ax_name(role, self._text_attr(el, "AXTitle"),
+                        self._text_attr(el, "AXDescription"),
+                        self._attr(el, "AXValue"),
+                        self._text_attr(el, "AXPlaceholderValue"), child_labels,
+                        self._text_attr(el, "AXSubrole"))
+
+    def _states(self, el, role=""):
+        out = []
+        if self._attr(el, "AXEnabled") is False:
+            out.append("disabled")
+        for attr, state in (("AXFocused", "focused"), ("AXSelected", "selected"),
+                            ("AXExpanded", "expanded"), ("AXMinimized", "iconified"),
+                            ("AXMain", "active")):
+            if self._attr(el, attr) is True:
+                out.append(state)
+        if role in ("check box", "radio button", "toggle button"):
+            v = self._attr(el, "AXValue")
+            if v in (1, True):
+                out.append("checked")
+        if role in ("text", "password text", "document text", "combo box"):
+            out.append("editable")
+        return out
+
+    def _actions(self, el):
+        out = []
+        for a in self._actions_raw(el):
+            if a in _AX_ACTION_NAMES:
+                out.append(_AX_ACTION_NAMES[a])
+            elif a.startswith("AX"):
+                out.append(a[2:].lower())
+            else:
+                first = a.split("\n", 1)[0]
+                first = first.split(":", 1)[1].strip() if first.lower().startswith("name:") else first
+                if first and first != "(null)":
+                    out.append(first.lower()[:40])
+        return out
+
+    def _extents(self, el):
+        p, s = self._attr(el, "AXPosition"), self._attr(el, "AXSize")
+        if not (isinstance(p, tuple) and isinstance(s, tuple)):
+            return None
+        k = self._scale_factor()
+        return [int(round(p[1] * k)), int(round(p[2] * k)),
+                int(round(s[1] * k)), int(round(s[2] * k))]
+
+    def _text(self, el, role=None, cap=200):
+        role = role or self._role(el)
+        if role not in _AX_TEXT_ROLES:
+            return ""
+        return self._text_attr(el, "AXValue", cap)
+
+    def windows(self, session, exclude):
+        out = []
+        for pid, app_name in self._onscreen_pids(exclude):
+            app = self._app(pid)
+            if not app:
+                continue
+            title_app = self._text_attr(app, "AXTitle") or app_name
+            for w in self._attr(app, "AXWindows") or []:
+                if not isinstance(w, int):
+                    continue
+                role = self._role(w)
+                states = self._states(w)
+                wid = session.new_id("w")
+                session.windows[wid] = w
+                session.elements[wid] = w
+                out.append({"id": wid, "app": title_app, "pid": pid,
+                            "title": self._text_attr(w, "AXTitle"), "role": role,
+                            "active": "active" in states,
+                            "minimized": "iconified" in states,
+                            "extents": self._extents(w)})
+        return out
+
+    def tree(self, session, root, depth=6, max_items=200, query=""):
+        q = (query or "").strip().lower()
+        out, budget = [], [max_items]
+
+        def walk(el, d, seen):
+            if budget[0] <= 0 or d > depth or seen > 4000:
+                return seen
+            for c in self._children(el):
+                if budget[0] <= 0:
+                    return seen
+                seen += 1
+                raw_role = self._text_attr(c, "AXRole")
+                if raw_role in _AX_NOISE_ROLES:
+                    continue
+                role = _ax_role(raw_role, self._text_attr(c, "AXSubrole"))
+                kids = None
+                if role in _AX_LABELLED_BY_CHILDREN:
+                    kids = self._children(c)
+                name = self._name(c, role, kids)
+                text = self._text(c, role)
+                wrapper = role in _SKIP_ROLES and not name
+                listed = not wrapper
+                if listed and q and q not in name.lower() and q not in role \
+                        and q not in text.lower():
+                    listed = False
+                if listed:
+                    eid = session.new_id("e")
+                    session.elements[eid] = c
+                    entry = {"id": eid, "role": role, "name": name, "depth": d}
+                    if text and text != name:
+                        entry["text"] = text
+                    st = self._states(c, role)
+                    if st:
+                        entry["states"] = st
+                    acts = self._actions(c)
+                    if acts:
+                        entry["actions"] = acts
+                    ext = self._extents(c)
+                    if ext:
+                        entry["extents"] = ext
+                    out.append(entry)
+                    budget[0] -= 1
+                seen = walk(c, d if wrapper else d + 1, seen)
+            return seen
+
+        walk(root, 1, 0)
+        return out
+
+    def label(self, el):
+        role = self._role(el)
+        name = self._name(el, role) or (self._text(el, role, cap=40) or "").strip()
+        if role and name:
+            return f'{role} «{name}»'
+        return name or role or "element"
+
+    def read(self, el):
+        role = self._role(el)
+        t = self._text_attr(el, "AXValue", 4000) if role in _AX_TEXT_ROLES else ""
+        if t:
+            return t
+        n, d = self._text_attr(el, "AXTitle"), self._text_attr(el, "AXDescription")
+        return (n + ((" — " + d) if d else "")).strip()
+
+    def subtree_text(self, root, cap=6000):
+        parts, total = [], [0]
+
+        def walk(el, d):
+            if d > 12 or total[0] > cap:
+                return
+            for c in self._children(el):
+                for s in (self._text_attr(c, "AXTitle"), self._text_attr(c, "AXValue", 500),
+                          self._text_attr(c, "AXDescription")):
+                    if s and s not in parts:
+                        parts.append(s)
+                        total[0] += len(s)
+                walk(c, d + 1)
+
+        walk(root, 0)
+        return "\n".join(parts)
+
+    def top_window(self, el):
+        cur = el
+        for _ in range(40):
+            if self._text_attr(cur, "AXRole") in _AX_WINDOW_ROLES:
+                return cur
+            parent = self._attr(cur, "AXParent")
+            if not isinstance(parent, int):
+                break
+            cur = parent
+        return el
+
+    def all_text(self, exclude, cap=20000):
+        parts = []
+        for pid, _name in self._onscreen_pids(exclude):
+            app = self._app(pid)
+            if app:
+                parts.append(self.subtree_text(app, cap=cap))
+            if sum(len(x) for x in parts) > cap:
+                break
+        return "\n".join(parts)
+
+    def press(self, el):
+        acts = self._actions_raw(el)
+        if not acts:
+            raise RuntimeError("the element offers no accessible action")
+        chosen = next((a for a in ("AXPress", "AXConfirm", "AXPick", "AXOpen", "AXRaise")
+                       if a in acts), acts[0])
+        err = self._ax.AXUIElementPerformAction(el, self._s(chosen))
+        if err != 0:
+            raise RuntimeError(f"{chosen} refused by the application (AXError {err})")
+        return _AX_ACTION_NAMES.get(chosen, chosen)
+
+    def focus(self, el):
+        return self._ax.AXUIElementSetAttributeValue(el, self._s("AXFocused"), self._true) == 0
+
+    def set_text(self, el, text):
+        import ctypes
+        ok = ctypes.c_bool(False)
+        self._ax.AXUIElementIsAttributeSettable(el, self._s("AXValue"), ctypes.byref(ok))
+        if not ok.value:
+            raise RuntimeError("the element's value is not settable through accessibility")
+        v = self._cf.CFStringCreateWithCString(None, str(text).encode("utf-8"), self._ENC_UTF8)
+        try:
+            err = self._ax.AXUIElementSetAttributeValue(el, self._s("AXValue"), v)
+        finally:
+            self._cf.CFRelease(v)
+        if err != 0:
+            raise RuntimeError(f"setting the value was refused (AXError {err})")
+        return True
+
+
 def _element_backend():
     mac_ask_permissions()
     if IS_LINUX:
@@ -824,9 +1356,7 @@ def _element_backend():
     if IS_WINDOWS:
         return UiaBackend()
     if IS_MAC:
-        return MissingElementBackend(
-            "ax", "the macOS accessibility layer is not driven by this version; "
-                  + mac_permissions_note())
+        return MacAxBackend()
     return MissingElementBackend("none", "no element layer on this platform")
 
 
