@@ -580,8 +580,8 @@ machine's, so `/tied/<device>/agent/stop`, `…/agent/plan_ack`,
 (`…/call` with `code_*` / `git_*`) all run there. The optional header
 `X-Hoplita-Tab: <sync id>` names the tab, so that machine's window paints the
 turn in it and takes a saved copy. Only between machines of one federated
-identity; `/shutdown` and a second hop are refused (403), and a request over
-~2.8 MB is refused (413).
+identity; `/shutdown`, `/vault/…` and a second hop are refused (403), and a
+request over ~2.8 MB is refused (413).
 
 **Tools and configuration**
 
@@ -591,6 +591,7 @@ identity; `/shutdown` and a second hop are refused (403), and a request over
 | `GET /firewall` · `POST /firewall` | See above. |
 | `POST /reload-config` | `{}` → `{reloaded, api_model, api_url, warnings[]}`. Re-reads `config.ini` (see CONFIG.md); `warnings` says when a change needs a restart (`[MCP_SERVERS]`). |
 | `POST /shutdown` | Closes the vault and exits cleanly. From localhost only (403 otherwise). |
+| `POST /vault/password` | `{current, new}` → `{ok, backup, notes, unreadable, identity}`. Changes the vault's password with the server running: a copy of the database and of the identity file goes to `backups/` first (it opens with the old password), the database is re-keyed in one transaction with its note bodies, and the identity file is sealed again (`identity` is false when that last step failed). Refused with 400 and a code (`wrong_current`, `same`, `empty`, `open_vault`, `busy`, `no_store`); from localhost only (403 otherwise), never across machines, never a tool. The window (Configuration → App) and `python/hoplita_passwd.py` call it. |
 | `POST /child/tools_for` | See above. |
 | `POST /spawn/enroll` | `{server_url, token, handle}`: enrolls THIS instance as a child (a headless agent of its owner) with a spawn token generated in the owner's GUI. The CLI calls it at start with `--spawn`. |
 

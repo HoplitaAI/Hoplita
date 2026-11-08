@@ -684,7 +684,10 @@ an MCP given `HOPLITA_VAULT_PASSWORD` uses it, keeps no key file, and takes the
 variable out of its environment. It also clears it from the start-up copy that
 `/proc/<pid>/environ` shows on Linux and `ps -E` shows on macOS. On Windows that
 copy is not cleared. Decide this **before the first start**: a vault made
-open does not take a password later, nor the other way round. Keep the password where the MCP's user cannot read it, or the
+open does not take a password later, nor the other way round; a password,
+though, can be changed at any time with the MCP running
+(`python/hoplita_passwd.py` on that machine), and then the file below gets
+the new one. Keep the password where the MCP's user cannot read it, or the
 agent's commands can read it too:
 
 1. The password, readable only by root:

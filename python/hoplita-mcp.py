@@ -6,6 +6,7 @@ import asyncio
 import threading
 import configparser
 import shutil
+import hmac
 import mimetypes
 from datetime import datetime, timedelta
 
@@ -976,35 +977,61 @@ class NotesManager(EncryptedStorageManager):
     def _note_content_key(self):
         if not self._password:
             raise Exception("Password no inicializada")
+        return self._note_content_key_for(self._password)
+
+    def _note_content_key_for(self, password):
         kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
                          salt=self._NOTE_FIXED_SALT,
                          iterations=self._NOTE_KDF_ITERATIONS,
                          backend=default_backend())
-        return kdf.derive(self._password.encode("utf-8"))
+        return kdf.derive(password.encode("utf-8"))
+
+    @staticmethod
+    def _seal_note(key, content):
+        nonce = os.urandom(12)
+        cipher = Cipher(algorithms.AES(key), modes.GCM(nonce), backend=default_backend())
+        encryptor = cipher.encryptor()
+        ciphertext = encryptor.update(content.encode("utf-8")) + encryptor.finalize()
+        return base64.b64encode(nonce + encryptor.tag + ciphertext).decode("utf-8")
+
+    @staticmethod
+    def _open_note(key, encrypted_package):
+        raw = base64.b64decode(encrypted_package)
+        nonce, tag, ciphertext = raw[:12], raw[12:28], raw[28:]
+        cipher = Cipher(algorithms.AES(key), modes.GCM(nonce, tag), backend=default_backend())
+        decryptor = cipher.decryptor()
+        return (decryptor.update(ciphertext) + decryptor.finalize()).decode("utf-8")
 
     def encrypt_note_content(self, content):
         try:
-            key = self._note_content_key()
-            nonce = os.urandom(12)
-            cipher = Cipher(algorithms.AES(key), modes.GCM(nonce), backend=default_backend())
-            encryptor = cipher.encryptor()
-            ciphertext = encryptor.update(content.encode("utf-8")) + encryptor.finalize()
-            return base64.b64encode(nonce + encryptor.tag + ciphertext).decode("utf-8")
+            return self._seal_note(self._note_content_key(), content)
         except Exception as e:
             print(f"[ERR] Encrypting note: {e}")
             return None
 
     def decrypt_note_content(self, encrypted_package):
         try:
-            key = self._note_content_key()
-            raw = base64.b64decode(encrypted_package)
-            nonce, tag, ciphertext = raw[:12], raw[12:28], raw[28:]
-            cipher = Cipher(algorithms.AES(key), modes.GCM(nonce, tag), backend=default_backend())
-            decryptor = cipher.decryptor()
-            return (decryptor.update(ciphertext) + decryptor.finalize()).decode("utf-8")
+            return self._open_note(self._note_content_key(), encrypted_package)
         except Exception as e:
             print(f"[ERR] Decrypting note: {e}")
             return None
+
+    def rekey_note_contents(self, new_password):
+        old_key = self._note_content_key()
+        new_key = self._note_content_key_for(new_password)
+        resealed = unreadable = 0
+        for notes in self.data.get("categories", {}).values():
+            for n in notes:
+                if not n.get("encrypted"):
+                    continue
+                try:
+                    plain = self._open_note(old_key, n.get("content", ""))
+                except Exception:
+                    unreadable += 1
+                    continue
+                n["content"] = self._seal_note(new_key, plain)
+                resealed += 1
+        return resealed, unreadable
 
     def add_category(self, name):
         if name.strip() and name not in self.data["categories"]:
@@ -15898,7 +15925,7 @@ def agent_stop(req: AgentStopReq):
 
 
 _TIED_MAX_BYTES = 2_800_000
-_TIED_NEVER = ("/shutdown", "/tied/")
+_TIED_NEVER = ("/shutdown", "/tied/", "/vault/")
 _SERVE = {"host": "127.0.0.1", "port": 9077}
 
 
@@ -16080,6 +16107,102 @@ class AgentInjectReq(BaseModel):
     turn_id: str
     message: str
     kind: str = "user"
+
+
+_VAULT_LOCK = threading.Lock()
+
+
+class VaultChangeRefused(Exception):
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def change_vault_password(current, new):
+    current = current or ""
+    new = new or ""
+    base = hoplita_base()
+    if os.path.exists(os.path.join(base, "vault.key")):
+        raise VaultChangeRefused(
+            "open_vault", "This vault is open: its key is the file vault.key "
+            "beside it, and there is no password to change.")
+    if not new:
+        raise VaultChangeRefused("empty", "The new password is empty.")
+    if not _VAULT_LOCK.acquire(blocking=False):
+        raise VaultChangeRefused("busy", "A password change is already under way.")
+    try:
+        sql = _get_sql()
+        if sql is None or notes_mgr is None or todo_mgr is None:
+            raise VaultChangeRefused("no_store", "The vault is not open.")
+        held = todo_mgr._password or ""
+        if not held or not hmac.compare_digest(current.encode("utf-8"),
+                                               held.encode("utf-8")):
+            raise VaultChangeRefused(
+                "wrong_current", "That is not the vault's current password.")
+        if new == held:
+            raise VaultChangeRefused("same", "The new password is the one in use.")
+        backup = sql.backup_now("before-rekey")
+        stamp = os.path.basename(backup)[len(os.path.basename(sql.db_path)):]
+        ident = os.path.join(base, "fed_identity.json.encrypted")
+        if os.path.exists(ident):
+            shutil.copy2(ident, os.path.join(os.path.dirname(backup),
+                                             os.path.basename(ident) + stamp))
+        keep = json.loads(json.dumps(notes_mgr.data))
+        try:
+            resealed, unreadable = notes_mgr.rekey_note_contents(new)
+            rows = notes_mgr._sql_serialize()
+            shadow = notes_mgr._sql_shadow or {}
+            new_shadow = {}
+
+            def _rows(cur):
+                for store, cur_rows in rows.items():
+                    sql.write_rows(cur, store, cur_rows, shadow.get(store, {}))
+                    new_shadow[store] = dict(cur_rows)
+            sql.rekey(new, _rows)
+        except Exception:
+            notes_mgr.data = keep
+            raise
+        notes_mgr._sql_shadow = new_shadow
+        for m in (todo_mgr, notes_mgr, cred_mgr, cron_mgr, fed_store):
+            if m is not None:
+                m._password = new
+        identity = None
+        if fed_store is not None:
+            fed_store.save_data()
+            try:
+                with open(ident, "r", encoding="utf-8") as fh:
+                    fed_store._decrypt_blob(json.load(fh))
+                identity = True
+            except Exception:
+                identity = False
+        print(f"[VAULT] password changed: {resealed} note bodies re-sealed"
+              + (f", {unreadable} unreadable left as they were" if unreadable else "")
+              + ("" if identity is not False else "; the identity file did NOT re-seal"))
+        return {"ok": True, "backup": backup, "notes": resealed,
+                "unreadable": unreadable, "identity": identity}
+    finally:
+        _VAULT_LOCK.release()
+
+
+class VaultPasswordReq(BaseModel):
+    current: str = ""
+    new: str = ""
+
+
+@app.post("/vault/password")
+def vault_password(req: VaultPasswordReq, request: Request):
+    host = (request.client.host if request.client else "") or ""
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse({"error": "local_only",
+                             "message": "the vault's password is changed from this machine only"},
+                            status_code=403)
+    try:
+        return change_vault_password(req.current, req.new)
+    except VaultChangeRefused as e:
+        return JSONResponse({"error": e.code, "message": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": "failed", "message": str(e)}, status_code=500)
 
 
 @app.post("/shutdown")

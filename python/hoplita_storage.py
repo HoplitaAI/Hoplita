@@ -414,26 +414,46 @@ class SqlStore:
             return self._conn.execute(
                 "SELECT count(*) FROM msgs_fts").fetchone()[0]
 
+    def write_rows(self, cur, store, current, shadow):
+        for k, ser in current.items():
+            if shadow.get(k) != ser:
+                p = json.loads(ser)
+                cur.execute(
+                    "INSERT OR REPLACE INTO items"
+                    "(store, key, rev, editor, deleted, local_only, updated_at, payload)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
+                    (store, str(k), *_envelope_from(p), ser))
+        gone = [k for k in shadow if k not in current]
+        for k in gone:
+            cur.execute("DELETE FROM items WHERE store = ? AND key = ?",
+                        (store, str(k)))
+        return gone
+
     def sync_store(self, store, current, shadow):
         with self._lock:
-            cur = self._conn.cursor()
-            for k, ser in current.items():
-                if shadow.get(k) != ser:
-                    p = json.loads(ser)
-                    cur.execute(
-                        "INSERT OR REPLACE INTO items"
-                        "(store, key, rev, editor, deleted, local_only, updated_at, payload)"
-                        " VALUES (?,?,?,?,?,?,?,?)",
-                        (store, str(k), *_envelope_from(p), ser))
-            gone = [k for k in shadow if k not in current]
-            for k in gone:
-                cur.execute("DELETE FROM items WHERE store = ? AND key = ?",
-                            (store, str(k)))
+            gone = self.write_rows(self._conn.cursor(), store, current, shadow)
             self._conn.commit()
         if gone:
             self._record_tombstone(store, gone)
             _changed(store)
         return dict(current)
+
+    def rekey(self, password, write_rows=None):
+        key_hex = self._derive_key_hex(password)
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute("BEGIN")
+            try:
+                if write_rows is not None:
+                    write_rows(cur)
+                cur.execute(f"PRAGMA rekey = \"x'{key_hex}'\"")
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def backup_now(self, tag=""):
+        return self._copy_to_backups(tag)
 
     def maybe_backup(self):
         try:
@@ -446,21 +466,29 @@ class SqlStore:
                 newest = os.path.getmtime(os.path.join(bdir, mine[-1]))
                 if time.time() - newest < self.BACKUP_THROTTLE_S:
                     return
-            with self._lock:
-                self._conn.execute("PRAGMA wal_checkpoint(FULL)")
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            shutil.copy2(self.db_path, os.path.join(bdir, f"{base}.{stamp}"))
-            salt = self.db_path + ".salt"
-            if os.path.exists(salt):
-                shutil.copy2(salt, os.path.join(bdir, f"{base}.{stamp}.salt"))
-            mine = sorted(f for f in os.listdir(bdir)
-                          if f.startswith(base + ".") and not f.endswith(".salt"))
-            for old in mine[:-self.BACKUP_KEEP]:
-                os.remove(os.path.join(bdir, old))
-                if os.path.exists(os.path.join(bdir, old + ".salt")):
-                    os.remove(os.path.join(bdir, old + ".salt"))
+            self._copy_to_backups()
         except Exception as e:
             print(f"[SQL] backup failed: {e}")
+
+    def _copy_to_backups(self, tag=""):
+        bdir = os.path.join(os.path.dirname(self.db_path), "backups")
+        os.makedirs(bdir, exist_ok=True)
+        base = os.path.basename(self.db_path)
+        with self._lock:
+            self._conn.execute("PRAGMA wal_checkpoint(FULL)")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + (f"-{tag}" if tag else "")
+        dest = os.path.join(bdir, f"{base}.{stamp}")
+        shutil.copy2(self.db_path, dest)
+        salt = self.db_path + ".salt"
+        if os.path.exists(salt):
+            shutil.copy2(salt, dest + ".salt")
+        mine = sorted(f for f in os.listdir(bdir)
+                      if f.startswith(base + ".") and not f.endswith(".salt"))
+        for old in mine[:-self.BACKUP_KEEP]:
+            os.remove(os.path.join(bdir, old))
+            if os.path.exists(os.path.join(bdir, old + ".salt")):
+                os.remove(os.path.join(bdir, old + ".salt"))
+        return dest
 
     def close(self):
         with self._lock:

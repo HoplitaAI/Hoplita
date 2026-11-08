@@ -1559,6 +1559,11 @@ generic answer is not good enough. HOPLITA ships none; you write your own.
 - The only separately encrypted file is `fed_identity.json.encrypted`: the
   federated identity, portable on purpose
 - The password is requested when the MCP starts (every manager shares the same one)
+- It can be changed with the server running, from **Configuration → App →
+  Vault** or `python/hoplita_passwd.py` (`POST /vault/password`, this machine
+  only, never a tool): the database is re-keyed in one transaction with its
+  note bodies, the identity file is sealed again, and a copy of both that
+  opens with the old password goes to `backups/` first
 - One implementation for every store: the `EncryptedStorageManager` base class
 - The database keeps rolling backups (the newest 30)
 - Note bodies carry a second, content-level encryption layer inside the

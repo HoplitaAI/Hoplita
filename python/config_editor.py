@@ -6,7 +6,9 @@ import html as _h
 import platform
 import re
 
-from PyQt6.QtCore import Qt
+import threading
+
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (QMessageBox, QCheckBox, QComboBox, QDialog,
                              QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel,
@@ -588,6 +590,93 @@ class UsageWidget(QWidget):
         self.load()
 
 
+class VaultPasswordDialog(QDialog):
+
+    _done = pyqtSignal(dict)
+
+    def __init__(self, parent, t, mcp_url, change_fn=None):
+        super().__init__(parent)
+        import hoplita_passwd
+        self._t = t
+        self._mcp = mcp_url
+        self._change = change_fn or hoplita_passwd.change
+        self._explain = hoplita_passwd.explain
+        self._outcome = hoplita_passwd.outcome
+        self.result_info = None
+        self.setWindowTitle(t("vault.dlg_title"))
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 14, 16, 14)
+        v.setSpacing(10)
+        note = QLabel(t("cfg.vault_note"))
+        note.setWordWrap(True)
+        v.addWidget(note)
+        form = QFormLayout()
+        form.setSpacing(8)
+        self.current = QLineEdit()
+        self.new = QLineEdit()
+        self.again = QLineEdit()
+        for f in (self.current, self.new, self.again):
+            f.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow(t("vault.current"), self.current)
+        form.addRow(t("vault.new"), self.new)
+        form.addRow(t("vault.again"), self.again)
+        v.addLayout(form)
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        v.addWidget(self.status)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.cancel = QPushButton(t("btn.cancel"))
+        self.cancel.clicked.connect(self.reject)
+        self.go = QPushButton(t("vault.btn_change"))
+        self.cancel.setAutoDefault(False)
+        self.go.setAutoDefault(False)
+        self.go.setDefault(True)
+        self.go.clicked.connect(self._go)
+        row.addWidget(self.cancel)
+        row.addWidget(self.go)
+        v.addLayout(row)
+        self._done.connect(self._finished)
+
+    def _say(self, text, color="#e6edf7"):
+        self.status.setStyleSheet(f"color:{color}; font-size:12px;")
+        self.status.setText(text)
+
+    def _go(self):
+        current, new = self.current.text(), self.new.text()
+        if new != self.again.text():
+            self._say(self._t("vault.mismatch"), "#fbbf24")
+            return
+        if not new:
+            self._say(self._t("vault.err_empty"), "#fbbf24")
+            return
+        if new == current:
+            self._say(self._t("vault.err_same"), "#fbbf24")
+            return
+        for w in (self.current, self.new, self.again, self.go):
+            w.setEnabled(False)
+        self._say(self._t("vault.working"))
+        threading.Thread(target=lambda: self._done.emit(
+            self._change(self._mcp, current, new) or {}), daemon=True).start()
+
+    def _finished(self, r):
+        self.result_info = r
+        if r.get("ok"):
+            self._say("\n\n".join(self._outcome(r, self._t)), "#4ade80")
+            self.go.hide()
+            self.cancel.setText(self._t("btn.close"))
+            self.cancel.setDefault(True)
+            self.adjustSize()
+            return
+        self._say(self._explain(r, self._t, self._mcp), "#f87171")
+        for w in (self.current, self.new, self.again, self.go):
+            w.setEnabled(True)
+        self.go.setDefault(True)
+        self.adjustSize()
+
+
 class ConfigEditorDialog(QDialog):
 
     def __init__(self, parent, config_path, t, on_saved):
@@ -685,7 +774,8 @@ class ConfigEditorDialog(QDialog):
                          t("cfg.tab_search"))
         self.tabs.addTab(self._form_tab(HANDS_TAB, own_sections=OWN_HANDS), t("cfg.tab_hands"))
         self.tabs.addTab(self._form_tab(MEMORY_TAB, own_sections=OWN_MEMORY), t("cfg.tab_memory"))
-        self.tabs.addTab(self._form_tab(APP_TAB, own_sections=OWN_APP), t("cfg.tab_app"))
+        self.tabs.addTab(self._form_tab(APP_TAB, own_sections=OWN_APP,
+                                        tail=self._vault_card()), t("cfg.tab_app"))
         self.tabs.addTab(self._kv_tab("MCP_SERVERS", "cfg.mcpservers_note"),
                          t("cfg.tab_mcpservers"))
         _others, _n_others = self._others_tab()
@@ -803,7 +893,7 @@ class ConfigEditorDialog(QDialog):
             w.setToolTip(tip)
         form.addRow(lbl, w)
 
-    def _form_tab(self, spec, endpoint=None, own_sections=()):
+    def _form_tab(self, spec, endpoint=None, own_sections=(), tail=None):
         inner = QWidget()
         lay = QVBoxLayout(inner)
         lay.setSpacing(12)
@@ -838,8 +928,27 @@ class ConfigEditorDialog(QDialog):
             btn.clicked.connect(lambda _=False, s=sec, a=ku, b=kk, c=km:
                                 self._test_conn(s, a, b, c))
             lay.addWidget(btn)
+        if tail is not None:
+            lay.addWidget(tail)
         lay.addStretch(1)
         return self._scroll(inner)
+
+    def _vault_card(self):
+        card, cv = self._card("cfg.vault_title", "cfg.vault_note")
+        row = QHBoxLayout()
+        btn = QPushButton(self._t("cfg.vault_change"))
+        btn.clicked.connect(lambda: VaultPasswordDialog(
+            self, self._t, self._mcp_url()).exec())
+        row.addWidget(btn)
+        row.addStretch(1)
+        cv.addLayout(row)
+        return card
+
+    def _mcp_url(self):
+        url = getattr(self.parent(), "_mcp_url", None)
+        if not url and self._cp.has_section("MCP"):
+            url = self._cp.get("MCP", "url", fallback="")
+        return (url or "http://127.0.0.1:9077").rstrip("/")
 
     def _card(self, title_key, note_key=None):
         card = QWidget()

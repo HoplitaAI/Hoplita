@@ -70,6 +70,13 @@ password creates the encrypted database where notes, tasks, credentials,
 memory and settings live; every later start asks for it again. **Keep it
 safe**: the data is encrypted with it.
 
+To change it later, with the server running: **Configuration** → **App** →
+**Vault** → **Change the password**, or from a terminal
+`python python/hoplita_passwd.py`. The database is sealed again with the new
+one in place; the backups made before that moment still open with the old
+one. A machine that starts unattended with `HOPLITA_VAULT_PASSWORD` needs the
+new one written there too.
+
 ## That is all you need
 
 With a model and a search key, write in the chat. Some things to try:
