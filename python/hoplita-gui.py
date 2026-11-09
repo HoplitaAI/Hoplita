@@ -3,6 +3,14 @@
 import os
 import platform
 import sys
+
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
 import configparser
 import hashlib
 import subprocess
