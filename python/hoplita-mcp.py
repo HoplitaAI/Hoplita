@@ -3509,13 +3509,14 @@ def _search_firecrawl(query):
     if not api_key or api_key.startswith("tu_"):
         return {"error": "Firecrawl API key no configurada"}
     url = CONFIG.get("FIRECRAWL", "url", fallback="https://api.firecrawl.dev")
-    endpoint = url.rstrip("/") + "/v1/search"
+    endpoint = url.rstrip("/") + "/v2/search"
     limit = CONFIG.getint("FIRECRAWL", "limit", fallback=5)
     chars = CONFIG.getint("FIRECRAWL", "max_chars", fallback=0)
     payload = {
         "query": query,
         "limit": limit,
-        "scrapeOptions": {"formats": ["markdown"]},
+        "sources": [{"type": "web"}],
+        "scrapeOptions": {"formats": [{"type": "markdown"}]},
     }
     r = requests.post(endpoint,
         json=payload,
@@ -3524,9 +3525,12 @@ def _search_firecrawl(query):
     if r.status_code != 200:
         return {"error": f"HTTP {r.status_code}: {r.text[:300]}"}
     d = r.json()
+    data = d.get("data")
+    if not isinstance(data, dict):
+        return {"error": f"Firecrawl: unexpected response shape: {r.text[:300]}"}
     results = []
     citations = []
-    for item in d.get("data", []) or []:
+    for item in data.get("web") or []:
         src_url = item.get("url", "")
         results.append({
             "title": item.get("title", ""),
