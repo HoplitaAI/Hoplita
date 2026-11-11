@@ -12544,23 +12544,36 @@ def _unavailable_tools():
     return set(_PICTURE_TOOLS) if not _image_cfg()[0] else set()
 
 
+_SAME_DOOR = {"exec_command": "run_command"}
+
+
+def _door_of(name):
+    return _SAME_DOOR.get(name, name)
+
+
+def _is_off(name, extra=()):
+    door = _door_of(name)
+    return (name in _blocked_tools or name in extra
+            or door in _blocked_tools or door in extra)
+
+
 def _allowed_tools():
-    _off = _blocked_tools | _unavailable_tools()
-    if not _off:
+    _unav = _unavailable_tools()
+    if not _blocked_tools and not _unav:
         return TOOLS
-    return {k: v for k, v in TOOLS.items() if k not in _off}
+    return {k: v for k, v in TOOLS.items() if k not in _unav and not _is_off(k)}
 
 
 def _turn_tool_policy(tab_blocked=(), local_only=False):
     tab = frozenset(str(n) for n in (tab_blocked or ()) if n)
 
     def is_blocked(name):
-        return name in _blocked_tools or name in tab
+        return _is_off(name, tab)
 
     if local_only:
-        allowed = _local_only_toolset() - tab
+        allowed = {n for n in _local_only_toolset() if not _is_off(n, tab)}
     elif tab:
-        allowed = set(_allowed_tools()) - tab
+        allowed = {n for n in _allowed_tools() if not _is_off(n, tab)}
     else:
         allowed = None
     return is_blocked, allowed
@@ -12601,7 +12614,7 @@ def set_firewall(req: FirewallReq):
 def get_tools():
     defs = []
     for name, t in TOOLS.items():
-        if name in _blocked_tools:
+        if _is_off(name):
             continue
         params = TOOL_PARAMS.get(name, {"properties": {}})
         defs.append({
@@ -12742,7 +12755,7 @@ def call_tool(req: ToolCallReq):
                                         "and `arguments` (an object)"}}
         req.tool = _real
         req.arguments = _inner if isinstance(_inner, dict) else {}
-    if req.tool in _blocked_tools:
+    if _is_off(req.tool):
         print(f"[FIREWALL] 🛡 Blocked: {req.tool}")
         return {"tool": req.tool,
                 "result": {"error": f"🛡 FIREWALL: '{req.tool}' blocked"},
@@ -13309,9 +13322,8 @@ def _sub_agent_wall(ctx, names):
     lock = bool(getattr(ctx, "local_only", False))
 
     def is_blocked(n):
-        return (n in _blocked_tools or n in tab
-                or (lock and n.startswith("fed_")))
-    allowed = {n for n in names if n not in tab
+        return _is_off(n, tab) or (lock and n.startswith("fed_"))
+    allowed = {n for n in names if not _is_off(n, tab)
                and not (lock and n.startswith("fed_"))}
     return is_blocked, allowed
 

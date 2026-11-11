@@ -1448,6 +1448,9 @@ Settings in `[CHAT]`, all hot-reloaded (the GUI editor or the ini): `metacog`, `
   takes a whole family), with search on top
 - State persisted in the encrypted SQLCipher store (`firewall`)
 - Blocked tools are neither exposed to the LLM nor executed
+- A tool that opens the same door as another under a different name is blocked
+  with it: blocking `run_command` also blocks `exec_command` (the shell without
+  the terminal) and the shell probe of the watchers
 - It applies everywhere: chat, CRON, CLI
 - **Per tab**: right-click a chat tab → «This tab's firewall…». The same picker,
   but what you untick is blocked in that conversation only, sub-agents included,

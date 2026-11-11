@@ -12,7 +12,7 @@ except Exception:
     def t(k, **kw):
         return k
 
-_SYSTEM = {"run_command", "edit_file", "code_write_file", "code_apply_patch",
+_SYSTEM = {"run_command", "exec_command", "edit_file", "code_write_file", "code_apply_patch",
            "call_api", "screenshot_web", "browse_web",
            "hands_click", "hands_type", "hands_key", "edit_my_config",
            "mail_send"}

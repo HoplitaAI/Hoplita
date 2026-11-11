@@ -16,7 +16,7 @@ Reference for the **237 built-in tools** the LLM can call. The list is extracted
 
 | Tool | Args | What it does |
 |---|---|---|
-| `exec_command` | `command` `cwd?` `timeout?` | Runs a shell command ON ITS OWN, outside the shared terminal: nobody watches it, its whole output goes to a file (`output_path`; the tail comes back with `exit_code` and `duration_s`), and several can run at once. The terminal is one and serial; this is the second door, for checks, builds and suites the person does not need to see run. Through `background_run` it does not even hold the turn. |
+| `exec_command` | `command` `cwd?` `timeout?` | Runs a shell command ON ITS OWN, outside the shared terminal: nobody watches it, its whole output goes to a file (`output_path`; the tail comes back with `exit_code` and `duration_s`), and several can run at once. The terminal is one and serial; this is the second door, for checks, builds and suites the person does not need to see run. Through `background_run` it does not even hold the turn. Blocked whenever `run_command` is: it is the same door. |
 | `run_command` | `command` `cwd?` `timeout?` | Runs a system command. Pass `timeout` in seconds for anything that is not instant (installs, builds, migrations); a command cut short returns exit code -1 with partial output. |
 | `read_file` | `path` | Reads a text file. A PDF or an office document is refused with the tool that reads it (`pdf_info`, `office_info`): read as text they are mojibake. |
 | `read_folder` | `path` `extensions?` | Reads every file in a folder (text, images, PDFs, Word/Excel/PowerPoint as their text) for batch processing. |
