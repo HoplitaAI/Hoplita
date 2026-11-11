@@ -2665,11 +2665,48 @@ def _describe_images_for(messages, blind_model):
 
 
 _SERVER_VISION = {}
+_IMAGES_REFUSED = {}
+_IMAGES_REFUSED_FOR_S = 3600
+
+
+def _carries_images(messages):
+    return any(isinstance(m, dict) and isinstance(m.get("content"), list)
+               and any(isinstance(p, dict) and "image" in str(p.get("type", ""))
+                       for p in m["content"]) for m in messages or [])
+
+
+def _refuses_images(status, body):
+    if status not in (400, 404, 415, 422):
+        return False
+    b = (body or "").lower()
+    return any(w in b for w in ("image", "vision", "multimodal", "visual"))
+
+
+def _without_images(messages, model, why):
+    import fed_agent as _fa
+    messages, _n_desc = _describe_images_for(messages, model)
+    messages, _paths = _park_images(messages, model, why)
+    messages, _n_img = _fa.strip_images(messages, model)
+    print(f"[VISION] {model} {why}: {_n_desc} image(s) described, "
+          f"{len(_paths)} kept as a file, {_n_img} replaced by a note")
+    _ctx = getattr(_ORCH, "ctx", None)
+    if _paths and _ctx is not None and not getattr(_ctx, "_told_not_seen", False):
+        _ctx._told_not_seen = True
+        try:
+            _ctx.emit({"event": "image_not_seen", "model": model,
+                       "server": why.startswith("is served"),
+                       "path": _paths[-1], "n": len(_paths)})
+        except Exception:
+            pass
+    return messages
 
 
 def _server_says_blind(base_url, api_key, model):
     key = f"{base_url}|{model}"
     now = time.time()
+    _ref = _IMAGES_REFUSED.get(key)
+    if _ref and now - _ref < _IMAGES_REFUSED_FOR_S:
+        return True
     hit = _SERVER_VISION.get(key)
     if hit and now - hit[0] < 120:
         return hit[1] is False
@@ -2847,30 +2884,14 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
     messages = _fa.single_system(messages)
     try:
         import hoplita_llmcfg as _lc
-        _has_img = any(isinstance(m, dict) and isinstance(m.get("content"), list)
-                       and any(isinstance(p, dict) and "image" in str(p.get("type", ""))
-                               for p in m["content"]) for m in messages)
         _why = ""
-        if _has_img and CONFIG is not None:
+        if _carries_images(messages) and CONFIG is not None:
             if not _lc.model_sees(CONFIG, base_url, model):
                 _why = "is declared without vision"
             elif _server_says_blind(base_url, api_key, model):
                 _why = "is served without vision (its server says so)"
         if _why:
-            messages, _n_desc = _describe_images_for(messages, model)
-            messages, _paths = _park_images(messages, model, _why)
-            messages, _n_img = _fa.strip_images(messages, model)
-            print(f"[VISION] {model} {_why}: {_n_desc} image(s) described, "
-                  f"{len(_paths)} kept as a file, {_n_img} replaced by a note")
-            _ctx = getattr(_ORCH, "ctx", None)
-            if _paths and _ctx is not None and not getattr(_ctx, "_told_not_seen", False):
-                _ctx._told_not_seen = True
-                try:
-                    _ctx.emit({"event": "image_not_seen", "model": model,
-                               "server": _why.startswith("is served"),
-                               "path": _paths[-1], "n": len(_paths)})
-                except Exception:
-                    pass
+            messages = _without_images(messages, model, _why)
     except Exception as _e:
         print(f"[VISION] could not check images for {model}: {_e}", file=sys.stderr)
     global _LAST_WIRE
@@ -2921,6 +2942,16 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
         for _k in dict(extra):
             payload.pop(_k, None)
         _merge_extra_body(payload, base_url, model)
+        r = _http().post(f"{base_url}/chat/completions",
+                          json=payload, headers=headers, timeout=timeout)
+    if _refuses_images(r.status_code, r.text or "") and _carries_images(messages):
+        _IMAGES_REFUSED[f"{base_url}|{model}"] = time.time()
+        print(f"[VISION] {model} refused a request with images "
+              f"({(r.text or '')[:120]!r}): repeating without them.",
+              file=sys.stderr)
+        messages = _without_images(
+            messages, model, "is served without vision (its server refused the picture)")
+        payload["messages"] = messages
         r = _http().post(f"{base_url}/chat/completions",
                           json=payload, headers=headers, timeout=timeout)
     if r.status_code != 200:
