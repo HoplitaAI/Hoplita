@@ -35,6 +35,14 @@ class _McpWorker(QThread):
             self.done.emit({"error": str(e)})
 
 
+def _fmt_k(n):
+    try:
+        n = int(n or 0)
+    except Exception:
+        return str(n)
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
 def _size(n):
     n = float(n or 0)
     for unit in ("B", "KB", "MB", "GB"):
@@ -89,7 +97,7 @@ class _PostWorker(QThread):
 
 
 class _PermissionsDialog(QDialog):
-    RESOURCES = ("notas", "proyectos", "citas", "sesiones")
+    RESOURCES = ("notas", "proyectos", "citas", "sesiones", "modelos")
     LEVELS = ("auto", "review", "no")
 
     def __init__(self, parent, contact):
@@ -724,6 +732,7 @@ class _ContactDelegate(QStyledItemDelegate):
 
 class FederationWidget(QWidget):
     open_session_requested = pyqtSignal(str)
+    config_changed = pyqtSignal()
 
     @property
     def _mcp_url(self):
@@ -1092,11 +1101,18 @@ class FederationWidget(QWidget):
             act_pub = QAction("🌍 " + t("fed.browse_public"), self)
             act_pub.triggered.connect(lambda: self._browse_public(c))
             menu.addAction(act_pub)
+            act_lent = QAction("🧠 " + t("fed.browse_lent"), self)
+            act_lent.triggered.connect(lambda: self._browse_lent(c))
+            menu.addAction(act_lent)
             menu.addSeparator()
 
         act_perms = QAction("⚙ " + t("fed.edit_perms"), self)
         act_perms.triggered.connect(lambda: self._edit_permissions(c))
         menu.addAction(act_perms)
+        if c.get("status") == "accepted":
+            act_lend = QAction("📊 " + t("fed.lend_menu"), self)
+            act_lend.triggered.connect(lambda: self._lend_dialog(c))
+            menu.addAction(act_lend)
 
         menu.addSeparator()
         is_child = c.get("kind") == "child"
@@ -1106,6 +1122,163 @@ class FederationWidget(QWidget):
         menu.addAction(act_remove)
 
         menu.exec(self.list.mapToGlobal(pos))
+
+    def _browse_lent(self, c):
+        handle = c.get("handle", "")
+
+        def done(data):
+            data = data or {}
+            dlg = QDialog(self)
+            dlg.setWindowTitle(t("fed.lent_dlg_title", handle=handle))
+            dlg.setMinimumSize(560, 340)
+            dlg.setStyleSheet("QDialog { background:#1e293b; }")
+            lay = QVBoxLayout(dlg)
+            head = QLabel()
+            head.setWordWrap(True)
+            head.setStyleSheet("QLabel { color:#e6edf7; font-size:13px; }")
+            lay.addWidget(head)
+            lst = QListWidget()
+            lst.setStyleSheet("QListWidget { background:#0f172a; color:#e6edf7; "
+                              "border:1px solid #334155; border-radius:6px; }"
+                              "QListWidget::item { padding:6px; }")
+            lay.addWidget(lst, 1)
+            models = data.get("models") or []
+            if data.get("error"):
+                head.setText(t("fed.lent_offline", handle=handle)
+                             if data.get("code") == "offline"
+                             else t("fed.lent_err", err=str(data.get("error"))[:200]))
+                lst.setEnabled(False)
+            elif not models:
+                head.setText(t("fed.lent_none", handle=handle))
+                lst.setEnabled(False)
+            else:
+                head.setText(t("fed.lent_level", level=t("fed.perm_" + data.get("level", "no"))
+                               if data.get("level") in ("auto", "review", "no")
+                               else str(data.get("level") or "?")))
+            for m in models:
+                bits = [f"{m.get('alias', '?')}  ·  {m.get('model') or '?'}"]
+                if m.get("profile"):
+                    bits.append(str(m["profile"])[:80])
+                if m.get("context_length"):
+                    bits.append(t("fed.lent_ctx", n=int(m["context_length"]) // 1000))
+                if m.get("vision"):
+                    bits.append(t("fed.lent_sees"))
+                if m.get("in_pool"):
+                    bits.append("✓ " + t("fed.lent_in_pool", alias=m["in_pool"]))
+                it = QListWidgetItem("   ·   ".join(bits))
+                it.setData(Qt.ItemDataRole.UserRole, m)
+                lst.addItem(it)
+            btns = QDialogButtonBox()
+            add = btns.addButton(t("fed.lent_add"), QDialogButtonBox.ButtonRole.AcceptRole)
+            rem = btns.addButton(t("fed.lent_remove"), QDialogButtonBox.ButtonRole.ActionRole)
+            btns.addButton(QDialogButtonBox.StandardButton.Close)
+            add.setEnabled(False)
+            rem.setEnabled(False)
+            lay.addWidget(btns)
+
+            def _pick(*_a):
+                it = lst.currentItem()
+                m = it.data(Qt.ItemDataRole.UserRole) if it else None
+                add.setEnabled(bool(m) and not m.get("in_pool"))
+                rem.setEnabled(bool(m) and bool(m.get("in_pool")))
+            lst.currentItemChanged.connect(_pick)
+
+            def _after(r, ok_key, **kw):
+                if (r or {}).get("error"):
+                    QMessageBox.warning(self, t("fed.lent_dlg_title", handle=handle),
+                                        str(r.get("error"))[:300])
+                    return
+                QMessageBox.information(self, t("fed.lent_dlg_title", handle=handle),
+                                        t(ok_key, **kw))
+                self.config_changed.emit()
+
+            def do_add():
+                it = lst.currentItem()
+                m = it.data(Qt.ItemDataRole.UserRole) if it else None
+                if not m:
+                    return
+                dlg.accept()
+                self._run("fed_add_lent_model", {"handle": handle, "alias": m.get("alias")},
+                          lambda r, _m=m: _after(r, "fed.lent_added", model=_m.get("alias"),
+                                                 handle=handle, alias=(r or {}).get("alias", "?")))
+
+            def do_rem():
+                it = lst.currentItem()
+                m = it.data(Qt.ItemDataRole.UserRole) if it else None
+                if not m or not m.get("in_pool"):
+                    return
+                dlg.accept()
+                self._run("fed_remove_lent_model", {"alias": m.get("in_pool")},
+                          lambda r, _m=m: _after(r, "fed.lent_removed", alias=_m.get("in_pool")))
+            add.clicked.connect(do_add)
+            rem.clicked.connect(do_rem)
+            btns.rejected.connect(dlg.reject)
+            dlg.exec()
+
+        self._run("fed_lent_models", {"handle": handle}, done)
+
+    def _lend_dialog(self, c):
+        handle = c.get("handle", "")
+
+        def done(data):
+            data = data or {}
+            dlg = QDialog(self)
+            dlg.setWindowTitle(t("fed.lend_dlg_title", handle=handle))
+            dlg.setMinimumSize(560, 360)
+            dlg.setStyleSheet("QDialog { background:#1e293b; }")
+            lay = QVBoxLayout(dlg)
+            grants = (data.get("grants") or {}).get(handle) or {}
+            perms = c.get("permissions") or {}
+            level = ((perms.get("modelos") or {}).get("level")) or grants.get("level") or "no"
+            lendable = data.get("lendable") or {}
+            head = QLabel(t("fed.lend_level_line",
+                            level=t("fed.perm_" + level) if level in ("auto", "review", "no") else level,
+                            granted=", ".join(grants.get("granted") or []) or "—"))
+            head.setWordWrap(True)
+            head.setStyleSheet("QLabel { color:#e6edf7; font-size:13px; }")
+            lay.addWidget(head)
+            what = QLabel(t("fed.lend_lendable", names=", ".join(sorted(lendable)))
+                          if lendable else t("fed.lend_lendable_none"))
+            what.setWordWrap(True)
+            what.setStyleSheet("QLabel { color:#e6edf7; font-size:12px; }")
+            lay.addWidget(what)
+            lst = QListWidget()
+            lst.setStyleSheet("QListWidget { background:#0f172a; color:#e6edf7; "
+                              "border:1px solid #334155; border-radius:6px; }"
+                              "QListWidget::item { padding:5px; }")
+            lay.addWidget(lst, 1)
+            for r in data.get("live") or []:
+                if r.get("peer") == handle:
+                    lst.addItem("⇅ " + t("fed.lend_live_row", alias=r.get("alias", "?"),
+                                         age=r.get("age_s", 0)))
+            rows = [r for r in (data.get("usage") or []) if r.get("peer") == handle]
+            if rows:
+                lst.addItem(t("fed.lend_usage_head", handle=handle))
+                for r in rows:
+                    lst.addItem("    " + t("fed.lend_usage_row", day=r.get("day", "?"),
+                                           alias=r.get("alias", "?"), calls=r.get("calls", 0),
+                                           prompt=_fmt_k(r.get("prompt", 0)),
+                                           completion=_fmt_k(r.get("completion", 0))))
+            elif not (data.get("live") or []):
+                lst.addItem(t("fed.lend_usage_none"))
+            btns = QDialogButtonBox()
+            rev = btns.addButton(t("fed.lend_revoke"), QDialogButtonBox.ButtonRole.ActionRole)
+            rev.setEnabled(bool(grants.get("granted")))
+            btns.addButton(QDialogButtonBox.StandardButton.Close)
+            lay.addWidget(btns)
+
+            def do_revoke():
+                dlg.accept()
+                self._run("fed_revoke_lent_model", {"handle": handle},
+                          lambda r: QMessageBox.information(
+                              self, t("fed.lend_dlg_title", handle=handle),
+                              t("fed.lend_revoked", handle=handle)
+                              if not (r or {}).get("error") else str(r.get("error"))[:200]))
+            rev.clicked.connect(do_revoke)
+            btns.rejected.connect(dlg.reject)
+            dlg.exec()
+
+        self._run("fed_lend_usage", {}, done)
 
     def _browse_public(self, c):
         handle = c.get("handle", "")

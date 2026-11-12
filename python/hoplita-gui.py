@@ -2845,6 +2845,8 @@ class ChatAssistantWindow(QMainWindow):
                     print(f"[BACKGROUND] deliver: {_e}", file=sys.stderr)
             if "background_live" in payload:
                 self._paint_background_live(payload.get("background_live") or [])
+            if "lend_live" in payload:
+                self._paint_lend_live(payload.get("lend_live") or [])
             _wake = payload.get("wake", []) or []
             if _wake:
                 kinds = {w.get("kind") for w in _wake}
@@ -2865,6 +2867,9 @@ class ChatAssistantWindow(QMainWindow):
                 direction = item.get("direction", "in")
                 ev = item.get("event", {}) or {}
                 if not peer:
+                    continue
+                if ev.get("event") in ("model_lent", "model_lent_done"):
+                    self._on_model_lent(peer, ev)
                     continue
                 if ev.get("event") == "session_refused":
                     _why = str(ev.get("why") or "no_permission")
@@ -4775,6 +4780,8 @@ enabled = true
                 self._mcp_call,
                 models_fn=lambda: list(self._model_pool().keys()))
             self.federation_panel.open_session_requested.connect(self._open_chat_session)
+            self.federation_panel.config_changed.connect(
+                lambda: self.reload_config(push_to_mcp=False))
             _i = self.tabs.addTab(self.federation_panel, t("tabs.federation"))
             self.tabs.setTabIcon(_i, self._svg_icon("tab_agents", "#94a3b8", 18))
         except Exception as e:
@@ -13599,8 +13606,27 @@ enabled = true
             council = (self.config.get(sec, "council", fallback="") or "").strip() \
                 .lower() not in ("false", "0", "no", "off")
             pool[name] = {"base_url": base_url, "api_key": api_key,
-                          "model": model, "profile": profile, "council": council}
+                          "model": model, "profile": profile, "council": council,
+                          "via": (self.config.get(sec, "via", fallback="") or "").strip()}
         return pool
+
+    def _contact_online_cached(self, handle):
+        try:
+            for c in (getattr(self, "_fed_cache", None) or {}).get("contacts") or []:
+                if c.get("handle") == handle:
+                    return bool(c.get("online"))
+        except Exception:
+            pass
+        return True
+
+    def _lent_tag(self, m):
+        via = (m or {}).get("via") or ""
+        if not via:
+            return ""
+        tag = t("model.lent_tag", handle=via)
+        if not self._contact_online_cached(via):
+            tag += " · " + t("model.offline_tag")
+        return f"   ({tag})"
 
     def _chat_base_endpoint(self):
         ov = self._chat_model_override
@@ -15429,6 +15455,35 @@ enabled = true
         body = msg.split("\n", 1)[1] if "\n" in msg else msg
         head = body.split("\n", 1)[0]
         return self._chat_frag(head[:300], "#f5b800", "⚙ " + t("bg.label"))
+
+    def _on_model_lent(self, peer, ev):
+        alias = str(ev.get("alias") or "?")
+        key = (peer, alias)
+        told = self.__dict__.setdefault("_lend_announced", set())
+        today = self.__dict__.setdefault("_lend_today", {})
+        if ev.get("event") == "model_lent":
+            told.add(key)
+            self.add_message(t("lend.notice_start", peer=peer, alias=alias,
+                               model=ev.get("model") or "?"), "system")
+            return
+        row = today.setdefault(key, {"calls": 0, "prompt": 0, "completion": 0})
+        row["calls"] += 1
+        row["prompt"] += int(ev.get("prompt_tokens") or 0)
+        row["completion"] += int(ev.get("completion_tokens") or 0)
+        if key in told:
+            told.discard(key)
+            self.add_message(t("lend.notice_done", peer=peer, alias=alias,
+                               prompt=ev.get("prompt_tokens", 0),
+                               completion=ev.get("completion_tokens", 0),
+                               seconds=ev.get("seconds", 0), status=ev.get("status", "?")),
+                             "system")
+        self._paint_lend_live(getattr(self, "_lend_live_rows", []))
+
+    def _paint_lend_live(self, rows):
+        self._lend_live_rows = rows or []
+        fs = getattr(self, "fed_status", None)
+        if fs is not None and hasattr(fs, "set_lending"):
+            fs.set_lending(self._lend_live_rows, getattr(self, "_lend_today", {}))
 
     def _paint_background_live(self, rows):
         by_conv, by_tab = {}, {}
@@ -17796,7 +17851,7 @@ enabled = true
             if pool:
                 lines.append(t("model.pool_list"))
                 for name, m in pool.items():
-                    lines.append(f"  • {name} → {m['model']}")
+                    lines.append(f"  • {name} → {m['model']}" + self._lent_tag(m))
             else:
                 lines.append(t("model.no_pool"))
             self.add_message("\n".join(lines), "system")
@@ -17812,9 +17867,13 @@ enabled = true
                              "system")
             return
         if arg in pool:
+            _via = pool[arg].get("via") or ""
+            if _via and not self._contact_online_cached(_via):
+                self.add_message(t("model.owner_offline", name=arg, handle=_via), "error")
+                return
             self._chat_model_override = arg
-            self.add_message(t("model.switched", name=arg, model=pool[arg]["model"]),
-                             "system")
+            self.add_message(t("model.switched", name=arg, model=pool[arg]["model"])
+                             + self._lent_tag(pool[arg]), "system")
         else:
             avail = ", ".join(pool.keys()) if pool else "—"
             self.add_message(t("model.unknown", name=arg, avail=avail), "error")
@@ -18215,6 +18274,14 @@ enabled = true
                                             "system")
                     elif et == "model_escalated":
                         self.thread_msg(t("chat.escalated", model=ev.get("to", "?")), "system")
+                    elif et == "model_unavailable":
+                        _fb = ev.get("fallback") or ""
+                        self.thread_msg(t("chat.model_unavailable_" + str(ev.get("why") or "offline"),
+                                          model=ev.get("model", "?"), handle=ev.get("handle", "?"),
+                                          fallback=_fb) if _fb else
+                                        t("chat.model_unavailable_none",
+                                          model=ev.get("model", "?"), handle=ev.get("handle", "?")),
+                                        "system")
                     elif et == "escalate_failed":
                         self.thread_msg(t("chat.escalate_failed", why=ev.get("why", "")), "system")
                     elif et == "metacog_close":

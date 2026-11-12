@@ -98,6 +98,9 @@ Non-terminal, in no guaranteed order except that `turn_start` is first:
 | `resume_check` | `iterations` | The user said something mid-turn (`/agent/inject`), the model handled it and was about to answer: it is asked once whether the request that STARTED the turn is complete, and told to carry on if not. Injected text itself arrives framed as an aside (`[WHILE YOU WORK …]`), never as a bare new request. Once per turn, never a loop. |
 | `tick` | — | Heartbeat, every ~30s while the turn lives (emitted by the MCP's stream, not the loop). Paint nothing; it exists so a face's between-events read-timeout never mistakes a LONG SILENT ACTION for a dead turn. A stream with no tick for minutes means the MCP itself is gone. |
 | `model_escalated` | `to`, `n`, `after`, `sterile_tools` \| `tool`+`times` | The turn was handed to another pool model, once. `after: "asked"`: the model was asked to rethink (a nudge, or the same call stuck on the same result) and stayed sterile after the question. `after: "loop_broken"` (with `tool`, `times`): the same call stuck again after it had been asked. Never a silent swap: show it. |
+| `model_unavailable` | `model`, `handle`, `why`, `fallback` | The model chosen for the turn is a contact's (a pool line with `via`) and cannot serve it: `why: "local_only"` (the conversation is locked to this machine and must not travel) or `"offline"` (its owner is away). `fallback` names the model of this machine's own that answers instead; empty, none is configured and the turn fails. Said before the first call, never a silent swap. |
+| `model_lent` | `peer`, `alias`, `model` | By `GET /agent/session-events` (direction `in`), not the turn stream: a contact started using one of this machine's lent models through the federation. Once per contact and model, then again after ten minutes of use. |
+| `model_lent_done` | `peer`, `alias`, `status`, `prompt_tokens`, `completion_tokens`, `seconds` | By `GET /agent/session-events`: one call of a lent model ended, with what it cost. Every call; the window counts them on the federation line, and the meter has a row `<alias> → <peer>`. |
 | `reply` | `reply`, `iterations`, `turn_record`, `transcript`, `last_user_sent`?, `verified`? | The terminal event. `last_user_sent` is the newest question AS IT WAS SENT to the model when `inject` glued this turn's blocks in front of it (the skill chosen, the working-memory inventory): **store it in place of the bare question**, or the next prompt diverges right there. Also on `cancelled` and `iteration_limit`. `transcript` is every message the loop appended this turn — assistant tool calls, tool results, the reviewer's notes, rejected drafts, framed asides — exactly as the model saw them. **Keep it in your history, before the final answer, verbatim**: the next prompt is then the last one plus one message, and the backend's prefix cache serves. Assistant messages in it are **as the model generated them**: content untouched, `reasoning_content` (or `reasoning`, whichever key the server used) and `tool_calls` as returned — a re-entered turn rendered into different tokens is a prefix cut exactly there. Keep the fields; never strip the reasoning. When no `transcript` comes, fuse `turn_record` into the answer instead. `verified` reports the definition of done (`verify`) when the turn had one. |
 | `context_full` | `prompt_tokens`, `completion_tokens`, `iterations` | The completion was cut by length with (almost) nothing written: the context is full. An `error` follows at once — nothing is reviewed or redone, because a redo cannot buy tokens. |
 | `metacog_close` | `n`, `sterile_tools` | Nobody to hand the turn to, the model was asked twice (the question, then a firmer `metacog_nudge` with `reason: "last"`) and stayed sterile: one tool-free pass follows whose words — what it tried, what blocks it, what it would need — are the `reply`. |
@@ -476,7 +479,7 @@ vault (identity and keys) lives there.
 - `POST /agent/session-stop {peer}` cuts an outbound session;
   `POST /agent/session-close-inbound {peer}` closes an inbound one (the
   originator gets `session_closed`, the running turn is cancelled).
-- `GET /agent/session-events` → `{events, shares, wake, background, background_live}`: everything buffered
+- `GET /agent/session-events` → `{events, shares, wake, background, background_live, lend_live}`: everything buffered
   since the last call, in both directions, delivered once. Poll it.
 - `GET /agent/pending-approvals` → `{pending: [{id, peer, message, analyze}]}`:
   incoming requests waiting for your yes; `POST /agent/resolve-approval
@@ -582,6 +585,21 @@ machine's, so `/tied/<device>/agent/stop`, `…/agent/plan_ack`,
 turn in it and takes a saved copy. Only between machines of one federated
 identity; `/shutdown`, `/vault/…` and a second hop are refused (403), and a
 request over ~2.8 MB is refused (413).
+
+**A contact's model** — `POST /lend/<handle>/<alias>/v1/chat/completions` and
+`GET /lend/<handle>/<alias>/v1/models`: the endpoint every pool line with
+`via = <handle>` resolves to (`hoplita_llmcfg.resolve_endpoint`), so the loop,
+the router, the council, the browser and the window speak to a contact's model
+as to any OpenAI-compatible server. The request is carried to that contact's
+HOPLITA inside a sealed session turn (`lend_request`), served there against
+their local model under their «Models» permission and their `lend = true`
+line, and the answer comes back whole; a request with `stream: true` is
+played back as a stream of one piece. A contact who is not online is answered
+at once with 503 (`code: offline`), never waited for; their refusal is a 403
+(`declined`, `not_granted`), a model they do not lend a 404; a body over
+~2.8 MB is refused (413). No other path is served. `lend_live` in the poll
+above lists the calls of this machine's own lent models in flight
+(`[{peer, alias, age_s}]`).
 
 **Tools and configuration**
 

@@ -103,6 +103,10 @@ class FedStatusLine(QWidget):
         self.tier = QLabel()
         self.tier.setObjectName("fed_tier")
         h.addWidget(self.tier)
+        self.lend = QLabel()
+        self.lend.setObjectName("fed_lend")
+        self.lend.setVisible(False)
+        h.addWidget(self.lend)
         self.note = QLabel()
         self.note.setObjectName("fed_note")
         h.addWidget(self.note)
@@ -126,7 +130,9 @@ class FedStatusLine(QWidget):
             f"#fed_who {{ color:#cbd5e1; }} "
             f"#fed_status #fed_tier {{ color:#e9d5ff; background:#31184d; "
             f"border-radius:8px; "
-            f"padding:1px 9px; font-weight:700; font-size:12px; }}")
+            f"padding:1px 9px; font-weight:700; font-size:12px; }} "
+            f"#fed_status #fed_lend {{ color:#e6edf7; background:#14324a; "
+            f"border-radius:8px; padding:1px 9px; font-size:12px; }}")
 
     def set_quota(self, data, handle="", server=""):
         st = state_of(data)
@@ -168,3 +174,21 @@ class FedStatusLine(QWidget):
             summ = plan_summary(data)
             tip = (summ[3] + "<br><br>" if summ else "") + t("fed.plan_tip")
         self.setToolTip(tip or "")
+
+    def set_lending(self, live, today):
+        live = [r for r in (live or []) if isinstance(r, dict)]
+        today = today or {}
+        if not live and not today:
+            self.lend.setVisible(False)
+            return
+        if live:
+            what = ", ".join(f"{r.get('alias', '?')} → {r.get('peer', '?')}" for r in live[:3])
+            self.lend.setText("⇅ " + t("fedline.lending", what=what))
+        else:
+            calls = sum(int(v.get("calls", 0)) for v in today.values())
+            self.lend.setText(t("fedline.lent_today", calls=calls))
+        rows = [t("fedline.lent_row", peer=k[0], alias=k[1], calls=v.get("calls", 0),
+                  prompt=v.get("prompt", 0), completion=v.get("completion", 0))
+                for k, v in sorted(today.items())]
+        self.lend.setToolTip(t("fedline.lent_tip", rows="<br>".join(rows) or "—"))
+        self.lend.setVisible(True)

@@ -407,6 +407,11 @@ Local children run in **parallel**: three tasks to three children are three turn
 | `fed_public_folders` | `handle` | The public folders a handle offers, with subscriber counts and whether you are subscribed. |
 | `fed_subscribe_folder` | `handle` `folder_name?` `folder_id?` | Subscribes read-only to someone's public folder (no handshake). |
 | `fed_unsubscribe_folder` | `handle` `folder_name?` `folder_id?` | Drops a read-only subscription; your local copy stays. |
+| `fed_lent_models` | `handle` | The models a contact lends you, asked of their HOPLITA right now (needs them online): name, what it is good at, context, whether it sees images, and whether each is already in your pool. |
+| `fed_add_lent_model` | `handle` `alias` `name?` | Adds a contact's model to your pool: their permission decides (auto, or their person is asked once), then a `[MODEL:<name>]` line with `via = <handle>` is written and the config reloaded. From then on `/model`, the router and the council use it like any other, only while they are online. |
+| `fed_remove_lent_model` | `alias` | Takes a contact's model out of your pool. |
+| `fed_lend_usage` | — | What YOU lend: the lendable models of this machine, which contact may use which, the calls in flight right now, and the tokens each contact used per day. |
+| `fed_revoke_lent_model` | `handle` `alias?` | Takes a lent model (or every one, with no alias) back from a contact: their pool line stops answering at once. |
 
 
 ## 🔀 Federation: code

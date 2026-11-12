@@ -949,6 +949,18 @@ submenu and «🌍 Public folders…» in the contact's menu, with one-click
 subscription. Presence 🟢 is a flag **and** a heartbeat (TTL 180 s): a contact
 that is off stops showing green.
 
+**A contact's model in your pool.** A model marked as lendable (`lend = true`
+on its `[MODEL:…]` line) can be added by a contact you gave the «Models»
+permission: a pool line of theirs with `via = your handle`, no URL and no key.
+Their requests reach your machine sealed inside the federation, your HOPLITA
+asks the model, the answer goes back the same way. Nobody opens a port,
+nothing is handed to a VPN or over SSH, your key never leaves. You see every
+use (the federation line, a notice in the chat, a row on the meter) and take
+it back in one click; their side leaves the model out while you are offline
+and never sends a local-only conversation to it. On their side it is a model
+like any other: `/model` pins it, the router may pick it, a council may seat
+it ([FEDERATION.md](FEDERATION.md), *Use a contact's model*).
+
 **How shared things stay in sync, and what it costs the server.** Your edits
 to a shared note or task leave on their own two seconds after you make them,
 and each member receives only what changed since the last time it received

@@ -87,12 +87,64 @@ def base_alias(cfg):
     return ""
 
 
+
+LEND_PATH = "/lend"
+
+
+def mcp_url(cfg):
+    url = ""
+    if cfg and cfg.has_section("MCP"):
+        url = (cfg.get("MCP", "url", fallback="") or "").strip()
+    return (url or "http://127.0.0.1:9077").rstrip("/")
+
+
+def lent_from(cfg, section):
+    if not cfg or not section or not cfg.has_section(section):
+        return ""
+    return (cfg.get(section, "via", fallback="") or "").strip()
+
+
+def lends(cfg, section):
+    if not cfg or not section or not cfg.has_section(section):
+        return False
+    if lent_from(cfg, section):
+        return False
+    return (cfg.get(section, "lend", fallback="") or "").strip().lower() in _TRUE
+
+
+def lend_url(cfg, handle, alias):
+    return f"{mcp_url(cfg)}{LEND_PATH}/{handle}/{alias}/v1"
+
+
+def lend_of_url(url):
+    u = (url or "").strip().rstrip("/")
+    marker = LEND_PATH + "/"
+    i = u.find(marker)
+    if i < 0:
+        return None
+    rest = u[i + len(marker):]
+    if rest.endswith("/v1"):
+        rest = rest[:-3]
+    parts = rest.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    return parts[0], parts[1]
+
+
+def _lent_endpoint(cfg, sec):
+    handle = lent_from(cfg, sec)
+    alias = (cfg.get(sec, "model", fallback="") or "").strip() or sec.split(":", 1)[-1]
+    return lend_url(cfg, handle, alias), "", alias
+
+
 def resolve_endpoint(cfg, section):
     fb_url = cfg.get("API", "base_url", fallback="https://api.openai.com/v1") or "https://api.openai.com/v1"
     fb_key = cfg.get("API", "api_key", fallback="") or ""
     fb_model = cfg.get("API", "model", fallback="") or ""
     if section == "API":
         sec = model_section(cfg, base_alias(cfg))
+        if sec and lent_from(cfg, sec):
+            return _lent_endpoint(cfg, sec)
         if sec:
             return ((cfg.get(sec, "base_url", fallback="") or fb_url).rstrip("/"),
                     cfg.get(sec, "api_key", fallback="") or fb_key,
@@ -107,6 +159,8 @@ def resolve_endpoint(cfg, section):
             return resolve_endpoint(cfg, target)
     if not cfg.has_section(section):
         return b_url, b_key, b_model
+    if lent_from(cfg, section):
+        return _lent_endpoint(cfg, section)
     return ((cfg.get(section, "base_url", fallback="") or b_url).rstrip("/"),
             cfg.get(section, "api_key", fallback="") or b_key,
             cfg.get(section, "model", fallback="") or b_model)

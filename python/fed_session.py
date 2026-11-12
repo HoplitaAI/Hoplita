@@ -23,6 +23,7 @@ TERMINAL_EVENTS = ("reply", "cancelled", "iteration_limit", "error",
 _store_getter = None
 _run_turn = None
 TIED_REQUEST = None
+LEND_REQUEST = None
 def _incoming_qa_mode():
     import os
     return (os.environ.get("HOPLITA_INCOMING_QA", "always").strip().lower()
@@ -642,6 +643,52 @@ def on_live(data):
             ev.set()
 
 
+def _serve_lend_request(req, sender, sender_pub, session_id, payload, store,
+                        server_url, token, my_priv, local_sink):
+    me = store.data.get("handle", "")
+
+    def _decline(text, code="declined"):
+        try:
+            _send(server_url, token, my_priv, sender, sender_pub, T_EVENT,
+                  {"event": "error", "code": code, "retryable": False, "error": text},
+                  session_id)
+        except Exception as e:
+            print(f"[LEND-IN] the decline to {sender!r} could not be sent: {e}",
+                  file=sys.stderr)
+        return {"ok": False, "reason": text}
+
+    if LEND_REQUEST is None:
+        return _decline(f"'{me}' runs a HOPLITA that cannot lend models: it has to "
+                        f"be updated.", code="update")
+    print(f"[LEND-IN] {req.get('op', '?')} {req.get('alias', '')!r} from {sender!r} "
+          f"· session={session_id}", file=sys.stderr)
+    cancel_flag = threading.Event()
+    _register_cancel(session_id, cancel_flag)
+    _peer_live = bool((payload or {}).get("live"))
+    outbox = EventOutbox(lambda ev: _send(server_url, token, my_priv, sender,
+                                          sender_pub, T_EVENT, ev, session_id))
+    live = LiveTx(my_priv, sender, sender_pub, session_id, _peer_live)
+
+    def on_event(ev):
+        live.route(live.stamp(dict(ev, t_exec=time.time())), outbox)
+
+    result = None
+    try:
+        result = LEND_REQUEST(req, sender, on_event, cancel_flag, local_sink)
+    except Exception as e:
+        print(f"[LEND-IN] failed serving {sender!r}: {e}", file=sys.stderr)
+        on_event({"event": "error", "code": "failed", "retryable": False,
+                  "error": f"'{me}' could not serve the model request: {e}"})
+    finally:
+        _unregister_cancel(session_id)
+        if not outbox.close(timeout=60):
+            print(f"[SESSION-OUT] outbox did not drain in 60s "
+                  f"(session {session_id})", file=sys.stderr)
+        outbox.report(session_id)
+        _report_live(live)
+    return {"ok": True, "session_id": session_id, "result": result}
+
+
 def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
     store, server_url, token, my_priv, my_pub = _session_ctx()
     session_id = (env.get("meta") or {}).get("session_id") or uuid.uuid4().hex[:12]
@@ -704,6 +751,11 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
     payload = _o.payload if isinstance(_o.payload, dict) else {}
     message = payload.get("message", "")
     max_iter = payload.get("max_iterations")
+
+    _lreq = payload.get("lend_request")
+    if isinstance(_lreq, dict):
+        return _serve_lend_request(_lreq, sender, sender_pub, session_id, payload,
+                                   store, server_url, token, my_priv, local_sink)
 
     trust = get_trust(sender)
     if sender and sender == store.data.get("handle"):

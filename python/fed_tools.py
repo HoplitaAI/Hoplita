@@ -4453,6 +4453,355 @@ def drain_wake_events():
     return out
 
 
+
+import base64 as _b64
+import json as _json
+from datetime import datetime as _dtm
+
+LEND_PERM = "modelos"
+LEND_LEVELS = ("auto", "review", "no")
+LEND_CATALOG = None
+LEND_POOL = None
+CONFIG_APPLY = None
+LEND_USAGE_STORE = "lend_usage"
+LEND_NOTICE_EVERY_S = 600
+_LEND_ONLINE = {}
+_LEND_ONLINE_S = 15.0
+_LEND_LIVE = {}
+_LEND_LIVE_LOCK = _threading.Lock()
+_LEND_NOTICED = {}
+_LEND_SEQ = 0
+
+
+def forget_presence():
+    _LEND_ONLINE.clear()
+
+
+def contact_online(handle, fresh=False):
+    h = (handle or "").strip()
+    if not h:
+        return False
+    now = _time.monotonic()
+    hit = _LEND_ONLINE.get(h.lower())
+    if hit and not fresh and now - hit[0] < _LEND_ONLINE_S:
+        return hit[1]
+    online = False
+    try:
+        st, server_url, token = _require_session()
+        if h == (st.data.get("handle") or ""):
+            online = bool(fed.ws_is_up())
+        else:
+            rows = fed.server_list_contacts(server_url, token).get("contacts", [])
+            online = any(c.get("handle") == h and bool(c.get("online")) for c in rows)
+    except Exception:
+        online = False
+    _LEND_ONLINE[h.lower()] = (now, online)
+    return online
+
+
+def lend_level(handle):
+    try:
+        st = _store()
+    except Exception:
+        return "no", set()
+    h = (handle or "").strip()
+    if h and h == (st.data.get("handle") or ""):
+        return "auto", None
+    if h and h == (st.data.get("owner") or ""):
+        return "auto", None
+    try:
+        _st, server_url, token = _require_session()
+        rows = fed.server_list_contacts(server_url, token).get("contacts", [])
+        trust = _signed_trust_of(st, server_url, token, rows).get(h)
+    except Exception:
+        trust = None
+    if not trust:
+        return "no", set()
+    perm = (trust.get("permissions") or {}).get(LEND_PERM) or {}
+    level = str(perm.get("level") or "no").strip().lower()
+    if level not in LEND_LEVELS:
+        level = "no"
+    granted = {str(a) for a in (perm.get("granted") or []) if a}
+    return level, granted
+
+
+def _lend_set_granted(handle, fn):
+    try:
+        st, server_url, token = _require_session()
+        rows = fed.server_list_contacts(server_url, token).get("contacts", [])
+    except Exception:
+        return False
+    trust = _signed_trust_of(st, server_url, token, rows).get(handle)
+    if trust is None:
+        return False
+    trust = _copy.deepcopy(trust)
+    perm = dict((trust.setdefault("permissions", {})).get(LEND_PERM) or {})
+    perm["granted"] = sorted(fn({str(a) for a in (perm.get("granted") or []) if a}))
+    trust["permissions"][LEND_PERM] = perm
+    if not _resign_trust(st, server_url, token, handle, trust):
+        return False
+    try:
+        fed.server_set_permissions(server_url, token, handle, LEND_PERM, perm)
+    except fed.FedServerError:
+        pass
+    return True
+
+
+def lend_grant(handle, alias):
+    return _lend_set_granted(handle, lambda g: g | {alias})
+
+
+def lend_revoke(handle, alias=""):
+    return _lend_set_granted(handle, lambda g: (g - {alias}) if alias else set())
+
+
+def lend_grants():
+    out = {}
+    try:
+        st, server_url, token = _require_session()
+        rows = fed.server_list_contacts(server_url, token).get("contacts", [])
+        for h, trust in _signed_trust_of(st, server_url, token, rows).items():
+            perm = (trust.get("permissions") or {}).get(LEND_PERM) or {}
+            g = sorted({str(a) for a in (perm.get("granted") or []) if a})
+            lvl = str(perm.get("level") or "no")
+            if g or lvl != "no":
+                out[h] = {"level": lvl, "granted": g}
+    except Exception:
+        pass
+    return out
+
+
+def lend_usage_add(peer, alias, prompt, completion):
+    p, c = int(prompt or 0), int(completion or 0)
+    sql = _sql()
+    if sql is None:
+        return
+    day = _dtm.now().strftime("%Y-%m-%d")
+    key = f"{peer}|{alias}|{day}"
+    try:
+        rows = {r.get("id"): r for r in (sql.load(LEND_USAGE_STORE) or []) if r.get("id")}
+        row = rows.get(key) or {"id": key, "peer": peer, "alias": alias, "day": day,
+                                "calls": 0, "prompt": 0, "completion": 0}
+        row["calls"] = int(row.get("calls") or 0) + 1
+        row["prompt"] = int(row.get("prompt") or 0) + p
+        row["completion"] = int(row.get("completion") or 0) + c
+        row["last"] = _dtm.now().isoformat(timespec="seconds")
+        sql.upsert(LEND_USAGE_STORE, key, row)
+    except Exception as e:
+        print(f"[LEND] usage not counted: {e}", file=_sys.stderr)
+
+
+def lend_usage_rows():
+    sql = _sql()
+    if sql is None:
+        return []
+    try:
+        rows = [r for r in (sql.load(LEND_USAGE_STORE) or []) if r.get("peer")]
+    except Exception:
+        return []
+    rows.sort(key=lambda r: (r.get("day") or "", r.get("peer") or ""), reverse=True)
+    return rows
+
+
+def lend_live_begin(peer, alias):
+    global _LEND_SEQ
+    with _LEND_LIVE_LOCK:
+        _LEND_SEQ += 1
+        lid = f"lend_{_LEND_SEQ}"
+        _LEND_LIVE[lid] = {"peer": peer, "alias": alias, "since": _time.time()}
+    return lid
+
+
+def lend_live_end(lid):
+    with _LEND_LIVE_LOCK:
+        _LEND_LIVE.pop(lid, None)
+
+
+def lend_live_rows():
+    now = _time.time()
+    with _LEND_LIVE_LOCK:
+        return [{"peer": v["peer"], "alias": v["alias"],
+                 "age_s": int(now - v["since"])} for v in _LEND_LIVE.values()]
+
+
+def lend_notice_due(peer, alias):
+    now = _time.monotonic()
+    k = (peer, alias)
+    last = _LEND_NOTICED.get(k)
+    if last is not None and now - last < LEND_NOTICE_EVERY_S:
+        return False
+    _LEND_NOTICED[k] = now
+    return True
+
+
+def ask_lend_approval(peer, alias, text):
+    return _bridge_approver(peer, text, False, session_id=f"lend:{peer}:{alias}")
+
+
+def lend_exchange(handle, req, timeout=120):
+    import fed_session
+    h = (handle or "").strip()
+    if not h:
+        return 400, _json.dumps({"error": {"message": "no handle"}})
+    try:
+        _require_session()
+    except Exception as e:
+        return 503, _json.dumps({"error": {"message": f"not in the federation: {e}",
+                                          "code": "offline"}})
+    if not contact_online(h):
+        return 503, _json.dumps({"error": {"message": f"'{h}' is not online: their HOPLITA "
+                                                     f"is off or away from the server",
+                                          "code": "offline"}})
+    box = {}
+
+    def on_event(ev):
+        if not isinstance(ev, dict):
+            return
+        if ev.get("event") == "proxy_response":
+            box["r"] = ev
+        elif ev.get("event") == "error" and "r" not in box:
+            box["err"] = ev
+
+    orig = fed_session.SessionOriginator(h, on_event, overall_timeout=timeout,
+                                         extra={"lend_request": dict(req)})
+    try:
+        orig.start("[model]", None, should_stop=_turn_stop_probe())
+    except Exception as e:
+        return 502, _json.dumps({"error": {"message": f"could not reach '{h}': {e}"}})
+    r = box.get("r")
+    if r is not None:
+        try:
+            text = _b64.b64decode(r.get("body_b64") or "").decode("utf-8", "replace")
+        except Exception:
+            text = ""
+        return int(r.get("status") or 200), text
+    err = box.get("err") or {}
+    code = err.get("code") or ""
+    status = 403 if code == "declined" else 504 if code in ("unreached", "no_answer") else 502
+    return status, _json.dumps({"error": {"message": err.get("error")
+                                         or f"'{h}' gave no answer", "code": code}})
+
+
+def _lend_pool_alias(handle, alias, name=""):
+    import re as _re
+    pool = (LEND_POOL() if LEND_POOL else {}) or {}
+    taken = {a.lower() for a in (pool.get("aliases") or [])}
+    base = (name or f"{alias}-{handle.split('@', 1)[0]}").strip()
+    base = _re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-.") or "model"
+    cand, n = base, 2
+    while cand.lower() in taken:
+        cand = f"{base}-{n}"
+        n += 1
+    return cand
+
+
+def tool_fed_lent_models(handle):
+    h = (handle or "").strip()
+    if not h:
+        return {"error": "handle is required"}
+    status, text = lend_exchange(h, {"op": "catalog"}, timeout=40)
+    try:
+        body = _json.loads(text) if text else {}
+    except ValueError:
+        body = {"raw": text[:300]}
+    if status != 200:
+        msg = ((body.get("error") or {}).get("message") if isinstance(body.get("error"), dict)
+               else body.get("error")) or f"HTTP {status}"
+        return {"error": msg, "handle": h, "online": status != 503,
+                "code": (body.get("error") or {}).get("code", "") if isinstance(body.get("error"), dict) else ""}
+    pool = (LEND_POOL() if LEND_POOL else {}) or {}
+    mine = {(v.get("via") or "").lower() + "|" + (v.get("model") or ""): v.get("alias")
+            for v in (pool.get("via") or [])}
+    models = []
+    for alias, m in sorted((body.get("models") or {}).items()):
+        m = dict(m or {})
+        m["alias"] = alias
+        m["in_pool"] = mine.get(h.lower() + "|" + alias, "")
+        models.append(m)
+    return {"ok": True, "handle": h, "online": True, "level": body.get("level", ""),
+            "granted": body.get("granted") or [], "models": models,
+            "message": (f"{h} lends {len(models)} model(s)." if models
+                        else f"{h} lends no model right now.")}
+
+
+def tool_fed_add_lent_model(handle, alias, name=""):
+    h, a = (handle or "").strip(), (alias or "").strip()
+    if not h or not a:
+        return {"error": "handle and alias are required"}
+    if CONFIG_APPLY is None:
+        return {"error": "this HOPLITA cannot write its configuration from here"}
+    status, text = lend_exchange(h, {"op": "grant", "alias": a}, timeout=APPROVAL_TIMEOUT_S + 30)
+    try:
+        body = _json.loads(text) if text else {}
+    except ValueError:
+        body = {}
+    if status != 200 or not body.get("granted"):
+        err = body.get("error") if isinstance(body.get("error"), dict) else {"message": body.get("error")}
+        return {"error": (err or {}).get("message") or f"'{h}' did not grant '{a}' (HTTP {status})",
+                "code": (err or {}).get("code", "")}
+    m = body.get("model") or {}
+    pool = (LEND_POOL() if LEND_POOL else {}) or {}
+    for v in pool.get("via") or []:
+        if (v.get("via") or "").lower() == h.lower() and (v.get("model") or "") == a:
+            return {"ok": True, "alias": v.get("alias"), "already": True,
+                    "message": f"'{a}' of {h} is already in your pool as '{v.get('alias')}'."}
+    pa = _lend_pool_alias(h, a, name)
+    sec = f"MODEL:{pa}"
+    changes = [{"section": sec, "key": "via", "value": h},
+               {"section": sec, "key": "model", "value": a}]
+    if m.get("profile"):
+        changes.append({"section": sec, "key": "profile", "value": str(m["profile"])})
+    if m.get("context_length"):
+        changes.append({"section": sec, "key": "context_length", "value": str(int(m["context_length"]))})
+    if m.get("vision") is not None:
+        changes.append({"section": sec, "key": "vision",
+                        "value": "true" if m.get("vision") else "false"})
+    changes.append({"section": "MODELS", "key": pa, "value": "true"})
+    res = CONFIG_APPLY(changes)
+    if not isinstance(res, dict) or res.get("error"):
+        return {"error": (res or {}).get("error") if isinstance(res, dict) else "could not write the config"}
+    return {"ok": True, "alias": pa, "handle": h, "model": m,
+            "message": f"'{a}' of {h} is in your pool as '{pa}': /model {pa} pins it, "
+                       f"and the router may pick it. It answers only while {h} is online."}
+
+
+def tool_fed_remove_lent_model(alias):
+    a = (alias or "").strip()
+    if not a:
+        return {"error": "alias is required"}
+    if CONFIG_APPLY is None:
+        return {"error": "this HOPLITA cannot write its configuration from here"}
+    pool = (LEND_POOL() if LEND_POOL else {}) or {}
+    row = next((v for v in (pool.get("via") or []) if (v.get("alias") or "").lower() == a.lower()), None)
+    if row is None:
+        return {"error": f"'{a}' is not a contact's model in your pool"}
+    res = CONFIG_APPLY([{"section": "MODELS", "key": row["alias"], "delete": True},
+                        {"section": f"MODEL:{row['alias']}", "delete_section": True}])
+    if not isinstance(res, dict) or res.get("error"):
+        return {"error": (res or {}).get("error") if isinstance(res, dict) else "could not write the config"}
+    return {"ok": True, "alias": row["alias"], "handle": row.get("via"),
+            "message": f"'{row['alias']}' ({row.get('model')} of {row.get('via')}) left your pool."}
+
+
+def tool_fed_lend_usage():
+    cat = (LEND_CATALOG() if LEND_CATALOG else {}) or {}
+    return {"ok": True,
+            "lendable": {a: {k: m.get(k) for k in ("model", "profile", "context_length", "vision")}
+                         for a, m in cat.items()},
+            "grants": lend_grants(), "live": lend_live_rows(), "usage": lend_usage_rows()}
+
+
+def tool_fed_revoke_lent_model(handle, alias=""):
+    h = (handle or "").strip()
+    if not h:
+        return {"error": "handle is required"}
+    if not lend_revoke(h, (alias or "").strip()):
+        return {"error": f"could not change what '{h}' may use (not a contact you signed?)"}
+    return {"ok": True, "handle": h, "alias": alias or "",
+            "message": (f"'{alias}' is no longer lent to {h}." if alias
+                        else f"Nothing is lent to {h} any more.")}
+
+
 def _register_outbound_originator(peer, orig):
     with _OUTBOUND_LOCK:
         _OUTBOUND_ORIGINATORS[peer] = orig
@@ -4663,6 +5012,7 @@ def _ws_event(event, data):
         fed.invalidate_keys()
         fed.invalidate_folders()
     if event == "presence" or event == "contact.update":
+        forget_presence()
         _push_wake("contacts", data or {})
         return
     if event in ("folder.shared", "folder.accepted", "folder.unshared"):
@@ -5397,6 +5747,32 @@ FED_TOOLS = {
                 "counts, and whether you are already subscribed. Use it when the "
                 "user asks what someone shares publicly.",
         "fn": lambda a: tool_fed_public_folders(a["handle"])},
+    "fed_lent_models": {
+        "desc": "The models a contact LENDS you: their HOPLITA is asked right now "
+                "(name, what it is good at, context, whether it sees images, and "
+                "whether it is already in your pool). Needs them online. Use it "
+                "when the user asks what models someone shares or lends.",
+        "fn": lambda a: tool_fed_lent_models(a["handle"])},
+    "fed_add_lent_model": {
+        "desc": "Add a contact's model to your pool. Their permission decides "
+                "(auto, or their person is asked once); then a pool line "
+                "`via = <handle>` is written, with no URL and no key: requests "
+                "go through the federation to their machine and back. From then "
+                "on /model, the router and the council use it like any other, "
+                "only while they are online.",
+        "fn": lambda a: tool_fed_add_lent_model(a["handle"], a["alias"], a.get("name", ""))},
+    "fed_remove_lent_model": {
+        "desc": "Take a contact's model out of your pool (the pool alias).",
+        "fn": lambda a: tool_fed_remove_lent_model(a["alias"])},
+    "fed_lend_usage": {
+        "desc": "What YOU lend: the lendable models of this machine, which "
+                "contact may use which, the calls in flight right now, and the "
+                "tokens each contact used per day.",
+        "fn": lambda a: tool_fed_lend_usage()},
+    "fed_revoke_lent_model": {
+        "desc": "Take a lent model back from a contact (one alias, or all "
+                "with no alias): their pool line stops answering at once.",
+        "fn": lambda a: tool_fed_revoke_lent_model(a["handle"], a.get("alias", ""))},
     "fed_subscribe_folder": {
         "desc": "Subscribe READ-ONLY to someone's public folder (no handshake). "
                 "Their updates arrive with their pushes; you cannot write back. "
@@ -5776,6 +6152,35 @@ FED_TOOL_PARAMS = {
         "properties": {
             "handle": {"type": "string", "description": "Whose public catalog "
                        "to list (e.g. someone@server)."},
+        },
+        "required": ["handle"]},
+    "fed_lent_models": {
+        "properties": {
+            "handle": {"type": "string", "description": "The contact whose lent "
+                       "models to list (e.g. someone@server)."},
+        },
+        "required": ["handle"]},
+    "fed_add_lent_model": {
+        "properties": {
+            "handle": {"type": "string", "description": "The contact lending it."},
+            "alias": {"type": "string", "description": "The model's name on THEIR "
+                      "side, as fed_lent_models lists it."},
+            "name": {"type": "string", "description": "The alias it takes in YOUR "
+                     "pool (optional; default <alias>-<their name>)."},
+        },
+        "required": ["handle", "alias"]},
+    "fed_remove_lent_model": {
+        "properties": {
+            "alias": {"type": "string", "description": "The pool alias of the "
+                      "contact's model to remove."},
+        },
+        "required": ["alias"]},
+    "fed_lend_usage": {"properties": {}, "required": []},
+    "fed_revoke_lent_model": {
+        "properties": {
+            "handle": {"type": "string", "description": "The contact."},
+            "alias": {"type": "string", "description": "One lent model to take "
+                      "back; empty = every one."},
         },
         "required": ["handle"]},
     "fed_subscribe_folder": {

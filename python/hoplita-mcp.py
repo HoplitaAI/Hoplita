@@ -2702,6 +2702,9 @@ def _without_images(messages, model, why):
 
 
 def _server_says_blind(base_url, api_key, model):
+    import hoplita_llmcfg
+    if hoplita_llmcfg.lend_of_url(base_url):
+        return False
     key = f"{base_url}|{model}"
     now = time.time()
     _ref = _IMAGES_REFUSED.get(key)
@@ -2770,6 +2773,9 @@ _SERVER_TOOLS = {}
 
 
 def _server_says_no_tools(base_url, api_key, model):
+    import hoplita_llmcfg
+    if hoplita_llmcfg.lend_of_url(base_url):
+        return False
     key = f"{base_url}|{model}"
     now = time.time()
     hit = _SERVER_TOOLS.get(key)
@@ -2876,6 +2882,9 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
         raise Exception("No model configured in [API]")
     if timeout is None:
         timeout = CONFIG.getint("CHAT", "timeout", fallback=120) if CONFIG else 120
+    import hoplita_llmcfg as _lc_t
+    if _lc_t.lend_of_url(base_url):
+        timeout = max(int(timeout or 0), _lend_timeout()) + 60
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -12084,6 +12093,7 @@ def agent_session_events():
     return {"events": fed_tools.drain_session_events(),
             "shares": fed_tools.drain_share_events(),
             "wake": fed_tools.drain_wake_events(),
+            "lend_live": fed_tools.lend_live_rows(),
             "background": hoplita_background.drain_events(),
             "background_live": hoplita_background.live_counts()}
 
@@ -13921,7 +13931,7 @@ def _last_user_said(messages):
     return users[-1] if users else ""
 
 
-def route_turn_model(user_query, emit=None):
+def route_turn_model(user_query, emit=None, local_only=False):
     emit = emit or (lambda ev: None)
     pool = _model_pool()
     if not pool or not user_query:
@@ -13932,7 +13942,16 @@ def route_turn_model(user_query, emit=None):
     def note(key, **args):
         emit({"event": "prep", "note": {"key": key, "args": args}})
 
+    import fed_tools as _fed_tools
     for _n, _m in list(pool.items()):
+        if _m.get("via"):
+            if local_only:
+                note("router.local_only", name=_n)
+                pool.pop(_n)
+            elif not _fed_tools.contact_online(_m["via"]):
+                note("router.owner_offline", name=_n, handle=_m["via"])
+                pool.pop(_n)
+            continue
         if _server_says_no_tools(_m.get("base_url") or "", _m.get("api_key") or "",
                                  _m.get("model") or ""):
             note("router.no_tools", name=_n)
@@ -14034,6 +14053,7 @@ def model_section(cfg, name):
 
 
 def _model_pool():
+    import hoplita_llmcfg
     pool = {}
     if not CONFIG or not CONFIG.has_section("MODELS"):
         return pool
@@ -14046,7 +14066,8 @@ def _model_pool():
         base_url, api_key, model = _resolve_endpoint(sec)
         pool[name] = {"base_url": base_url, "api_key": api_key, "model": model,
                       "profile": CONFIG.get(sec, "profile", fallback="").strip(),
-                      "council": _sits_on_council(CONFIG, sec)}
+                      "council": _sits_on_council(CONFIG, sec),
+                      "via": hoplita_llmcfg.lent_from(CONFIG, sec)}
     return pool
 
 
@@ -14944,6 +14965,7 @@ def _agent_turn_events(req):
 
     ep = req.endpoint or {}
     _conv_key = (req.session or req.session_uuid or "").strip()
+    _lock = _turn_local_only(req.local_only, req.code_project)
     if req.compact and not (ep.get("base_url") and ep.get("model")):
         ep = dict(_LAST_TURN_EP.get(_conv_key) or {})
     elif req.orchestrate or req.council:
@@ -14952,9 +14974,11 @@ def _agent_turn_events(req):
         route_q = req.message or ""
         if not route_q and req.messages:
             route_q = _last_user_said(req.messages)
-        routed = route_turn_model(route_q, events.put) if route_q else None
+        routed = route_turn_model(route_q, events.put, local_only=_lock) if route_q else None
         if routed:
             ep = {"base_url": routed[0], "api_key": routed[1], "model": routed[2]}
+    if not req.compact:
+        ep = _lend_gate(ep, _lock, events.put)
     if _conv_key and not req.compact:
         _LAST_TURN_EP[_conv_key] = dict(ep)
 
@@ -16057,6 +16081,302 @@ except Exception as _e:
     print(f"[TIED] not available: {_e}", file=sys.stderr)
 
 
+
+def _lendable_models():
+    import hoplita_llmcfg
+    out = {}
+    if not CONFIG:
+        return out
+    for sec in CONFIG.sections():
+        if not sec.upper().startswith("MODEL:") or not hoplita_llmcfg.lends(CONFIG, sec):
+            continue
+        alias = sec.split(":", 1)[1]
+        try:
+            b, k, m = _resolve_endpoint(sec)
+        except Exception:
+            continue
+        if not m:
+            continue
+        try:
+            ctx = int(float(CONFIG.get(sec, "context_length", fallback="0") or 0))
+        except Exception:
+            ctx = 0
+        out[alias] = {"model": m, "base_url": b, "api_key": k,
+                      "profile": (CONFIG.get(sec, "profile", fallback="") or "").strip(),
+                      "context_length": ctx,
+                      "vision": hoplita_llmcfg._declared(CONFIG, sec)}
+    return out
+
+
+def _lend_pool_lines():
+    import hoplita_llmcfg
+    aliases, via = [], []
+    if CONFIG:
+        for sec in CONFIG.sections():
+            if not sec.upper().startswith("MODEL:"):
+                continue
+            alias = sec.split(":", 1)[1]
+            aliases.append(alias)
+            h = hoplita_llmcfg.lent_from(CONFIG, sec)
+            if h:
+                via.append({"alias": alias, "via": h,
+                            "model": (CONFIG.get(sec, "model", fallback="") or "").strip() or alias})
+    return {"aliases": aliases, "via": via}
+
+
+def _config_apply_changes(changes):
+    import hoplita_llmcfg
+    path = config_path()
+    try:
+        text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    except Exception as e:
+        return {"error": f"could not read {path}: {e}"}
+    for c in changes or []:
+        if not isinstance(c, dict):
+            return {"error": "each change is an object"}
+        sect = str(c.get("section") or "").strip().strip("[]").strip()
+        if not sect:
+            return {"error": "a change without a section"}
+        if c.get("delete_section"):
+            text = hoplita_llmcfg.del_section(text, sect)
+            continue
+        k = str(c.get("key") or "").strip()
+        if not k:
+            return {"error": f"[{sect}]: a change without a key"}
+        if c.get("delete"):
+            text = hoplita_llmcfg.del_key(text, sect, k)
+        else:
+            v = c.get("value")
+            text = hoplita_llmcfg.set_value(text, sect, k, "" if v is None else str(v))
+    bad = hoplita_llmcfg.ini_problem(text)
+    if bad:
+        return {"error": f"the change would leave config.ini unreadable ({bad}); "
+                         f"nothing was written"}
+    with _SELFCFG_LOCK:
+        try:
+            if os.path.exists(path):
+                shutil.copy(path, path + ".bak")
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            if os.path.exists(path):
+                shutil.copymode(path, tmp)
+            os.replace(tmp, path)
+        except Exception as e:
+            return {"error": f"could not write {path}: {e}"}
+        reloaded = reload_config_endpoint()
+    out = {"ok": True, "path": path}
+    if reloaded.get("error"):
+        out["warnings"] = [f"the reload failed: {reloaded['error']}"]
+    return out
+
+
+def _lend_timeout():
+    try:
+        return max(120, CONFIG.getint("CHAT", "timeout", fallback=120) if CONFIG else 120)
+    except Exception:
+        return 120
+
+
+def _strip_images_for_lend(messages):
+    out = []
+    for m in messages or []:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            out.append(m)
+            continue
+        parts, dropped = [], 0
+        for part in m["content"]:
+            if isinstance(part, dict) and part.get("type") in ("image_url", "input_image", "image"):
+                dropped += 1
+                continue
+            parts.append(part)
+        if dropped:
+            parts.append({"type": "text", "text": f"[{dropped} picture(s) not sent: "
+                                                  f"this model does not see images]"})
+        out.append(dict(m, content=parts))
+    return out
+
+
+def _run_lend_request(req, sender, emit, cancel_flag, local_sink=None):
+    import base64 as _b64
+    import fed_tools
+    import hoplita_llmcfg
+    try:
+        me = fed_tools._store().data.get("handle", "")
+    except Exception:
+        me = ""
+
+    def answer(status, body, ctype="application/json"):
+        raw = body if isinstance(body, (bytes, str)) else json.dumps(body, ensure_ascii=False)
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        emit({"event": "proxy_response", "status": int(status), "ctype": ctype,
+              "body_b64": _b64.b64encode(raw).decode()})
+
+    def refuse(status, text, code="declined"):
+        answer(status, {"error": {"message": text, "code": code}})
+
+    op = str(req.get("op") or "").strip()
+    alias = str(req.get("alias") or "").strip()
+    level, granted = fed_tools.lend_level(sender)
+    if level == "no":
+        return refuse(403, f"'{me}' does not lend models to you (permission 'no').")
+    models = _lendable_models()
+
+    def card(m):
+        return {k: m.get(k) for k in ("model", "profile", "context_length", "vision")}
+
+    if op in ("catalog", "ping"):
+        return answer(200, {"models": {a: card(m) for a, m in models.items()},
+                            "level": level,
+                            "granted": sorted(models) if granted is None else sorted(granted)})
+    m = models.get(alias)
+    if m is None:
+        return refuse(404, f"'{me}' does not lend a model called '{alias}'.", "unknown_model")
+    allowed = level == "auto" or granted is None or alias in granted
+    if op == "grant":
+        if allowed:
+            if granted is not None:
+                fed_tools.lend_grant(sender, alias)
+            return answer(200, {"granted": True, "model": card(m), "level": level})
+        ans = fed_tools.ask_lend_approval(
+            sender, alias, _tr("lend.approve_msg", peer=sender, alias=alias, model=m["model"]))
+        if ans is True:
+            if not fed_tools.lend_grant(sender, alias):
+                return refuse(500, f"'{me}' could not record the grant.", "failed")
+            return answer(200, {"granted": True, "model": card(m), "level": level})
+        if ans == "timeout":
+            return refuse(504, f"'{me}' did not answer: nobody accepted or refused it. "
+                               f"Ask again when they are there.", "no_answer")
+        if ans is None:
+            return refuse(499, "withdrawn", "withdrawn")
+        return refuse(403, f"'{me}' did not grant you '{alias}'.")
+    if op != "chat":
+        return refuse(400, f"unknown request '{op}'", "bad_request")
+    if not allowed:
+        return refuse(403, f"'{me}' has not granted you '{alias}': add it first "
+                           f"(fed_add_lent_model).", "not_granted")
+    try:
+        payload = json.loads(_b64.b64decode(req.get("body_b64") or b"").decode("utf-8"))
+    except Exception:
+        return refuse(400, "the request is not a JSON chat completion", "bad_request")
+    if not isinstance(payload, dict) or not isinstance(payload.get("messages"), list):
+        return refuse(400, "the request carries no messages", "bad_request")
+    payload["model"] = m["model"]
+    payload.pop("stream", None)
+    payload.pop("stream_options", None)
+    if not hoplita_llmcfg.model_sees(CONFIG, m["base_url"], m["model"]):
+        payload["messages"] = _strip_images_for_lend(payload["messages"])
+    _merge_extra_body(payload, m["base_url"], m["model"])
+    headers = {"Content-Type": "application/json"}
+    if m.get("api_key"):
+        headers["Authorization"] = f"Bearer {m['api_key']}"
+    if local_sink is not None and fed_tools.lend_notice_due(sender, alias):
+        try:
+            local_sink({"event": "model_lent", "peer": sender, "alias": alias,
+                        "model": m["model"]})
+        except Exception:
+            pass
+    lid = fed_tools.lend_live_begin(sender, alias)
+    t0 = time.time()
+    status, text, data = 502, "", None
+    try:
+        r = _http().post(f"{m['base_url']}/chat/completions", json=payload,
+                         headers=headers, timeout=_lend_timeout())
+        status, text = r.status_code, r.text or ""
+        if status == 200:
+            try:
+                data = r.json()
+            except ValueError:
+                data = None
+    except Exception as e:
+        text = json.dumps({"error": {"message": f"the model on '{me}' did not answer: {e}",
+                                     "code": "failed"}})
+    finally:
+        fed_tools.lend_live_end(lid)
+    usage = (data or {}).get("usage") or {} if isinstance(data, dict) else {}
+    p_tok = int(usage.get("prompt_tokens") or 0)
+    c_tok = int(usage.get("completion_tokens") or 0)
+    if isinstance(data, dict):
+        _count_tokens(data.get("model") or m["model"], usage, sent=f"{alias} → {sender}")
+    fed_tools.lend_usage_add(sender, alias, p_tok, c_tok)
+    secs = round(time.time() - t0, 1)
+    print(f"[LEND] {sender} used {alias} ({m['model']}): HTTP {status}, "
+          f"{p_tok} in / {c_tok} out, {secs}s", file=sys.stderr)
+    if local_sink is not None:
+        try:
+            local_sink({"event": "model_lent_done", "peer": sender, "alias": alias,
+                        "status": status, "prompt_tokens": p_tok,
+                        "completion_tokens": c_tok, "seconds": secs})
+        except Exception:
+            pass
+    answer(status, text)
+
+
+def _completion_as_sse(d):
+    cid = d.get("id") or "lend"
+    model = d.get("model") or ""
+    created = d.get("created") or int(time.time())
+
+    def chunk(delta, finish=None, usage=None):
+        c = {"id": cid, "object": "chat.completion.chunk", "created": created,
+             "model": model,
+             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        if usage is not None:
+            c["usage"] = usage
+        return "data: " + json.dumps(c, ensure_ascii=False) + "\n\n"
+    choice = (d.get("choices") or [{}])[0] or {}
+    msg = choice.get("message") or {}
+    yield chunk({"role": msg.get("role") or "assistant", "content": ""})
+    if msg.get("content"):
+        yield chunk({"content": msg["content"]})
+    if msg.get("tool_calls"):
+        yield chunk({"tool_calls": [dict(tc, index=i) for i, tc in enumerate(msg["tool_calls"])]})
+    yield chunk({}, finish=choice.get("finish_reason") or "stop", usage=d.get("usage"))
+    yield "data: [DONE]\n\n"
+
+
+def _local_fallback_endpoint():
+    import hoplita_llmcfg
+    b = _resolve_endpoint("API")
+    if not hoplita_llmcfg.lend_of_url(b[0]):
+        return {"base_url": b[0], "api_key": b[1], "model": b[2]}
+    for _n, m in _model_pool().items():
+        if not m.get("via"):
+            return {"base_url": m["base_url"], "api_key": m["api_key"], "model": m["model"]}
+    return {}
+
+
+def _lend_gate(ep, lock, emit):
+    import fed_tools
+    import hoplita_llmcfg
+    eff = ep if (ep or {}).get("base_url") else {}
+    url = eff.get("base_url") or _resolve_endpoint("API")[0]
+    lent = hoplita_llmcfg.lend_of_url(url)
+    if not lent:
+        return ep
+    why = "local_only" if lock else ("" if fed_tools.contact_online(lent[0]) else "offline")
+    if not why:
+        return ep
+    fb = _local_fallback_endpoint()
+    emit({"event": "model_unavailable", "model": eff.get("model") or lent[1],
+          "handle": lent[0], "why": why, "fallback": fb.get("model") or ""})
+    print(f"[LEND] {lent[1]} of {lent[0]} cannot serve this turn ({why}): "
+          f"{fb.get('model') or 'no local model'} answers", file=sys.stderr)
+    return fb
+
+
+try:
+    import fed_session as _fed_session_mod2
+    import fed_tools as _fed_tools_mod2
+    _fed_session_mod2.LEND_REQUEST = _run_lend_request
+    _fed_tools_mod2.LEND_CATALOG = _lendable_models
+    _fed_tools_mod2.LEND_POOL = _lend_pool_lines
+    _fed_tools_mod2.CONFIG_APPLY = _config_apply_changes
+except Exception as _e:
+    print(f"[LEND] not available: {_e}", file=sys.stderr)
+
+
 @app.api_route("/tied/{device}/{path:path}",
                methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def tied_proxy(device: str, path: str, request: Request):
@@ -16145,6 +16465,64 @@ async def tied_proxy(device: str, path: str, request: Request):
         finally:
             cancel_ev.set()
     return StreamingResponse(_stream(), media_type="application/x-ndjson")
+
+
+@app.api_route("/lend/{handle}/{alias}/v1/{path:path}", methods=["GET", "POST"])
+async def lend_proxy(handle: str, alias: str, path: str, request: Request):
+    import base64 as _b64
+    import fed_tools
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import Response
+
+    def _err(status, msg, code=""):
+        return Response(json.dumps({"error": {"message": msg, "code": code}},
+                                   ensure_ascii=False),
+                        status_code=status, media_type="application/json")
+
+    path = path.strip("/")
+    if request.method == "GET" and path == "models":
+        st, text = await run_in_threadpool(fed_tools.lend_exchange, handle,
+                                           {"op": "ping"}, 40)
+        if st != 200:
+            return Response(text or "{}", status_code=st, media_type="application/json")
+        try:
+            names = sorted((json.loads(text).get("models") or {}))
+        except Exception:
+            names = []
+        if alias not in names:
+            return _err(404, f"'{handle}' does not lend '{alias}'", "unknown_model")
+        return Response(json.dumps({"object": "list",
+                                    "data": [{"id": alias, "object": "model",
+                                              "owned_by": handle}]}),
+                        media_type="application/json")
+    if request.method != "POST" or path != "chat/completions":
+        return _err(404, f"/{path} is not served for a contact's model: only "
+                         f"chat/completions and models", "not_found")
+    body = await request.body()
+    if len(body) > _TIED_MAX_BYTES:
+        return _err(413, f"this request is {len(body) // 1_000_000} MB, more than a "
+                         f"contact's model takes ({_TIED_MAX_BYTES // 100_000 / 10} MB)",
+                    "too_big")
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return _err(400, "not a JSON chat completion", "bad_request")
+    if not isinstance(payload, dict):
+        return _err(400, "not a JSON chat completion", "bad_request")
+    want_stream = bool(payload.pop("stream", False))
+    payload.pop("stream_options", None)
+    req = {"op": "chat", "alias": alias,
+           "body_b64": _b64.b64encode(json.dumps(payload, ensure_ascii=False)
+                                      .encode("utf-8")).decode()}
+    st, text = await run_in_threadpool(fed_tools.lend_exchange, handle, req,
+                                       _lend_timeout() + 30)
+    if not want_stream or st != 200:
+        return Response(text or "{}", status_code=st, media_type="application/json")
+    try:
+        d = json.loads(text)
+    except Exception:
+        return Response(text, status_code=502, media_type="application/json")
+    return StreamingResponse(_completion_as_sse(d), media_type="text/event-stream")
 
 
 class HandsControlReq(BaseModel):

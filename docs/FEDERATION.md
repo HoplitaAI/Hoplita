@@ -562,6 +562,48 @@ This works between machines that share your identity (step 2).
 The tied machine must be running and logged in to the federation. If it is
 not, the tab says *Could not reach "…"*.
 
+### Use a contact's model, and lend yours
+
+A contact's model can sit in your pool like any other: `/model` pins it, the
+router may pick it, a council may seat it, the browser may drive on it. It
+runs on their machine: your requests travel to their HOPLITA sealed, inside
+the federation, and the answer comes back the same way. Neither of you opens
+anything on the network, and their key never leaves their machine.
+
+**Lending (their side).**
+
+1. **Configuration** → **Models** → the model's details (✎) → tick **Lend to
+   contacts?** (`lend = true` on its line).
+2. **Contacts** → right-click the contact → **Edit permissions** → **Models
+   (lent)**: *auto-accept* (they may add any lendable model), *review* (your
+   HOPLITA asks you once per model they add, in the same dialog a session
+   request uses), *no*.
+3. You see every use: the federation line shows «lending qwen → alice» while
+   a call is in flight, with the day's count on hover; the chat says when a
+   contact starts using a model (once, then again after ten minutes); the 📊
+   meter has a row `qwen → alice`; **Contacts** → right-click the contact →
+   **Models you lend them…** lists what you granted, what they used per day,
+   and takes it all back in one click. What they send to your model, your
+   server sees; what runs is the model, never a tool.
+
+**Using (your side).**
+
+1. **Contacts** → right-click the contact → **🧠 Models they lend…** (they must
+   be online). Pick one → **Add to my pool**. With *review* on their side the
+   dialog waits for their yes, up to five minutes.
+2. The model appears in **Configuration** → **Models** as «qwen · lent by
+   bob@hoplita.net», with no server and no key, and in `/model` as
+   `qwen-bob (lent by bob@hoplita.net)`. `/model qwen-bob` pins it.
+3. While they are offline `/model` lists it with «offline» and refuses to pin
+   it; the router leaves it out; a turn already pinned to it falls to a model
+   of your own, said in the chat. A local-only conversation or project (🔒)
+   never goes to a contact's model: the lock wins and the chat says so.
+4. **Remove from my pool** in the same dialog takes it out.
+
+What travels: each call carries the conversation it needs (up to ~2.8 MB) to
+their machine and the answer comes back whole, so the first token shows when
+the answer is complete. A model lent to you is never lent on by you.
+
 ## 7. Children
 
 There are two kinds of child. The guide explains the difference

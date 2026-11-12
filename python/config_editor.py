@@ -260,7 +260,8 @@ class AutoSpinBox(QSpinBox):
 
 MODEL_FIELDS = [("model", "str"), ("base_url", "str"), ("api_key", "pwd"),
                 ("context_length", "int"), ("profile", "str"),
-                ("vision", "tri"), ("council", "bool"), ("extra_body", "str")]
+                ("vision", "tri"), ("council", "bool"), ("extra_body", "str"),
+                ("lend", "flag"), ("via", "ro")]
 
 
 def _keep_inline_comment(old_line, new_line):
@@ -1066,6 +1067,8 @@ class ConfigEditorDialog(QDialog):
             is_base = row["name"].text().strip().lower() == (self._base_alias or "").lower()
             url, key = (lit if is_base else (b_url, b_key))
             f = row["fields"]
+            if f["via"][0].text().strip():
+                continue
             if not f["base_url"][0].text().strip() and url:
                 f["base_url"][0].setText(url)
             if not f["api_key"][0].text().strip() and key:
@@ -1271,14 +1274,18 @@ class ConfigEditorDialog(QDialog):
         model = fields["model"][0].text().strip()
         url = fields["base_url"][0].text().strip()
         vis = fields["vision"][0].currentIndex()
+        via = fields["via"][0].text().strip()
         bits = [model or self._t("cfg.row_no_model"),
-                self._host_of(url) if url else self._t("cfg.row_default_server")]
+                self._t("cfg.row_lent_by", handle=via) if via
+                else self._host_of(url) if url else self._t("cfg.row_default_server")]
         if vis == 1:
             bits.append("👁 " + self._t("cfg.row_sees"))
         elif vis == 2:
             bits.append(self._t("cfg.row_blind"))
         if not fields["council"][0].isChecked():
             bits.append(self._t("cfg.row_no_council"))
+        if not via and fields["lend"][0].isChecked():
+            bits.append(self._t("cfg.row_lends"))
         return "  ·  ".join(bits)
 
     def _add_model_row(self, name, enabled, data, section=None, expanded=False):
@@ -1331,7 +1338,7 @@ class ConfigEditorDialog(QDialog):
         form = left_form(QFormLayout(details))
         form.setContentsMargins(0, 6, 0, 2)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        fields = {}
+        fields, labels = {}, {}
         for key, kind in MODEL_FIELDS:
             cur = str(data.get(key, "")).strip()
             if kind == "pwd":
@@ -1355,6 +1362,14 @@ class ConfigEditorDialog(QDialog):
                 w = QCheckBox()
                 w.setChecked(cur.lower() not in ("false", "0", "no", "off"))
                 w.setToolTip(self._t(f"cfg.h.MODEL.{key}"))
+            elif kind == "flag":
+                w = QCheckBox()
+                w.setChecked(cur.lower() in ("true", "1", "yes", "on"))
+                w.setToolTip(self._t(f"cfg.h.MODEL.{key}"))
+            elif kind == "ro":
+                w = QLineEdit(cur)
+                w.setReadOnly(True)
+                w.setToolTip(self._t(f"cfg.h.MODEL.{key}"))
             else:
                 w = QLineEdit(cur)
             if key == "profile":
@@ -1366,7 +1381,12 @@ class ConfigEditorDialog(QDialog):
             _lbl.setToolTip(key)
             form.addRow(_lbl, w)
             fields[key] = (w, kind)
+            labels[key] = _lbl
         bl.addWidget(details)
+        _via = str(data.get("via", "")).strip()
+        for key in (("base_url", "api_key", "extra_body", "lend") if _via else ("via",)):
+            labels[key].hide()
+            fields[key][0].hide()
 
         def _resum(*_a):
             summary.setText(self._row_summary(fields))
@@ -1374,6 +1394,7 @@ class ConfigEditorDialog(QDialog):
             fields[key][0].textChanged.connect(_resum)
         fields["vision"][0].currentIndexChanged.connect(_resum)
         fields["council"][0].toggled.connect(_resum)
+        fields["lend"][0].toggled.connect(_resum)
         _resum()
         open_ = expanded or not fields["model"][0].text().strip()
         details.setVisible(open_)
@@ -1491,6 +1512,12 @@ class ConfigEditorDialog(QDialog):
         self._test_endpoint(url, key, model)
 
     def _test_model_row(self, row):
+        _via = row["fields"]["via"][0].text().strip()
+        if _via:
+            import hoplita_llmcfg
+            _alias = row["fields"]["model"][0].text().strip() or row["name"].text().strip()
+            self._test_endpoint(hoplita_llmcfg.lend_url(self._cp, _via, _alias), "", _alias)
+            return
         url = row["fields"]["base_url"][0].text().strip() \
             or (self._cp.get("API", "base_url", fallback="").strip())
         key = row["fields"]["api_key"][0].text().strip() \
@@ -1537,7 +1564,7 @@ class ConfigEditorDialog(QDialog):
             done(work())
 
     def _value_of(self, w, kind):
-        if kind == "bool":
+        if kind in ("bool", "flag"):
             return "true" if w.isChecked() else "false"
         if kind == "int":
             return str(w.value())
@@ -1629,8 +1656,21 @@ class ConfigEditorDialog(QDialog):
                              else "false")
             target = (f"MODEL:{name}" if renamed
                       else (row.get("orig_section") or f"MODEL:{name}"))
+            _via = row["fields"]["via"][0].text().strip()
             for key, (w, kind) in row["fields"].items():
-                base = set_value(base, target, key, self._value_of(w, kind))
+                val = self._value_of(w, kind)
+                if key == "via":
+                    if _via:
+                        base = set_value(base, target, key, _via)
+                    continue
+                if _via and key in ("base_url", "api_key", "extra_body", "lend"):
+                    base = del_key(base, target, key)
+                    continue
+                if key == "lend":
+                    base = (set_value(base, target, key, "true") if val == "true"
+                            else del_key(base, target, key))
+                    continue
+                base = set_value(base, target, key, val)
         if _chosen_base:
             base = set_value(base, "MODELS", "base", _chosen_base)
         else:
