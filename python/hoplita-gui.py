@@ -13435,7 +13435,8 @@ enabled = true
         cur.insertHtml(self._qa_link_html(rid))
         sb.setValue(keep)
 
-    TU_COLOR = "#fb7185"
+    TU_COLOR = "#a5b4fc"
+    TU_ERROR_COLOR = "#f87171"
     _UNFOLDED_TURNS = ("_compact_run",)
 
     def _tu_store(self):
@@ -13484,7 +13485,8 @@ enabled = true
         import html as _h
         rec = self._tu_store().get(rid) or {}
         verb, key = ("tu-hide", "tu.hide") if hide else ("tu", "tu.view")
-        return (f'<a href="hoplita:{verb}:{int(rid)}" style="color:{self.TU_COLOR};'
+        col = self.TU_ERROR_COLOR if rec.get("errors") else self.TU_COLOR
+        return (f'<a href="hoplita:{verb}:{int(rid)}" style="color:{col};'
                 f'text-decoration:none;">{_h.escape(self._tu_summary(rec))}'
                 f'&nbsp;&nbsp;·&nbsp;&nbsp;{_h.escape(t(key))}</a>')
 
