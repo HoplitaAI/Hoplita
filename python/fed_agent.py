@@ -969,6 +969,50 @@ def args_preview(args, limit=120):
     return out if len(out) <= limit else out[:limit - 1] + "…"
 
 
+def result_preview(name, result, limit=200):
+    txt = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+    if not txt.startswith("{") or '"file"' not in txt:
+        return txt[:limit]
+    try:
+        o = json.loads(txt)
+    except Exception:
+        return txt[:limit]
+    items = None
+    if isinstance(o, dict):
+        for key in ("results", "matches"):
+            cand = o.get(key)
+            if (isinstance(cand, list) and cand
+                    and all(isinstance(x, dict) and "file" in x and "line" in x
+                            for x in cand[:5])):
+                items = cand
+                break
+    if items is None:
+        return txt[:limit]
+    files = len({str(x.get("file")) for x in items})
+    head = f"{len(items)} hits"
+    m = re.match(r"items 1-(\d+) of (\d+)", str(o.get("cut") or ""))
+    if m:
+        head = f"{m.group(1)} of {m.group(2)} hits"
+    head += f" in {files} file{'s' if files != 1 else ''}: "
+    seen, parts = set(), []
+    for x in items:
+        f = str(x.get("file", "")).replace("\\", "/").rsplit("/", 1)[-1]
+        sc = x.get("scope") or x.get("symbol")
+        span = x.get("scope_lines") or (f"{x.get('line')}-{x.get('ends')}" if x.get("ends") else None)
+        k = (f, sc, span)
+        if k in seen:
+            continue
+        seen.add(k)
+        if sc and span:
+            parts.append(f"{f} {sc} {span}")
+        elif sc:
+            parts.append(f"{f} {sc}")
+        else:
+            parts.append(f"{f}:{x.get('line')}")
+    out = head + ", ".join(parts)
+    return out if len(out) <= limit else out[:limit - 1] + "…"
+
+
 def _execute_tool(name, arguments, consented=False):
     if _on_tool_used is not None and name != "load_tools":
         try:
@@ -2676,7 +2720,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                       "reason": "loop", "tool": name, "council": bool(council)})
                 tool_trace.append({"tool": name, "args": args, "result": result})
                 emit({"event": "tool_result", "tool": name,
-                      "result_preview": result[:200], "duration_s": dur,
+                      "result_preview": result_preview(name, result), "duration_s": dur,
                       "delegated": delegated})
                 continue
             if _repeats.get(_firma, 1) >= _LOOP_LIMIT:
@@ -2719,7 +2763,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                         "transcript": messages[_turn_base:]}
             tool_trace.append({"tool": name, "args": args, "result": result})
             emit({"event": "tool_result", "tool": name,
-                  "result_preview": result[:200], "duration_s": dur,
+                  "result_preview": result_preview(name, result), "duration_s": dur,
                   "delegated": delegated})
             messages.append({
                 "role": "tool",

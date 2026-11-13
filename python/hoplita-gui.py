@@ -13501,19 +13501,24 @@ enabled = true
         if rec is None:
             return
         if tab_id == self._active_tab_id:
-            if self._tu_anchor_span(f"hoplita:tu-hide:{rid}") is not None:
-                self._collapse_tool_usage(rid)
-                self._expand_tool_usage(rid)
+            sb = self.chat_display.verticalScrollBar()
+            keep, at_bottom = sb.value(), sb.value() >= sb.maximum() - 2
+            hide = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
+            if hide is not None:
+                end = self._tu_box_end(hide)
+                cur = QTextCursor(self.chat_display.document())
+                cur.setPosition(hide[0])
+                cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+                cur.insertHtml(self._tu_link_html(rid, hide=True) + self._tu_box_html(rid))
+                sb.setValue(sb.maximum() if at_bottom else keep)
                 return
             span = self._tu_anchor_span(f"hoplita:tu:{rid}")
             if span is not None:
-                sb = self.chat_display.verticalScrollBar()
-                keep = sb.value()
                 cur = QTextCursor(self.chat_display.document())
                 cur.setPosition(span[0])
                 cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
                 cur.insertHtml(self._tu_link_html(rid))
-                sb.setValue(keep)
+                sb.setValue(sb.maximum() if at_bottom else keep)
                 return
         else:
             tab = self._tab_by_id(tab_id)
@@ -13531,46 +13536,27 @@ enabled = true
             f'<span style="color:#22d3ee;font-weight:bold">{t("label.system")}:</span> '
             + self._tu_link_html(rid) + "<br>"))
 
-    def _expand_tool_usage(self, rid, event=None):
+    def _tu_box_html(self, rid):
         import html as _h
-        from PyQt6.QtWidgets import QToolTip
-        rec = self._tu_store().get(rid)
-        if rec is None:
-            if event is not None:
-                QToolTip.showText(event.globalPosition().toPoint(),
-                                  t("tu.gone"), self.chat_display)
-            return
-        span = self._tu_anchor_span(f"hoplita:tu:{rid}")
-        if span is None:
-            return
+        rec = self._tu_store().get(rid) or {}
         ink, label_c, card_bg, inset_bg, line = "#e6edf7", "#8296b1", "#111a2e", "#0b1220", "#1f2a44"
         rows = []
         for ts, kind, text in list(rec.get("lines") or []):
             col = "#f87171" if kind == "error" else ink
             rows.append(f'<span style="color:#64748b">[{_h.escape(str(ts))}]</span> '
                         f'<span style="color:{col}">{_h.escape(str(text))}</span>')
-        box = (f'<table width="100%" cellspacing="0" cellpadding="0" style="margin:6px 0 10px 0;">'
-               f'<tr><td width="3" bgcolor="{self.TU_COLOR}"></td>'
-               f'<td bgcolor="{card_bg}" style="padding:10px 14px;border:1px solid {line};'
-               f'border-left:none;">'
-               f'<p style="margin:0 0 6px 0;color:{label_c};font-size:12px;font-weight:600;">'
-               f'{_h.escape(t("tu.card_title", n=len(rows)).upper())}</p>'
-               f'<table width="100%" cellspacing="0" cellpadding="10"><tr><td bgcolor="{inset_bg}" '
-               f'style="border:1px solid {line};"><pre style="white-space:pre-wrap;margin:0;'
-               f'font-family:monospace;">' + "\n".join(rows) + '</pre></td></tr></table>'
-               '</td></tr></table>')
-        sb = self.chat_display.verticalScrollBar()
-        keep = sb.value()
-        cur = QTextCursor(self.chat_display.document())
-        cur.setPosition(span[0])
-        cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
-        cur.insertHtml(self._tu_link_html(rid, hide=True) + box)
-        sb.setValue(keep)
+        return (f'<table width="100%" cellspacing="0" cellpadding="0" style="margin:6px 0 10px 0;">'
+                f'<tr><td width="3" bgcolor="{self.TU_COLOR}"></td>'
+                f'<td bgcolor="{card_bg}" style="padding:10px 14px;border:1px solid {line};'
+                f'border-left:none;">'
+                f'<p style="margin:0 0 6px 0;color:{label_c};font-size:12px;font-weight:600;">'
+                f'{_h.escape(t("tu.card_title", n=len(rows)).upper())}</p>'
+                f'<table width="100%" cellspacing="0" cellpadding="10"><tr><td bgcolor="{inset_bg}" '
+                f'style="border:1px solid {line};"><pre style="white-space:pre-wrap;margin:0;'
+                f'font-family:monospace;">' + "\n\n".join(rows) + '</pre></td></tr></table>'
+                '</td></tr></table>')
 
-    def _collapse_tool_usage(self, rid):
-        span = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
-        if span is None:
-            return
+    def _tu_box_end(self, span):
         doc = self.chat_display.document()
         cur = QTextCursor(doc)
         cur.setPosition(span[1])
@@ -13582,16 +13568,43 @@ enabled = true
             if table is not None:
                 break
         if table is None:
-            return
+            return span[1]
         from PyQt6.QtGui import QTextTable
         while isinstance(table.parentFrame(), QTextTable):
             table = table.parentFrame()
+        return min(table.lastPosition() + 1, doc.characterCount() - 1)
+
+    def _expand_tool_usage(self, rid, event=None):
+        from PyQt6.QtWidgets import QToolTip
+        rec = self._tu_store().get(rid)
+        if rec is None:
+            if event is not None:
+                QToolTip.showText(event.globalPosition().toPoint(),
+                                  t("tu.gone"), self.chat_display)
+            return
+        span = self._tu_anchor_span(f"hoplita:tu:{rid}")
+        if span is None:
+            return
         sb = self.chat_display.verticalScrollBar()
         keep = sb.value()
-        cur = QTextCursor(doc)
+        cur = QTextCursor(self.chat_display.document())
         cur.setPosition(span[0])
-        cur.setPosition(min(table.lastPosition() + 1, doc.characterCount() - 1),
-                        QTextCursor.MoveMode.KeepAnchor)
+        cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
+        cur.insertHtml(self._tu_link_html(rid, hide=True) + self._tu_box_html(rid))
+        sb.setValue(keep)
+
+    def _collapse_tool_usage(self, rid):
+        span = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
+        if span is None:
+            return
+        end = self._tu_box_end(span)
+        if end == span[1]:
+            return
+        sb = self.chat_display.verticalScrollBar()
+        keep = sb.value()
+        cur = QTextCursor(self.chat_display.document())
+        cur.setPosition(span[0])
+        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
         cur.insertHtml(self._tu_link_html(rid))
         sb.setValue(keep)
 
