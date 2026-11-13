@@ -17341,7 +17341,8 @@ enabled = true
             if _m:
                 arguments["endpoint"] = {"base_url": _b, "api_key": _k,
                                          "model": _m}
-        args_preview = json.dumps(arguments, ensure_ascii=False)[:120]
+        import fed_agent as _fa_prev
+        args_preview = _fa_prev.args_preview(arguments)
         self.thread_msg(f"🔗 MCP → {tool_name}({args_preview})", "system")
         t0 = time.time()
         result = self._mcp_call(tool_name, arguments)
@@ -18596,7 +18597,7 @@ enabled = true
                             "intent", "plan_and_orchestrate", "call_council"):
                         tool_idx += 1
                         name = ev.get("tool", "")
-                        self.thread_msg(f"  {tool_idx}. {name}({str(ev.get('args_preview') or '')[:80]}...)")
+                        self.thread_msg(f"  {tool_idx}. {name}({ev.get('args_preview') or ''})")
                         self.thread_msg(f"🔗 MCP ⟲ {name}", "system")
                         self._tu_tools(tool_idx)
                         _sctx = getattr(self, "_chat_ctxs", {}).get(tab)

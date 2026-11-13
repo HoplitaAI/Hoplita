@@ -941,6 +941,34 @@ def unwrap_call_envelope(name, arguments):
     return arguments
 
 
+def args_preview(args, limit=120):
+    if not isinstance(args, dict):
+        s = str(args)
+        return s if len(s) <= limit else s[:limit - 1] + "…"
+
+    def _short(v):
+        if isinstance(v, str):
+            if len(v) <= 40:
+                return repr(v)
+            if not v.split()[1:] and ("/" in v or "\\" in v):
+                return repr("…" + v[-37:])
+            return repr(v[:37] + "…")
+        if isinstance(v, (dict, list, tuple)):
+            try:
+                t = json.dumps(v, ensure_ascii=False, default=str)
+            except Exception:
+                t = str(v)
+        else:
+            t = repr(v)
+        return t if len(t) <= 40 else t[:37] + "…"
+
+    _long = (str, dict, list, tuple)
+    items = ([(k, v) for k, v in args.items() if not isinstance(v, _long)]
+             + [(k, v) for k, v in args.items() if isinstance(v, _long)])
+    out = ", ".join(f"{k}={_short(v)}" for k, v in items)
+    return out if len(out) <= limit else out[:limit - 1] + "…"
+
+
 def _execute_tool(name, arguments, consented=False):
     if _on_tool_used is not None and name != "load_tools":
         try:
@@ -2237,7 +2265,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
 
             if name == "intent":
                 emit({"event": "tool_call", "tool": name,
-                      "args_preview": str(args)[:120]})
+                      "args_preview": args_preview(args)})
                 _changed, result = _apply_intent(intent_items, args)
                 if _changed:
                     _progress()
@@ -2365,7 +2393,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                               "background": _job["id"]})
                     else:
                         emit({"event": "tool_call", "tool": name,
-                              "args_preview": str(args)[:120],
+                              "args_preview": args_preview(args),
                               "background": _job["id"]})
                     result = json.dumps(
                         {"started": True, "job_id": _job["id"], "tool": name,
@@ -2411,7 +2439,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                             "iterations": iteration}
             else:
                 emit({"event": "tool_call", "tool": name,
-                      "args_preview": str(args)[:120]})
+                      "args_preview": args_preview(args)})
                 _tool_emit.fn = emit
                 _tool_emit.tail = _conversation_tail(messages)[-8:]
                 _tool_emit.messages = messages
