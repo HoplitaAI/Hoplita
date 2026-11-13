@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os, sys, json, time, platform, subprocess, base64, re, hashlib, getpass, uuid
+import stat
 
 for _stream in (sys.stdout, sys.stderr):
     if _stream is not None and hasattr(_stream, "reconfigure"):
@@ -7534,14 +7535,15 @@ def _search_counts(root, query, file_pattern, single):
     t0 = time.time()
     ql = query.lower()
     found, engine = [], ""
-    g = shutil.which("grep")
+    g = _search_grep(query)
     if g:
-        cmd = [g, "-rIicHF"]
+        cmd = [g, "-rIicHF", "-D", "skip"]
         if file_pattern:
             cmd.append(f"--include={file_pattern}")
         cmd.append("--exclude-dir=.*")
         cmd += [f"--exclude-dir={d}" for d in sorted(_CODE_SKIP_DIRS)]
-        cmd += [f"--exclude=*{e}" for e in sorted(_CODE_SKIP_EXTS)]
+        for e in sorted(_CODE_SKIP_EXTS):
+            cmd += [f"--exclude=*{e}", f"--exclude=*{e.upper()}"]
         cmd += ["--", query, root]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
@@ -7571,6 +7573,8 @@ def _search_counts(root, query, file_pattern, single):
                         continue
                     paths.append(os.path.join(r_, fn))
         for fp in paths:
+            if not _search_readable(fp):
+                continue
             n = 0
             try:
                 with open(fp, "r", encoding="utf-8", errors="replace") as fh:
@@ -7587,15 +7591,32 @@ def _search_counts(root, query, file_pattern, single):
     return files, engine, round(time.time() - t0, 2)
 
 
+def _search_grep(query):
+    if not query.isascii():
+        return None
+    return shutil.which("grep")
+
+
+def _search_readable(fp):
+    try:
+        st = os.stat(fp)
+        if not stat.S_ISREG(st.st_mode):
+            return False
+        with open(fp, "rb") as fh:
+            return b"\0" not in fh.read(8192)
+    except OSError:
+        return False
+
+
 def _search_lines(paths, query):
     ql = query.lower()
     out = {fp: [] for fp in paths}
-    g = shutil.which("grep")
+    g = _search_grep(query)
     if g and paths:
         try:
             for k in range(0, len(paths), 100):
                 chunk = paths[k:k + 100]
-                r = subprocess.run([g, "-nIiHF", "--", query] + chunk, capture_output=True,
+                r = subprocess.run([g, "-nIiHF", "-D", "skip", "--", query] + chunk, capture_output=True,
                                    text=True, errors="replace",
                                    env=dict(os.environ, LC_ALL="C"), timeout=300,
                                    **__import__("hoplita_paths").no_console())
@@ -7613,6 +7634,9 @@ def _search_lines(paths, query):
         except (OSError, subprocess.TimeoutExpired):
             pass
     for fp in paths:
+        if not _search_readable(fp):
+            out[fp] = []
+            continue
         try:
             with open(fp, "r", encoding="utf-8", errors="replace") as fh:
                 out[fp] = [(i, line.strip()[:200]) for i, line in enumerate(fh, 1)
@@ -7638,6 +7662,10 @@ def tool_code_search(path, query, file_pattern=None, per_scope=5, cursor=None):
     p = os.path.abspath(os.path.expanduser(path))
     if not os.path.exists(p):
         return {"error": f"{p} does not exist", "searched": p}
+    if not str(query or "").strip():
+        return {"error": "code_search needs 'query': the literal text to find (an empty text matches every line and says nothing)", "searched": p}
+    if "\n" in query or "\r" in query:
+        return {"error": "the text to find is ONE line: a line break in it matches nothing. Search one line, then the next.", "searched": p}
     single = os.path.isfile(p)
     sid = hashlib.sha1(f"{p}|{query.lower()}|{file_pattern or ''}".encode("utf-8")).hexdigest()[:8]
     ent = _SEARCH_CACHE.get(sid)
