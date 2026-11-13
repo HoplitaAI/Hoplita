@@ -280,7 +280,9 @@ def _cut_text_field(name, args, result, cap):
             obj["cut"] = (f"items 1-{len(kept)} of {len(lst)} in '{lkey}'. The "
                           f"rest EXISTS and is not here. Never fill it in "
                           f"from memory.")
-            obj["next"] = _range_hint(name)
+            obj["next"] = (f"re-call {name} narrower (a sub-path, a "
+                           f"file_pattern, a longer and more specific query), "
+                           f"or search the full list where it is kept.")
             return json.dumps(obj, ensure_ascii=False), 1, len(kept), len(lst)
     if not texts:
         return None

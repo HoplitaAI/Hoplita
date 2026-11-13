@@ -7249,6 +7249,14 @@ def _scope_at(scopes, line):
     return max(above, key=lambda sc: sc[2]) if above else None
 
 
+def _turn_line_cap():
+    try:
+        import fed_agent as _fa
+        return int(getattr(_fa._tool_emit, "line_cap", 0) or 0)
+    except Exception:
+        return 0
+
+
 def _tool_line_cap():
     try:
         import fed_agent as _fa
@@ -7332,21 +7340,6 @@ def _scope_fields(path, line, cap, lines_of=None):
     return out
 
 
-def _fit_hits(out, key, cap):
-    found = len(out.get(key) or [])
-    while len(out[key]) > 1 and len(json.dumps(out, ensure_ascii=False)) > cap - 200:
-        out[key].pop()
-    if len(out[key]) < found:
-        out["truncated"] = True
-        out["shown"] = len(out[key])
-        out["found"] = f"{found}{'+' if out.get('more') else ''}"
-        out["note_cut"] = (f"{out['shown']} of {out['found']} hits shown — "
-                           f"this turn's result cap is {cap} chars. Narrow "
-                           f"with file_pattern or a longer, more specific "
-                           f"query; what is not here EXISTS.")
-    return out
-
-
 def tool_code_symbols(query="", path="", limit=40):
     if not (path or "").strip():
         return {"error": "code_symbols needs 'path': the project directory, "
@@ -7410,9 +7403,9 @@ def tool_code_symbols(query="", path="", limit=40):
                 break
         if seen >= int(limit):
             break
-    res = {"query": q, "found": len(out), "total_symbols": total,
-           "files": nfiles, "cached": not built, "matches": out,
-           "cap_chars": cap,
+    return {"query": q, "found": len(out), "total_symbols": total,
+            "files": nfiles, "cached": not built, "matches": out,
+            "cap_chars": cap,
            "hint": ("Each match says where its body ends and the exact "
                     "code_read_range that reads it whole (split into the "
                     "reads that fit when it is bigger than one result)."
@@ -7420,7 +7413,6 @@ def tool_code_symbols(query="", path="", limit=40):
                     "No declaration by that name. It may be a local, an "
                     "attribute or defined in a language this index does not "
                     "parse; code_search finds it as text.")}
-    return _fit_hits(res, "matches", cap)
 
 
 def tool_code_read_smart(path, search=None):
@@ -7486,8 +7478,8 @@ def tool_code_read_range(path, start_line, end_line):
         e = min(len(lines), int(end_line))
         rows = [f"{i + 1}: {lines[i]}" for i in range(s, e)]
         content = "".join(rows)
-        cap = _tool_line_cap()
-        if len(content) + 200 <= cap:
+        cap = _turn_line_cap()
+        if not cap or len(content) + 200 <= cap:
             return {"content": content, "range": f"{s + 1}-{e}",
                     "total_lines": len(lines)}
         def _envelope(e2, n):
@@ -7561,10 +7553,7 @@ def tool_code_search(path, query, file_pattern=None):
             except Exception as ex:
                 r["scope"] = None
                 r["scope_note"] = f"could not tell which function holds line {r['line']}: {ex}"
-        out["more"] = bool(out.get("truncated"))
         out["cap_chars"] = cap
-        out = _fit_hits(out, "results", cap)
-        out.pop("more", None)
         return out
 
     if candidates is not None:
