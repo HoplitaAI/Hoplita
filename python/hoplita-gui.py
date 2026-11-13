@@ -4339,11 +4339,15 @@ class ChatAssistantWindow(QMainWindow):
             return
         tid = getattr(self._tls, "tab_id", None) or ""
         rid = 0 if keep else getattr(self._tls, "tu_rid", 0)
-        if rid and sender in ("system", "error", ""):
+        if sender == "thought" and not rid:
+            return
+        if rid and sender in ("system", "error", "", "thought"):
             rec = self._tu_store().get(rid)
             if rec is not None:
+                kind = (f"thought/{len(str(text))}" if sender == "thought"
+                        else sender or "system")
                 rec["lines"].append((datetime.now().strftime("%H:%M:%S"),
-                                     sender or "system", str(text)))
+                                     kind, str(text)))
                 if sender == "error":
                     rec["errors"] = int(rec.get("errors", 0)) + 1
                 self.signals.message_tab.emit(str(rid), "tool_usage", tid)
@@ -7659,7 +7663,8 @@ enabled = true
             "sticky": getattr(ctx, "sticky", "") or "",
             "user_fixed_context": ctx.user_fixed_context,
             "pinned_skills": ctx.pinned_skills,
-            "tool_usage": {str(k): v for k, v in sorted(self._tu_store().items())[-60:]
+            "tool_usage": {str(k): self._tu_for_save(v)
+                           for k, v in sorted(self._tu_store().items())[-60:]
                            if v.get("tab") == tab_id and v.get("done")},
             "code_project": getattr(ctx, "code_project", "") or "",
             "pinned_device": getattr(ctx, "pinned_device", None),
@@ -12193,7 +12198,8 @@ enabled = true
             self._code_say(t("code.no_project"), bad=True)
             return
         ok, r, err = self._mcp_try(
-            "code_search", {"path": self._code_project, "query": q},
+            "code_search", {"path": self._code_project, "query": q,
+                            "per_scope": 0},
             timeout=30)
         if not ok:
             self._code_say(t("msg.error", e=err), bad=True)
@@ -13503,14 +13509,7 @@ enabled = true
         if tab_id == self._active_tab_id:
             sb = self.chat_display.verticalScrollBar()
             keep, at_bottom = sb.value(), sb.value() >= sb.maximum() - 2
-            hide = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
-            if hide is not None:
-                end = self._tu_box_end(hide)
-                cur = QTextCursor(self.chat_display.document())
-                cur.setPosition(hide[0])
-                cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-                cur.insertHtml(self._tu_link_html(rid, hide=True) + self._tu_box_html(rid))
-                sb.setValue(sb.maximum() if at_bottom else keep)
+            if self._tu_repaint_box(rid):
                 return
             span = self._tu_anchor_span(f"hoplita:tu:{rid}")
             if span is not None:
@@ -13536,15 +13535,65 @@ enabled = true
             f'<span style="color:#22d3ee;font-weight:bold">{t("label.system")}:</span> '
             + self._tu_link_html(rid) + "<br>"))
 
+    def _tu_repaint_box(self, rid):
+        hide = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
+        if hide is None:
+            return False
+        sb = self.chat_display.verticalScrollBar()
+        keep, at_bottom = sb.value(), sb.value() >= sb.maximum() - 2
+        end = self._tu_box_end(hide)
+        cur = QTextCursor(self.chat_display.document())
+        cur.setPosition(hide[0])
+        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        cur.insertHtml(self._tu_link_html(rid, hide=True) + self._tu_box_html(rid))
+        sb.setValue(sb.maximum() if at_bottom else keep)
+        return True
+
+    def _tu_toggle_thought(self, rid, i):
+        rec = self._tu_store().get(rid)
+        if rec is None:
+            return
+        opened = rec.setdefault("open", set())
+        if i in opened:
+            opened.discard(i)
+        else:
+            opened.add(i)
+        self._tu_repaint_box(rid)
+
+    @staticmethod
+    def _tu_for_save(rec):
+        out = {k: v for k, v in rec.items() if k != "open"}
+        out["lines"] = [(ts, kind, "" if str(kind).startswith("thought") else text)
+                        for ts, kind, text in (rec.get("lines") or [])]
+        return out
+
     def _tu_box_html(self, rid):
         import html as _h
         rec = self._tu_store().get(rid) or {}
         ink, label_c, card_bg, inset_bg, line = "#e6edf7", "#8296b1", "#111a2e", "#0b1220", "#1f2a44"
+        opened = rec.get("open") or set()
         rows = []
-        for ts, kind, text in list(rec.get("lines") or []):
+        for i, (ts, kind, text) in enumerate(list(rec.get("lines") or [])):
+            stamp = f'<span style="color:#64748b">[{_h.escape(str(ts))}]</span> '
+            if str(kind).startswith("thought"):
+                try:
+                    n = int(str(kind).split("/", 1)[1])
+                except (IndexError, ValueError):
+                    n = len(str(text))
+                lab = _h.escape(t("tu.think", n=n))
+                if not text:
+                    rows.append(f'{stamp}<span style="color:{label_c}">{lab}'
+                                f'{_h.escape(t("tu.think_gone"))}</span>')
+                    continue
+                verb = t("tu.hide") if i in opened else t("tu.view")
+                row = (f'{stamp}<a href="hoplita:tu-think:{int(rid)}:{i}" style="color:{self.TU_COLOR};'
+                       f'text-decoration:none;">{lab}&nbsp;&nbsp;·&nbsp;&nbsp;{_h.escape(verb)}</a>')
+                if i in opened:
+                    row += f'\n<span style="color:{ink}">{_h.escape(str(text))}</span>'
+                rows.append(row)
+                continue
             col = "#f87171" if kind == "error" else ink
-            rows.append(f'<span style="color:#64748b">[{_h.escape(str(ts))}]</span> '
-                        f'<span style="color:{col}">{_h.escape(str(text))}</span>')
+            rows.append(f'{stamp}<span style="color:{col}">{_h.escape(str(text))}</span>')
         return (f'<table width="100%" cellspacing="0" cellpadding="0" style="margin:6px 0 10px 0;">'
                 f'<tr><td width="3" bgcolor="{self.TU_COLOR}"></td>'
                 f'<td bgcolor="{card_bg}" style="padding:10px 14px;border:1px solid {line};'
@@ -13638,9 +13687,16 @@ enabled = true
                 if href.startswith(("hoplita:copy:", "hoplita:rate:",
                                     "hoplita:canvas:", "hoplita:qa:",
                                     "hoplita:qa-hide:", "hoplita:tu:",
-                                    "hoplita:tu-hide:"))
+                                    "hoplita:tu-hide:", "hoplita:tu-think:"))
                 else _Qt.CursorShape.IBeamCursor)
             return False
+        if href.startswith("hoplita:tu-think:"):
+            try:
+                _, rid_s, i_s = href.rsplit(":", 2)
+                self._tu_toggle_thought(int(rid_s), int(i_s))
+            except ValueError:
+                return False
+            return True
         if href.startswith("hoplita:tu-hide:"):
             try:
                 self._collapse_tool_usage(int(href.rsplit(":", 1)[1]))
@@ -18621,6 +18677,8 @@ enabled = true
                                 {"step": tool_idx, "action": name,
                                  "detail": str(ev.get("args_preview") or "")[:200],
                                  "t0": time.time()})
+                    elif et == "thought":
+                        self.thread_msg(str(ev.get("text") or ""), "thought")
                     elif et == "tool_result":
                         if ev.get("delegated") is False:
                             try:

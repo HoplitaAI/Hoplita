@@ -977,6 +977,22 @@ def result_preview(name, result, limit=200):
         o = json.loads(txt)
     except Exception:
         return txt[:limit]
+    fns = o.get("functions") if isinstance(o, dict) else None
+    if (isinstance(fns, list) and fns
+            and all(isinstance(x, dict) and "file" in x and "hits" in x for x in fns[:5])):
+        total = o.get("hits_total") or sum(int(x.get("hits") or 0) for x in fns)
+        files = len({str(x.get("file")) for x in fns})
+        head = (f"{total} hits in {len(fns)} function{'s' if len(fns) != 1 else ''}, "
+                f"{files} file{'s' if files != 1 else ''}: ")
+        parts = []
+        for x in fns:
+            f_ = str(x.get("file", "")).replace("\\", "/").rsplit("/", 1)[-1]
+            if x.get("scope"):
+                parts.append(f"{f_} {x['scope']} {x.get('scope_lines') or ''} ({x['hits']})".replace("  ", " "))
+            else:
+                parts.append(f"{f_}:{x.get('lines')} ({x['hits']}) no function told")
+        out = head + ", ".join(parts)
+        return out if len(out) <= limit else out[:limit - 1] + "…"
     items = None
     if isinstance(o, dict):
         for key in ("results", "matches"):
@@ -1938,6 +1954,13 @@ def run_agentic_turn(user_message=None, history=None, system=None,
         tool_calls = msg.get("tool_calls")
         content = msg.get("content", "") or ""
         reasoning = msg.get("reasoning_content", "") or msg.get("reasoning", "") or ""
+        _thought = reasoning
+        if not _thought and "<think>" in content:
+            _mt = re.search(r"<think>(.*?)</think>", content, re.S)
+            _thought = (_mt.group(1) if _mt else "").strip()
+        if _thought:
+            emit({"event": "thought", "iteration": iteration,
+                  "chars": len(_thought), "text": _thought})
 
         _tc_rescued = False
         if not tool_calls and content:

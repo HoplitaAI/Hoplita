@@ -7510,7 +7510,11 @@ def tool_code_read_range(path, start_line, end_line):
         return {"error": str(e)}
 
 
-def tool_code_search(path, query, file_pattern=None):
+_SEARCH_RAW_MAX = 2000
+_SEARCH_FUNCTIONS_MAX = 100
+
+
+def tool_code_search(path, query, file_pattern=None, per_scope=5):
     if not (path or "").strip():
         return {"error": "code_search needs 'path': the directory to search. "
                          "In code mode that is the open project's path "
@@ -7537,7 +7541,7 @@ def tool_code_search(path, query, file_pattern=None):
                         results.append({"file": relname, "line": i,
                                         "text": line.strip()[:200],
                                         "_fp": os.path.abspath(fp)})
-                        if len(results) >= 50:
+                        if len(results) >= _SEARCH_RAW_MAX:
                             return True
         except Exception:
             pass
@@ -7554,6 +7558,52 @@ def tool_code_search(path, query, file_pattern=None):
                 r["scope"] = None
                 r["scope_note"] = f"could not tell which function holds line {r['line']}: {ex}"
         out["cap_chars"] = cap
+        groups, members, order = {}, {}, []
+        for r in out["results"]:
+            k = (r["file"], r.get("scope"), r.get("scope_lines"))
+            g = groups.get(k)
+            if g is None:
+                g = groups[k] = {"file": r["file"], "scope": r.get("scope"), "hits": 0,
+                                 "_first": r["line"], "_last": r["line"]}
+                for f_ in ("scope_lines", "scope_size", "scope_how", "read", "scope_note"):
+                    if r.get(f_) is not None:
+                        g[f_] = r[f_]
+                members[k] = []
+                order.append(k)
+            g["hits"] += 1
+            g["_last"] = r["line"]
+            members[k].append(r)
+        per = max(0, int(per_scope or 0))
+        shown = []
+        for k in order:
+            g = groups[k]
+            take = members[k] if not per else members[k][:per]
+            g["shown"] = len(take)
+            first, last = g.pop("_first"), g.pop("_last")
+            g["lines"] = f"{first}-{last}" if g["hits"] > 1 else str(first)
+            shown.extend(take)
+        total = len(out["results"])
+        if len(order) > _SEARCH_FUNCTIONS_MAX:
+            kept = set(order[:_SEARCH_FUNCTIONS_MAX])
+            shown = [r for r in shown
+                     if (r["file"], r.get("scope"), r.get("scope_lines")) in kept]
+            out["truncated"] = True
+            out["functions_total"] = len(order)
+            out["note"] = (f"{len(order)} functions hold this text; the first "
+                           f"{_SEARCH_FUNCTIONS_MAX} are listed. Narrow the query, "
+                           f"the path or the file_pattern.")
+            order = order[:_SEARCH_FUNCTIONS_MAX]
+        out["results"] = shown
+        out["functions"] = [groups[k] for k in order]
+        out["hits_total"] = total
+        if per and total > len(shown):
+            out["hint"] = (f"results keeps {per} lines per function ({len(shown)} of {total} hits); "
+                           f"functions lists every function with hits, how many, and the "
+                           f"code_read_range that reads it whole. Read the function, not "
+                           f"lines around a hit.")
+        if out.get("truncated") and "note" not in out:
+            out["note"] = (f"stopped at {_SEARCH_RAW_MAX} matching lines: narrow the query, "
+                           f"the path or the file_pattern.")
         return out
 
     if candidates is not None:
@@ -9148,7 +9198,7 @@ def tool_code_references(path, symbol, project_path=None):
             pass
     ext = os.path.splitext(p)[1].lower()
     file_pat = _REF_FILE_PATTERNS.get(ext, '*')
-    refs = tool_code_search(proj, symbol, file_pattern=file_pat).get("results", [])
+    refs = tool_code_search(proj, symbol, file_pattern=file_pat, per_scope=0).get("results", [])
 
     def_patterns = {
         '.py': rf'^\s*(def|class|async def)\s+{re.escape(symbol)}\b',
@@ -10395,8 +10445,9 @@ def register_tools():
                                    "fn": lambda a: tool_code_read_smart(a["path"], a.get("search"))},
         "code_read_range":        {"desc": "Read a range of lines from a file. Ask for a FUNCTION by its span (code_search and code_symbols give it), not a window of N lines around a hit. A range bigger than one result may carry this turn comes back cut on a whole line, saying which lines these are, how many lines of this file fit, and the exact next call.",
                                    "fn": lambda a: tool_code_read_range(a["path"], a["start_line"], a["end_line"])},
-        "code_search":            {"desc": "Search a LITERAL text (case-insensitive substring) across the project. NOT a regex — write the text exactly as it appears in the code. Each hit says the function (or class) that holds it, its line span and the exact code_read_range that reads it whole — read THAT, not N lines around the hit: an initialisation two lines past a window is how a variable gets called uninitialised. When the function cannot be told (a language this does not parse, a script with no declaration above, a brace that never closes) the hit says so in words; the line may still sit inside one.",
-                                   "fn": lambda a: tool_code_search(a.get("path", ""), a["query"], a.get("file_pattern"))},
+        "code_search":            {"desc": "Search a LITERAL text (case-insensitive substring) across the project. NOT a regex — write the text exactly as it appears in the code. `functions` lists every function (or class) with hits: how many, its line span and the exact code_read_range that reads it whole; `results` keeps five lines per function. Read the function, not N lines around a hit: an initialisation two lines past a window is how a variable gets called uninitialised. When the function cannot be told (a language this does not parse, a script with no declaration above, a brace that never closes) the hit says so in words; the line may still sit inside one.",
+                                   "fn": lambda a: tool_code_search(a.get("path", ""), a["query"], a.get("file_pattern"),
+                                                                    per_scope=a.get("per_scope", 5))},
         "code_apply_patch":       {"desc": "Apply multiple edits atomically. If one fails, none are applied. Also creates new files if 'old' is empty. In a git repo it takes a checkpoint first, so code_undo can put it back.",
                                    "fn": lambda a: tool_code_apply_patch(a["path"], a["changes"])},
         "code_write_file":        {"desc": "Write a whole file at once, taking a checkpoint first so it can be undone. Use code_apply_patch for surgical edits — it validates what it replaces; this one is for creating a file or replacing it entirely.",

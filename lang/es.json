@@ -1837,6 +1837,8 @@
   "tu.view": "ver ›",
   "tu.hide": "ocultar ‹",
   "tu.card_title": "Uso de herramientas · {n} líneas",
+  "tu.think": "razonamiento · {n} caracteres",
+  "tu.think_gone": " · no se guarda con la sesión",
   "tu.gone": "Las líneas de este turno ya no están en memoria (se guardan las de esta sesión).",
   "tray.bg_active": "El chat sigue activo en segundo plano. Arrastra este icono al área visible del tray para tenerlo siempre a mano.",
   "tray.clear_chat": "🗑 Limpiar Chat",

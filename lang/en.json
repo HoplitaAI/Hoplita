@@ -1837,6 +1837,8 @@
   "tu.view": "view ›",
   "tu.hide": "hide ‹",
   "tu.card_title": "Tool usage · {n} lines",
+  "tu.think": "thought · {n} chars",
+  "tu.think_gone": " · not kept with the session",
   "tu.gone": "This turn's lines are no longer in memory (this session's are kept).",
   "tray.bg_active": "Chat is still active in the background. Drag this icon to the visible tray area to keep it handy.",
   "tray.clear_chat": "🗑 Clear Chat",
