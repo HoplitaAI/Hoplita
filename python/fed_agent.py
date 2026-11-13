@@ -235,6 +235,21 @@ def line_cap_for_tool():
     return int(getattr(_tool_emit, "line_cap", 0) or 0) or _RESULT_CAP
 
 
+_LAST_WINDOW = 0
+
+
+def last_window():
+    return _LAST_WINDOW
+
+
+def _remember_window(w):
+    global _LAST_WINDOW
+    try:
+        _LAST_WINDOW = int(w or 0) or _LAST_WINDOW
+    except (TypeError, ValueError):
+        pass
+
+
 _FILE_READERS = ("read_file", "code_read_range")
 
 
@@ -246,6 +261,27 @@ def _cut_text_field(name, args, result, cap):
     if not isinstance(obj, dict):
         return None
     texts = [(k, v) for k, v in obj.items() if isinstance(v, str)]
+    lists = [(k, v) for k, v in obj.items() if isinstance(v, list) and v]
+    if lists:
+        lkey, lst = max(lists, key=lambda kv: len(json.dumps(kv[1], ensure_ascii=False)))
+        tlen = max((len(v) for _k, v in texts), default=0)
+        if len(json.dumps(lst, ensure_ascii=False)) > tlen:
+            rest = dict(obj)
+            rest[lkey] = []
+            budget = max(400, cap - len(json.dumps(rest, ensure_ascii=False)) - 600)
+            kept, size = [], 0
+            for it in lst:
+                w = len(json.dumps(it, ensure_ascii=False)) + 2
+                if kept and size + w > budget:
+                    break
+                kept.append(it)
+                size += w
+            obj[lkey] = kept
+            obj["cut"] = (f"items 1-{len(kept)} of {len(lst)} in '{lkey}'. The "
+                          f"rest EXISTS and is not here. Never fill it in "
+                          f"from memory.")
+            obj["next"] = _range_hint(name)
+            return json.dumps(obj, ensure_ascii=False), 1, len(kept), len(lst)
     if not texts:
         return None
     key, text = max(texts, key=lambda kv: len(kv[1]))
@@ -1815,6 +1851,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
             usage = raw.get("usage") or {}
             finish_reason = raw.get("finish_reason", "")
             _window = int(raw.get("window") or 0) or _window
+            _remember_window(_window)
         else:
             msg, usage, finish_reason = (raw or {}), {}, ""
 
@@ -2524,6 +2561,19 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                                  f"{_loc}." if _loc else "")
                               + f" Or: {_range_hint(name)}. "
                                 "Never fill it in from memory.]")
+            if not _cut_here and name in _FILE_READERS and '"cut"' in result:
+                try:
+                    _o = json.loads(result)
+                    _m = re.match(r"lines (\d+)-(\d+) of (\d+)",
+                                  str(_o.get("cut") or "")) if isinstance(_o, dict) else None
+                except Exception:
+                    _m = None
+                if _m:
+                    _cut_here = True
+                    emit({"event": "tool_progress", "key": "digest.cut",
+                          "args": {"tool": name, "total": str(len(result)),
+                                   "first": _m.group(1), "shown": _m.group(2),
+                                   "lines": _m.group(3)}})
             if _partial and not _cut_here:
                 _argtxt = json.dumps(args, ensure_ascii=False, default=str)
                 for _k2, _r2 in _partial.items():

@@ -7118,6 +7118,235 @@ def _code_symbol_index(root):
     return idx, nfiles, True
 
 
+_CODE_SCOPE_CACHE = {}
+_BRACE_EXTS = {".go", ".js", ".ts", ".rs", ".java", ".kt", ".php"}
+_DECL_NAME_GO = re.compile(r'^\s*func\s*\([^)]*\)\s*([A-Za-z_][A-Za-z0-9_]*)')
+_DECL_NAME_CALL = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*\(')
+
+
+def _decl_name(line):
+    m = _DECL_NAME_GO.match(line) or _SYM_NAME.match(line)
+    if m:
+        return m.group(1)
+    m = _DECL_NAME_CALL.search(line)
+    return m.group(1) if m else line.strip()[:40]
+
+
+def _strip_code_line(line):
+    out, i, n, q = [], 0, len(line), ""
+    while i < n:
+        c = line[i]
+        if q:
+            if c == "\\":
+                i += 1
+            elif c == q:
+                q = ""
+        elif c in "\"'`":
+            q = c
+        elif c == "/" and line[i:i + 2] == "//":
+            break
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _code_scopes(path):
+    p = os.path.abspath(os.path.expanduser(path))
+    try:
+        st = os.stat(p)
+        stamp = (st.st_mtime, st.st_size)
+    except OSError:
+        return [], ""
+    hit = _CODE_SCOPE_CACHE.get(p)
+    if hit and hit[0] == stamp:
+        return hit[1], hit[2]
+    try:
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return [], ""
+    ext = os.path.splitext(p)[1].lower()
+    scopes, how = [], ""
+    if ext == ".py":
+        try:
+            import ast as _ast
+            tree = _ast.parse(text)
+
+            def walk(node, prefix):
+                for ch in _ast.iter_child_nodes(node):
+                    if isinstance(ch, (_ast.FunctionDef, _ast.AsyncFunctionDef,
+                                       _ast.ClassDef)):
+                        name = prefix + ch.name
+                        start = min([ch.lineno]
+                                    + [d.lineno for d in ch.decorator_list])
+                        scopes.append((name, "class" if isinstance(ch, _ast.ClassDef)
+                                       else "def", start, ch.end_lineno))
+                        walk(ch, name + ".")
+                    else:
+                        walk(ch, prefix)
+            walk(tree, "")
+            how = "parser"
+        except (SyntaxError, ValueError):
+            scopes, how = [], ""
+    pat = _STRUCTURE_PATTERNS.get(ext)
+    if not how and pat:
+        lines = text.split("\n")
+        decls = [i for i, l in enumerate(lines) if re.match(pat, l)]
+        if ext in _BRACE_EXTS:
+            how = "braces"
+            for i in decls:
+                depth, opened, end = 0, False, None
+                for j in range(i, min(len(lines), i + 5000)):
+                    if j > i and not opened and re.match(pat, lines[j]):
+                        break
+                    ended = False
+                    for c in _strip_code_line(lines[j]):
+                        if c == "{":
+                            depth += 1
+                            opened = True
+                        elif c == "}":
+                            depth -= 1
+                        elif c == ";" and not opened:
+                            ended = True
+                            break
+                    if ended:
+                        break
+                    if opened and depth <= 0:
+                        end = j + 1
+                        break
+                    if not opened and j > i + 2:
+                        break
+                if opened:
+                    scopes.append((_decl_name(lines[i]), "decl", i + 1, end))
+        else:
+            how = "indent"
+            for i in decls:
+                ind = len(lines[i]) - len(lines[i].lstrip())
+                end = len(lines)
+                for j in range(i + 1, len(lines)):
+                    l = lines[j]
+                    if l.strip() and (len(l) - len(l.lstrip())) <= ind:
+                        end = j + 1 if l.strip().split()[0] == "end" else j
+                        break
+                while end > i + 1 and not lines[end - 1].strip():
+                    end -= 1
+                scopes.append((_decl_name(lines[i]), "decl", i + 1, end))
+    if len(_CODE_SCOPE_CACHE) > 400:
+        _CODE_SCOPE_CACHE.clear()
+    _CODE_SCOPE_CACHE[p] = (stamp, scopes, how)
+    return scopes, how
+
+
+def _scope_at(scopes, line):
+    inner = None
+    for sc in scopes:
+        if sc[3] is not None and sc[2] <= line <= sc[3] and (inner is None or sc[2] >= inner[2]):
+            inner = sc
+    if inner:
+        return inner
+    above = [sc for sc in scopes if sc[3] is None and sc[2] <= line]
+    return max(above, key=lambda sc: sc[2]) if above else None
+
+
+def _tool_line_cap():
+    try:
+        import fed_agent as _fa
+        return int(_fa.line_cap_for_tool())
+    except Exception:
+        try:
+            return max(1000, CONFIG.getint("AGENTIC", "tool_result_max_chars",
+                                           fallback=8000))
+        except Exception:
+            return 8000
+
+
+def _read_call(path, a, b):
+    return (f"code_read_range(path={json.dumps(path, ensure_ascii=False)}, "
+            f"start_line={a}, end_line={b})")
+
+
+def _read_plan(lines, s, e, cap):
+    budget = max(400, cap - 400)
+    plan, a, size = [], s, 0
+    for i in range(s - 1, min(e, len(lines))):
+        w = len(json.dumps(f"{i + 1}: {lines[i]}", ensure_ascii=False)) - 1
+        if i + 1 > a and size + w > budget:
+            plan.append((a, i))
+            a, size = i + 1, 0
+        size += w
+    plan.append((a, e))
+    return plan
+
+
+def _scope_fields(path, line, cap, lines_of=None):
+    scopes, how = _code_scopes(path)
+    ext = os.path.splitext(path)[1].lower()
+    sc = _scope_at(scopes, line) if scopes else None
+    if sc is None:
+        if how == "parser":
+            return {"scope": None,
+                    "scope_note": f"line {line} is at module level: inside no "
+                                  f"function or class (parsed)."}
+        why = ("nothing this index parses declares above it" if how
+               else f"'{ext or 'this'}' files are not parsed for structure")
+        return {"scope": None,
+                "scope_note": f"could not tell which function holds line "
+                              f"{line}: {why}. It may still be inside one; "
+                              f"read around it."}
+    name, kind, s, e = sc
+    out = {"scope": name}
+    if e is None:
+        out["scope_lines"] = f"{s}-?"
+        out["scope_note"] = (f"declared at line {s}; where it ends could not "
+                             f"be told (its brace never closes in what was "
+                             f"read). It may extend past line {line}: "
+                             f"code_read_range from {s} on.")
+        return out
+    out["scope_lines"] = f"{s}-{e}"
+    out["scope_size"] = e - s + 1
+    if how != "parser":
+        out["scope_how"] = ("span by brace matching, not a parser"
+                            if how == "braces" else
+                            "span by indentation, not a parser")
+    lines = None
+    if lines_of is not None:
+        lines = lines_of.get(path)
+    if lines is None:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                lines = fh.read().split("\n")
+        except OSError:
+            lines = []
+        if lines_of is not None:
+            lines_of[path] = lines
+    if lines:
+        plan = _read_plan(lines, s, e, cap)
+        if len(plan) == 1:
+            out["read"] = _read_call(path, s, e)
+        else:
+            out["read"] = (_read_call(path, *plan[0]) + " then "
+                           + ", ".join(f"{a}-{b}" for a, b in plan[1:])
+                           + f" (the function is bigger than this turn's "
+                             f"{cap}-char result: {len(plan)} reads)")
+    return out
+
+
+def _fit_hits(out, key, cap):
+    found = len(out.get(key) or [])
+    while len(out[key]) > 1 and len(json.dumps(out, ensure_ascii=False)) > cap - 200:
+        out[key].pop()
+    if len(out[key]) < found:
+        out["truncated"] = True
+        out["shown"] = len(out[key])
+        out["found"] = f"{found}{'+' if out.get('more') else ''}"
+        out["note_cut"] = (f"{out['shown']} of {out['found']} hits shown — "
+                           f"this turn's result cap is {cap} chars. Narrow "
+                           f"with file_pattern or a longer, more specific "
+                           f"query; what is not here EXISTS.")
+    return out
+
+
 def tool_code_symbols(query="", path="", limit=40):
     if not (path or "").strip():
         return {"error": "code_symbols needs 'path': the project directory, "
@@ -7149,32 +7378,49 @@ def tool_code_symbols(query="", path="", limit=40):
         return {"symbols": total, "files": nfiles, "cached": not built,
                 "busiest_files": [{"file": f, "symbols": n} for f, n in crowded],
                 "hint": "Call it again with a name to get file:line without "
-                        "reading anything. Then code_read_range(path, line-2, "
-                        "line+40) is the function itself."}
+                        "reading anything, with the span of its body and the "
+                        "code_read_range that reads it whole."}
     ql = q.lower()
     exact = [(n, v) for n, v in idx.items() if n == q]
     ci = [(n, v) for n, v in idx.items() if n != q and n.lower() == ql]
     part = [(n, v) for n, v in idx.items()
             if n != q and n.lower() != ql and ql in n.lower()]
     out, seen = [], 0
+    cap = _tool_line_cap()
+    lines_of = {}
     for name, places in exact + ci + sorted(part, key=lambda x: len(x[0])):
         for rel, line, decl in places:
-            out.append({"symbol": name, "file": rel, "line": line,
-                        "declaration": decl})
+            m = {"symbol": name, "file": rel, "line": line,
+                 "declaration": decl}
+            fp = os.path.join(root, rel)
+            sc = next((x for x in _code_scopes(fp)[0] if x[2] == line), None)
+            if sc and sc[3] is not None:
+                m["ends"] = sc[3]
+                m["lines"] = sc[3] - line + 1
+                m.update({k: v for k, v in _scope_fields(fp, line, cap, lines_of).items()
+                          if k in ("read", "scope_how")})
+            else:
+                m["ends"] = None
+                m["read"] = (_read_call(fp, max(1, line - 2), line + 40)
+                             + " — where it ends could not be told; read on "
+                               "if the body continues")
+            out.append(m)
             seen += 1
             if seen >= int(limit):
                 break
         if seen >= int(limit):
             break
-    return {"query": q, "found": len(out), "total_symbols": total,
-            "files": nfiles, "cached": not built, "matches": out,
-            "hint": ("Read one with code_read_range(file, line-2, line+40) — "
-                     "that is the declaration and its body, and it costs one "
-                     "call instead of reading the file."
-                     if out else
-                     "No declaration by that name. It may be a local, an "
-                     "attribute or defined in a language this index does not "
-                     "parse; code_search finds it as text.")}
+    res = {"query": q, "found": len(out), "total_symbols": total,
+           "files": nfiles, "cached": not built, "matches": out,
+           "cap_chars": cap,
+           "hint": ("Each match says where its body ends and the exact "
+                    "code_read_range that reads it whole (split into the "
+                    "reads that fit when it is bigger than one result)."
+                    if out else
+                    "No declaration by that name. It may be a local, an "
+                    "attribute or defined in a language this index does not "
+                    "parse; code_search finds it as text.")}
+    return _fit_hits(res, "matches", cap)
 
 
 def tool_code_read_smart(path, search=None):
@@ -7236,10 +7482,38 @@ def tool_code_read_range(path, start_line, end_line):
     try:
         with open(p, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
-        s = max(0, start_line - 1)
-        e = min(len(lines), end_line)
-        return {"content": "".join(f"{i + 1}: {lines[i]}" for i in range(s, e)),
-                "range": f"{s + 1}-{e}", "total_lines": len(lines)}
+        s = max(0, int(start_line) - 1)
+        e = min(len(lines), int(end_line))
+        rows = [f"{i + 1}: {lines[i]}" for i in range(s, e)]
+        content = "".join(rows)
+        cap = _tool_line_cap()
+        if len(content) + 200 <= cap:
+            return {"content": content, "range": f"{s + 1}-{e}",
+                    "total_lines": len(lines)}
+        def _envelope(e2, n):
+            return {"content": "", "range": f"{s + 1}-{e2}",
+                    "total_lines": len(lines),
+                    "cut": f"lines {s + 1}-{e2} of {len(lines)}. The rest "
+                           f"EXISTS and is not here. Never fill it in from "
+                           f"memory.",
+                    "asked": f"lines {s + 1}-{e} are {len(content)} chars; "
+                             f"one result carries {cap} this turn: {n} "
+                             f"lines of this file fit in it here. Ask for "
+                             f"ranges that size, or for a function by its "
+                             f"span (code_search and code_symbols give it).",
+                    "next": _read_call(path, e2 + 1, min(e, e2 + max(1, n)))}
+        budget = max(300, cap - len(json.dumps(_envelope(e, 99999), ensure_ascii=False)) - 40)
+        kept, size = [], 0
+        for r in rows:
+            w = len(json.dumps(r, ensure_ascii=False)) - 2
+            if kept and size + w > budget:
+                break
+            kept.append(r)
+            size += w
+        e2 = s + len(kept)
+        out = _envelope(e2, len(kept))
+        out["content"] = "".join(kept)
+        return out
     except Exception as e:
         return {"error": str(e)}
 
@@ -7269,19 +7543,36 @@ def tool_code_search(path, query, file_pattern=None):
                 for i, line in enumerate(f, 1):
                     if ql in line.lower():
                         results.append({"file": relname, "line": i,
-                                        "text": line.strip()[:200]})
+                                        "text": line.strip()[:200],
+                                        "_fp": os.path.abspath(fp)})
                         if len(results) >= 50:
                             return True
         except Exception:
             pass
         return False
 
+    def _done(out):
+        cap = _tool_line_cap()
+        lines_of = {}
+        for r in out["results"]:
+            fp = r.pop("_fp")
+            try:
+                r.update(_scope_fields(fp, r["line"], cap, lines_of))
+            except Exception as ex:
+                r["scope"] = None
+                r["scope_note"] = f"could not tell which function holds line {r['line']}: {ex}"
+        out["more"] = bool(out.get("truncated"))
+        out["cap_chars"] = cap
+        out = _fit_hits(out, "results", cap)
+        out.pop("more", None)
+        return out
+
     if candidates is not None:
         for fn, fp in candidates:
             if _scan(fp, fn):
-                return {"results": results, "truncated": True,
-                        "searched": os.path.abspath(p),
-                        "mode": "literal substring"}
+                return _done({"results": results, "truncated": True,
+                              "searched": os.path.abspath(p),
+                              "mode": "literal substring"})
     else:
         for root, dirs, fnames in os.walk(p):
             dirs[:] = [d for d in dirs
@@ -7293,9 +7584,9 @@ def tool_code_search(path, query, file_pattern=None):
                     continue
                 fp = os.path.join(root, fn)
                 if _scan(fp, os.path.relpath(fp, rel_base)):
-                    return {"results": results, "truncated": True,
-                            "searched": os.path.abspath(p),
-                            "mode": "literal substring"}
+                    return _done({"results": results, "truncated": True,
+                                  "searched": os.path.abspath(p),
+                                  "mode": "literal substring"})
     out = {"results": results, "truncated": False,
            "searched": os.path.abspath(p), "mode": "literal substring"}
     if not results and any(c in query for c in "\\^$|()[]{}+*?"):
@@ -7304,7 +7595,7 @@ def tool_code_search(path, query, file_pattern=None):
                        "characters. Write the text exactly as it appears in "
                        "the code, or use code_outline/code_symbols for "
                        "structural questions.")
-    return out
+    return _done(out)
 
 
 _CODE_CHECKPOINTS = {}
@@ -10109,13 +10400,13 @@ def register_tools():
                                    "fn": lambda a: {"error": "sticky_note is written by the client that owns the tab"}},
         "canvas_undo":            {"desc": "Put back the page the canvas held before the last render. One step. Use it when what you just rendered turned out worse than what it replaced — going back is cheaper and safer than rebuilding from memory, and the page you are trying to recover may be one you can no longer reproduce.",
                                    "fn": lambda a: {"error": "canvas_undo is executed by the client that owns the canvas"}},
-        "code_symbols":           {"desc": "WHERE A NAME IS DECLARED, across the whole project, WITHOUT READING A FILE. One regex pass over the tree, cached until something changes: milliseconds, no language server, no model. THIS IS THE FIRST THING TO CALL when you need a function, class, type or method and you do not already know its line — not code_read_smart, which on a big file returns a structure so large it gets cut, taking the very map you were after with it. Empty query = the project's shape (how many symbols, in how many files, which files hold most). With a name = exact matches first, each with file:line and the declaration line itself. Then code_read_range(file, line-2, line+40) IS the function, in one call. Reading a whole file to find one function is the slow road and it does not scale: on a hundred files it is a hundred reads that hold nothing.",
+        "code_symbols":           {"desc": "WHERE A NAME IS DECLARED, across the whole project, WITHOUT READING A FILE. One regex pass over the tree, cached until something changes: milliseconds, no language server, no model. THIS IS THE FIRST THING TO CALL when you need a function, class, type or method and you do not already know its line — not code_read_smart, which on a big file returns a structure so large it gets cut, taking the very map you were after with it. Empty query = the project's shape (how many symbols, in how many files, which files hold most). With a name = exact matches first, each with file:line and the declaration line itself. Each match says where its body ENDS and gives the exact code_read_range that reads it whole, split into the reads that fit when it is bigger than one result. Reading a whole file to find one function is the slow road and it does not scale: on a hundred files it is a hundred reads that hold nothing.",
                                    "fn": lambda a: tool_code_symbols(a.get("query", ""), a.get("path", ""), a.get("limit", 40))},
         "code_read_smart":        {"desc": "Smart file read: if it fits in context → whole, otherwise → structure + chunks. 'search' is LITERAL text (case-insensitive), not a regex.",
                                    "fn": lambda a: tool_code_read_smart(a["path"], a.get("search"))},
-        "code_read_range":        {"desc": "Read a range of lines from a file.",
+        "code_read_range":        {"desc": "Read a range of lines from a file. Ask for a FUNCTION by its span (code_search and code_symbols give it), not a window of N lines around a hit. A range bigger than one result may carry this turn comes back cut on a whole line, saying which lines these are, how many lines of this file fit, and the exact next call.",
                                    "fn": lambda a: tool_code_read_range(a["path"], a["start_line"], a["end_line"])},
-        "code_search":            {"desc": "Search a LITERAL text (case-insensitive substring) across the project. NOT a regex — write the text exactly as it appears in the code.",
+        "code_search":            {"desc": "Search a LITERAL text (case-insensitive substring) across the project. NOT a regex — write the text exactly as it appears in the code. Each hit says the function (or class) that holds it, its line span and the exact code_read_range that reads it whole — read THAT, not N lines around the hit: an initialisation two lines past a window is how a variable gets called uninitialised. When the function cannot be told (a language this does not parse, a script with no declaration above, a brace that never closes) the hit says so in words; the line may still sit inside one.",
                                    "fn": lambda a: tool_code_search(a.get("path", ""), a["query"], a.get("file_pattern"))},
         "code_apply_patch":       {"desc": "Apply multiple edits atomically. If one fails, none are applied. Also creates new files if 'old' is empty. In a git repo it takes a checkpoint first, so code_undo can put it back.",
                                    "fn": lambda a: tool_code_apply_patch(a["path"], a["changes"])},
@@ -13617,8 +13908,20 @@ def _code_project_note(path):
             f"think about…», an architecture, a change of scale): write it into "
             f"'future' BEFORE you answer, then a short reply that says so. The "
             f"board draws the graph — no canvas, no HTML, no ASCII boxes.")
+    try:
+        import fed_agent as _fa
+        _cap = int(_fa.line_cap(_fa.last_window()))
+    except Exception:
+        _cap = 8000
     return (f"[CODE MODE] Project open: {path} — the default path for the "
             f"code_* and git_* tools; ask only if the user names another.\n"
+            f"- One tool result carries up to about {_cap} characters this "
+            f"turn; past that it is cut on a whole line and says which lines "
+            f"these are. code_search and code_symbols say which function "
+            f"holds each hit, its span and the code_read_range that fits: "
+            f"read a function WHOLE by its span, never a window of N lines "
+            f"around a hit, and when a hit says the function could not be "
+            f"told, read around it before concluding anything.\n"
             f"- Edit with code_apply_patch (validated, undoable with code_undo), "
             f"not shell redirection. Before a substantial change, git_branch; "
             f"commit there; when the work is done and verified, git_merge it "
