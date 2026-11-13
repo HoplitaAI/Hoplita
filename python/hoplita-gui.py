@@ -4331,13 +4331,23 @@ class ChatAssistantWindow(QMainWindow):
                 pass
         threading.Thread(target=_go, daemon=True).start()
 
-    def thread_msg(self, text, sender="system"):
+    def thread_msg(self, text, sender="system", keep=False):
         _ktab = getattr(self._tls, "council_tab", None)
         if _ktab and sender != "assistant":
             self.signals.council_event.emit(
                 _ktab, {"type": "step", "text": str(text), "kind": sender})
             return
         tid = getattr(self._tls, "tab_id", None) or ""
+        rid = 0 if keep else getattr(self._tls, "tu_rid", 0)
+        if rid and sender in ("system", "error", ""):
+            rec = self._tu_store().get(rid)
+            if rec is not None:
+                rec["lines"].append((datetime.now().strftime("%H:%M:%S"),
+                                     sender or "system", str(text)))
+                if sender == "error":
+                    rec["errors"] = int(rec.get("errors", 0)) + 1
+                self.signals.message_tab.emit(str(rid), "tool_usage", tid)
+                return
         self.signals.message_tab.emit(text, sender, tid)
 
 
@@ -7649,6 +7659,8 @@ enabled = true
             "sticky": getattr(ctx, "sticky", "") or "",
             "user_fixed_context": ctx.user_fixed_context,
             "pinned_skills": ctx.pinned_skills,
+            "tool_usage": {str(k): v for k, v in sorted(self._tu_store().items())[-60:]
+                           if v.get("tab") == tab_id and v.get("done")},
             "code_project": getattr(ctx, "code_project", "") or "",
             "pinned_device": getattr(ctx, "pinned_device", None),
             "sync_id": getattr(ctx, "sync_id", "") or "",
@@ -8116,6 +8128,7 @@ enabled = true
                     _cctx.session_uuid = sess.get("uuid")
                     _cctx.history = sess.get("history") or []
                     _ctab["html"] = sess.get("html", "") or ""
+                    self._tu_restore(sess, CRON_TAB_ID)
                     if self._active_tab_id == CRON_TAB_ID:
                         self.chat_display.setHtml(_ctab["html"])
                     if not quiet:
@@ -8146,6 +8159,7 @@ enabled = true
             ctx.job_name = sess.get("job_name") or ""
             ctx.job_session = ctx.session_uuid if ctx.job_id else None
             self._chat_ctxs[tid] = ctx
+            self._tu_restore(sess, tid)
             self._chat_tabs.append({"id": tid, "kind": "local", "peer": None,
                                     "title": title, "html": sess.get("html", "") or "",
                                     "history_ref": True})
@@ -13301,7 +13315,7 @@ enabled = true
                       "next": str(ev.get("next") or ""),
                       "reviewed": str(ev.get("reviewed") or ""),
                       "said": str(ev.get("said") or "")}
-        for old in [k for k in store if k <= rid - 200]:
+        for old in sorted(store)[:-200]:
             store.pop(old, None)
         return rid
 
@@ -13411,6 +13425,192 @@ enabled = true
         cur.insertHtml(self._qa_link_html(rid))
         sb.setValue(keep)
 
+    TU_COLOR = "#fb7185"
+    _UNFOLDED_TURNS = ("_compact_run",)
+
+    def _tu_store(self):
+        store = getattr(self, "_tool_usage", None)
+        if store is None:
+            store = self._tool_usage = {}
+        return store
+
+    def _tu_begin(self, tab_id):
+        store = self._tu_store()
+        self._tu_seq = max(getattr(self, "_tu_seq", 0), int(time.time() * 1000)) + 1
+        rid = self._tu_seq
+        store[rid] = {"tab": tab_id, "t0": time.time(), "lines": [], "tools": 0,
+                      "errors": 0, "done": False, "secs": 0.0}
+        for old in sorted(store)[:-300]:
+            store.pop(old, None)
+        self._tls.tu_rid = rid
+        return rid
+
+    def _tu_end(self):
+        rid = getattr(self._tls, "tu_rid", 0)
+        self._tls.tu_rid = 0
+        rec = self._tu_store().get(rid)
+        if rec is None or rec.get("done"):
+            return
+        rec["done"] = True
+        rec["secs"] = round(time.time() - rec.get("t0", time.time()), 1)
+        if rec["lines"]:
+            self.signals.message_tab.emit(str(rid), "tool_usage", rec.get("tab") or "")
+
+    def _tu_tools(self, n):
+        rec = self._tu_store().get(getattr(self._tls, "tu_rid", 0))
+        if rec is not None:
+            rec["tools"] = max(int(rec.get("tools", 0)), int(n))
+
+    def _tu_summary(self, rec):
+        secs = rec.get("secs") or (time.time() - rec.get("t0", time.time()))
+        n = int(rec.get("tools", 0))
+        txt = (t("tu.summary", n=n, s=f"{secs:.0f}") if n
+               else t("tu.summary_none", s=f"{secs:.0f}"))
+        if rec.get("errors"):
+            txt += t("tu.errors", n=int(rec["errors"]))
+        return txt
+
+    def _tu_link_html(self, rid, hide=False):
+        import html as _h
+        rec = self._tu_store().get(rid) or {}
+        verb, key = ("tu-hide", "tu.hide") if hide else ("tu", "tu.view")
+        return (f'<a href="hoplita:{verb}:{int(rid)}" style="color:{self.TU_COLOR};'
+                f'text-decoration:none;">{_h.escape(self._tu_summary(rec))}'
+                f'&nbsp;&nbsp;·&nbsp;&nbsp;{_h.escape(t(key))}</a>')
+
+    def _tu_anchor_span(self, href):
+        start = end = None
+        blk = self.chat_display.document().begin()
+        while blk.isValid():
+            it = blk.begin()
+            s0 = e0 = None
+            while not it.atEnd():
+                frag = it.fragment()
+                if frag.isValid() and frag.charFormat().anchorHref() == href:
+                    if s0 is None:
+                        s0 = frag.position()
+                    e0 = frag.position() + frag.length()
+                it += 1
+            if s0 is not None:
+                start, end = s0, e0
+            blk = blk.next()
+        return None if start is None else (start, end)
+
+    def _paint_tool_usage(self, rid, tab_id):
+        rec = self._tu_store().get(rid)
+        if rec is None:
+            return
+        if tab_id == self._active_tab_id:
+            if self._tu_anchor_span(f"hoplita:tu-hide:{rid}") is not None:
+                self._collapse_tool_usage(rid)
+                self._expand_tool_usage(rid)
+                return
+            span = self._tu_anchor_span(f"hoplita:tu:{rid}")
+            if span is not None:
+                sb = self.chat_display.verticalScrollBar()
+                keep = sb.value()
+                cur = QTextCursor(self.chat_display.document())
+                cur.setPosition(span[0])
+                cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
+                cur.insertHtml(self._tu_link_html(rid))
+                sb.setValue(keep)
+                return
+        else:
+            tab = self._tab_by_id(tab_id)
+            if tab is not None:
+                for verb in ("tu-hide", "tu"):
+                    pat = re.compile(rf'<a href="hoplita:{verb}:{rid}"[^>]*>.*?</a>', re.S)
+                    if pat.search(tab.get("html", "")):
+                        tab["html"] = pat.sub(
+                            lambda m, v=verb: self._tu_link_html(rid, hide=(v == "tu-hide")),
+                            tab.get("html", ""), count=1)
+                        return
+        ts = datetime.now().strftime("%H:%M:%S")
+        self._append_html_to_tab(tab_id, (
+            f'<span style="color:#64748b">[{ts}]</span> '
+            f'<span style="color:#22d3ee;font-weight:bold">{t("label.system")}:</span> '
+            + self._tu_link_html(rid) + "<br>"))
+
+    def _expand_tool_usage(self, rid, event=None):
+        import html as _h
+        from PyQt6.QtWidgets import QToolTip
+        rec = self._tu_store().get(rid)
+        if rec is None:
+            if event is not None:
+                QToolTip.showText(event.globalPosition().toPoint(),
+                                  t("tu.gone"), self.chat_display)
+            return
+        span = self._tu_anchor_span(f"hoplita:tu:{rid}")
+        if span is None:
+            return
+        ink, label_c, card_bg, inset_bg, line = "#e6edf7", "#8296b1", "#111a2e", "#0b1220", "#1f2a44"
+        rows = []
+        for ts, kind, text in list(rec.get("lines") or []):
+            col = "#f87171" if kind == "error" else ink
+            rows.append(f'<span style="color:#64748b">[{_h.escape(str(ts))}]</span> '
+                        f'<span style="color:{col}">{_h.escape(str(text))}</span>')
+        box = (f'<table width="100%" cellspacing="0" cellpadding="0" style="margin:6px 0 10px 0;">'
+               f'<tr><td width="3" bgcolor="{self.TU_COLOR}"></td>'
+               f'<td bgcolor="{card_bg}" style="padding:10px 14px;border:1px solid {line};'
+               f'border-left:none;">'
+               f'<p style="margin:0 0 6px 0;color:{label_c};font-size:12px;font-weight:600;">'
+               f'{_h.escape(t("tu.card_title", n=len(rows)).upper())}</p>'
+               f'<table width="100%" cellspacing="0" cellpadding="10"><tr><td bgcolor="{inset_bg}" '
+               f'style="border:1px solid {line};"><pre style="white-space:pre-wrap;margin:0;'
+               f'font-family:monospace;">' + "\n".join(rows) + '</pre></td></tr></table>'
+               '</td></tr></table>')
+        sb = self.chat_display.verticalScrollBar()
+        keep = sb.value()
+        cur = QTextCursor(self.chat_display.document())
+        cur.setPosition(span[0])
+        cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
+        cur.insertHtml(self._tu_link_html(rid, hide=True) + box)
+        sb.setValue(keep)
+
+    def _collapse_tool_usage(self, rid):
+        span = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
+        if span is None:
+            return
+        doc = self.chat_display.document()
+        cur = QTextCursor(doc)
+        cur.setPosition(span[1])
+        table = None
+        for _ in range(4):
+            if not cur.movePosition(QTextCursor.MoveOperation.NextBlock):
+                break
+            table = cur.currentTable()
+            if table is not None:
+                break
+        if table is None:
+            return
+        from PyQt6.QtGui import QTextTable
+        while isinstance(table.parentFrame(), QTextTable):
+            table = table.parentFrame()
+        sb = self.chat_display.verticalScrollBar()
+        keep = sb.value()
+        cur = QTextCursor(doc)
+        cur.setPosition(span[0])
+        cur.setPosition(min(table.lastPosition() + 1, doc.characterCount() - 1),
+                        QTextCursor.MoveMode.KeepAnchor)
+        cur.insertHtml(self._tu_link_html(rid))
+        sb.setValue(keep)
+
+    def _tu_restore(self, sess, tab_id):
+        store = self._tu_store()
+        for k, rec in (sess.get("tool_usage") or {}).items():
+            try:
+                rid = int(k)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            rec = dict(rec)
+            rec["tab"] = tab_id
+            rec["done"] = True
+            rec["lines"] = [tuple(x) for x in (rec.get("lines") or [])
+                            if isinstance(x, (list, tuple)) and len(x) == 3]
+            store[rid] = rec
+
     def _chat_anchor_event(self, event):
         from PyQt6.QtCore import QEvent, Qt as _Qt
         from PyQt6.QtWidgets import QToolTip
@@ -13424,9 +13624,22 @@ enabled = true
                 _Qt.CursorShape.PointingHandCursor
                 if href.startswith(("hoplita:copy:", "hoplita:rate:",
                                     "hoplita:canvas:", "hoplita:qa:",
-                                    "hoplita:qa-hide:"))
+                                    "hoplita:qa-hide:", "hoplita:tu:",
+                                    "hoplita:tu-hide:"))
                 else _Qt.CursorShape.IBeamCursor)
             return False
+        if href.startswith("hoplita:tu-hide:"):
+            try:
+                self._collapse_tool_usage(int(href.rsplit(":", 1)[1]))
+            except ValueError:
+                return False
+            return True
+        if href.startswith("hoplita:tu:"):
+            try:
+                self._expand_tool_usage(int(href.rsplit(":", 1)[1]), event)
+            except ValueError:
+                return False
+            return True
         if href.startswith("hoplita:qa-hide:"):
             try:
                 self._collapse_qa_review(int(href.rsplit(":", 1)[1]))
@@ -13780,6 +13993,12 @@ enabled = true
         color = colors.get(sender, "#94a3b8")
         label = labels.get(sender, t("label.system"))
         rich_senders = ("assistant", "summary", "rag", "web", "browser")
+        if sender == "tool_usage":
+            try:
+                self._paint_tool_usage(int(message), tab_id or self._active_tab_id)
+            except (TypeError, ValueError):
+                pass
+            return
         if sender == "qa_review":
             import html as _h
             rec = (getattr(self, "_qa_reviews", None) or {}).get(int(message)) or {}
@@ -15193,7 +15412,7 @@ enabled = true
                 self.thread_msg(t("ctx.compact_nothing", n=len(hist),
                                   keep=keep_recent), "system")
                 return
-            self.thread_msg(t("msg.compacting"), "system")
+            self.thread_msg(t("msg.compacting"), "system", keep=True)
             _c = self._turn_ctx()
             _summary = self._compact_by_turn(hist, keep_recent)
             payload = {"summary": _summary,
@@ -15214,7 +15433,7 @@ enabled = true
             if not data.get("compacted"):
                 self.thread_msg(t("msg.compact_fail",
                                   why=data.get("why") or f"HTTP {r.status_code}"),
-                                "system")
+                                "system", keep=True)
                 return
             self.conversation_history = data["messages"]
             self._turn_ctx().compacted_ok = True
@@ -15228,7 +15447,7 @@ enabled = true
             self.thread_msg(
                 t("msg.compacted", n=data.get("replaced", 0),
                   total=data.get("summarised_total", data.get("replaced", 0)),
-                  since=data.get("since") or "?"), "system")
+                  since=data.get("since") or "?"), "system", keep=True)
             if data.get("tokens_before"):
                 f = lambda n: f"{n/1000:.1f}k" if n >= 1000 else str(n)
                 heavy = "; ".join(
@@ -15239,7 +15458,7 @@ enabled = true
                                   before=f(data["tokens_before"]),
                                   after=f(data.get("tokens_after", 0)),
                                   recent=f(data.get("recent_tokens", 0)),
-                                  heavy=heavy or "—"), "system")
+                                  heavy=heavy or "—"), "system", keep=True)
             try:
                 self._persist_tab(getattr(self._tls, "tab_id", None)
                                   or self._active_tab_id, quiet=True)
@@ -15247,7 +15466,7 @@ enabled = true
                 print(f"[COMPACT] could not persist: {_e}", file=sys.stderr)
         except Exception as e:
             print(f"[COMPACT] error: {e}", file=sys.stderr)
-            self.thread_msg(t("msg.compact_fail", why=str(e)[:300]), "error")
+            self.thread_msg(t("msg.compact_fail", why=str(e)[:300]), "error", keep=True)
         finally:
             self._compacting = False
 
@@ -15306,9 +15525,14 @@ enabled = true
 
     def _turn_wrapper(self, target, *args):
         tab_id = getattr(self._tls, "tab_id", None)
+        if getattr(target, "__name__", "") in self._UNFOLDED_TURNS:
+            self._tls.tu_rid = 0
+        else:
+            self._tu_begin(tab_id)
         try:
             target(*args)
         finally:
+            self._tu_end()
             ctx = self._chat_ctxs.get(tab_id)
             if ctx is not None:
                 ctx.turn_live = False
@@ -18047,8 +18271,11 @@ enabled = true
             except Exception as e:
                 print(f"[BACKGROUND] {name}: {e}", file=sys.stderr)
 
+        _tu_rid = getattr(self._tls, "tu_rid", 0)
+
         def _run_delegated(ev):
             self._tls.tab_id = tab
+            self._tls.tu_rid = _tu_rid
             self._tls.turn_id = turn_id
             name = ev.get("tool", "")
             if _turn_stop.is_set() or _was_stopped["v"]:
@@ -18353,6 +18580,7 @@ enabled = true
                         name = ev.get("tool", "")
                         _src = self._picture_sources_label(name, ev.get("args") or {})
                         self.thread_msg(f"  {tool_idx}. {name}{_src}({str(ev.get('args') or {})[:80]}...)")
+                        self._tu_tools(tool_idx)
                         _sctx = getattr(self, "_chat_ctxs", {}).get(tab)
                         if _sctx is not None:
                             if not hasattr(_sctx, "turn_steps"):
@@ -18370,6 +18598,7 @@ enabled = true
                         name = ev.get("tool", "")
                         self.thread_msg(f"  {tool_idx}. {name}({str(ev.get('args_preview') or '')[:80]}...)")
                         self.thread_msg(f"🔗 MCP ⟲ {name}", "system")
+                        self._tu_tools(tool_idx)
                         _sctx = getattr(self, "_chat_ctxs", {}).get(tab)
                         if _sctx is not None:
                             if not hasattr(_sctx, "turn_steps"):
@@ -18424,7 +18653,7 @@ enabled = true
                         if _sc is not None:
                             _sc.turn_record = ev.get("turn_record", "") or ""
                             _sc.turn_last_user = ev.get("last_user_sent")
-                        self.thread_msg(t("msg.task_stopped_user"), "system")
+                        self.thread_msg(t("msg.task_stopped_user"), "system", keep=True)
                         return "[The user stopped the task before it was completed.]"
                     elif et == "iteration_limit":
                         _sc = getattr(self, "_chat_ctxs", {}).get(tab)
@@ -18441,7 +18670,7 @@ enabled = true
                                 _oc.overflow_replay = True
                         self.thread_msg(t("ctx.overflow_compact", prompt=ev.get("prompt", "?"),
                                           reply=ev.get("reply", "?"), window=ev.get("window", "?")),
-                                        "system")
+                                        "system", keep=True)
                     elif et == "error":
                         err = ev.get("error", "?")
                         _sc = getattr(self, "_chat_ctxs", {}).get(tab)
@@ -19567,9 +19796,11 @@ enabled = true
 
     def _execute_cron_instruction(self, job):
         self._tls.unattended = True
+        self._tu_begin(CRON_TAB_ID)
         try:
             return self._execute_cron_job(job)
         finally:
+            self._tu_end()
             self._tls.unattended = False
 
     def _execute_cron_job(self, job):
