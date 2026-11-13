@@ -7547,6 +7547,8 @@ def _search_counts(root, query, file_pattern, single):
             r = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
                                env=dict(os.environ, LC_ALL="C"), timeout=900,
                                **__import__("hoplita_paths").no_console())
+            if r.returncode not in (0, 1):
+                raise OSError(r.stderr.strip()[:200] or f"grep exit {r.returncode}")
             for ln in r.stdout.splitlines():
                 fp, _, n = ln.rpartition(":")
                 if n.isdigit() and int(n) > 0:
@@ -7597,6 +7599,8 @@ def _search_lines(paths, query):
                                    text=True, errors="replace",
                                    env=dict(os.environ, LC_ALL="C"), timeout=300,
                                    **__import__("hoplita_paths").no_console())
+                if r.returncode not in (0, 1):
+                    raise OSError(r.stderr.strip()[:200] or f"grep exit {r.returncode}")
                 for ln in r.stdout.splitlines():
                     for fp in chunk:
                         if ln.startswith(fp + ":"):
@@ -14099,6 +14103,16 @@ def _code_project_note(path):
             f"read a function WHOLE by its span, never a window of N lines "
             f"around a hit, and when a hit says the function could not be "
             f"told, read around it before concluding anything.\n"
+            f"- A tree bigger than your window is read by PLACING the question, "
+            f"not by reading on: first whether the thing exists and where it "
+            f"lives (the spec, code_index, code_symbols on its names), then the "
+            f"functions that hold it, then who calls them (code_references). "
+            f"Search identifiers, not words. A search answers with exact totals "
+            f"and where the hits are (by_dir): use that to decide where NOT to "
+            f"go, and page on (`next`) only inside a scope you narrowed, or when "
+            f"the task is to see every hit. Keep the tally as you go, in your "
+            f"intent list within the turn and in the project's 'change' note "
+            f"across turns: what you confirmed is not re-read.\n"
             f"- Edit with code_apply_patch (validated, undoable with code_undo), "
             f"not shell redirection. Before a substantial change, git_branch; "
             f"commit there; when the work is done and verified, git_merge it "
