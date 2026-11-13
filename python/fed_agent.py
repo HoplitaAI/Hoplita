@@ -978,13 +978,17 @@ def result_preview(name, result, limit=200):
     except Exception:
         return txt[:limit]
     fns = o.get("functions") if isinstance(o, dict) else None
-    if (isinstance(fns, list) and fns
-            and all(isinstance(x, dict) and "file" in x and "hits" in x for x in fns[:5])):
-        total = o.get("hits_total") or sum(int(x.get("hits") or 0) for x in fns)
-        files = len({str(x.get("file")) for x in fns})
-        head = (f"{total} hits in {len(fns)} function{'s' if len(fns) != 1 else ''}, "
-                f"{files} file{'s' if files != 1 else ''}: ")
+    if isinstance(fns, list) and "hits_total" in o:
+        total, nfiles = int(o.get("hits_total") or 0), int(o.get("files_total") or 0)
+        page = o.get("page") or {}
+        head = f"{total} hits in {nfiles} file{'s' if nfiles != 1 else ''}"
+        if page.get("cursor"):
+            head += f", page of {page.get('lines')} lines ({len(fns)} functions), more follow: "
+        else:
+            head += f", {len(fns)} function{'s' if len(fns) != 1 else ''}: "
         parts = []
+        if page.get("cursor") and o.get("by_dir"):
+            parts = [f"{d.get('dir')}/ ({d.get('hits')})" for d in o["by_dir"] if d.get("dir")][:6]
         for x in fns:
             f_ = str(x.get("file", "")).replace("\\", "/").rsplit("/", 1)[-1]
             if x.get("scope"):

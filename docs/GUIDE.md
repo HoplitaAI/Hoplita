@@ -498,7 +498,7 @@ Experiences are saved through the MCP's `/feedback` endpoint (👍/👎 on an an
 | `code_index` | Index a project: tree, languages, sizes, detected project type |
 | `code_read_smart` | Smart read: a small file comes whole, a large one as structure + chunks |
 | `code_read_range` | Read a range of lines; past the turn's result cap it is cut on a whole line and says which lines fit |
-| `code_search` | Recursive grep across the whole project; every function with hits is listed with its count, its span and the read that fetches it whole, five lines of each |
+| `code_search` | Literal search across the whole project, whatever its size: exact totals and where the hits are, then pages of hits grouped by function, each with its count, its span and the read that fetches it whole; `next` fetches the following page |
 | `code_apply_patch` | Atomic edits (all-or-nothing with rollback). Creates files when missing |
 | `code_lint` | Diagnostics: pyright (types) + ruff (style) + go vet + tsc + cargo + fallbacks |
 | `code_deps` | Extract a file's imports/exports |

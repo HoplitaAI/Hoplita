@@ -12212,10 +12212,14 @@ enabled = true
                        (h.get("file", ""), int(h.get("line", 1) or 1)))
             it.setToolTip(h.get("text", ""))
             self.code_search_list.addItem(it)
-        self.code_search_count.setText(
-            t("code.search_truncated") if r.get("truncated")
-            else t("code.search_n", n=len(hits)) if hits
-            else t("code.search_none"))
+        if not hits:
+            self.code_search_count.setText(t("code.search_none"))
+        else:
+            label = t("code.search_total", h=r.get("hits_total", len(hits)),
+                      f=r.get("files_total", 0))
+            if (r.get("page") or {}).get("cursor"):
+                label += t("code.search_page", n=len(hits))
+            self.code_search_count.setText(label)
 
     def _code_search_open(self, item):
         if item is None:

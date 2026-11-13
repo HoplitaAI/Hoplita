@@ -7055,6 +7055,13 @@ _STRUCTURE_PATTERNS = {
     '.kt': r'^\s*(fun |class |object |data class )',
     '.rb': r'^\s*(def |class |module )',
     '.php': r'^\s*(function |class |interface |trait )',
+    '.c': r'^[A-Za-z_][A-Za-z0-9_ \t\*]*[ \t\*][A-Za-z_][A-Za-z0-9_]*\s*\([^;]*$',
+    '.h': r'^[A-Za-z_][A-Za-z0-9_ \t\*]*[ \t\*][A-Za-z_][A-Za-z0-9_]*\s*\([^;]*$',
+    '.cpp': r'^[A-Za-z_][A-Za-z0-9_ \t\*]*[ \t\*][A-Za-z_][A-Za-z0-9_]*\s*\([^;]*$',
+    '.cc': r'^[A-Za-z_][A-Za-z0-9_ \t\*]*[ \t\*][A-Za-z_][A-Za-z0-9_]*\s*\([^;]*$',
+    '.cxx': r'^[A-Za-z_][A-Za-z0-9_ \t\*]*[ \t\*][A-Za-z_][A-Za-z0-9_]*\s*\([^;]*$',
+    '.hpp': r'^[A-Za-z_][A-Za-z0-9_ \t\*]*[ \t\*][A-Za-z_][A-Za-z0-9_]*\s*\([^;]*$',
+    '.hh': r'^[A-Za-z_][A-Za-z0-9_ \t\*]*[ \t\*][A-Za-z_][A-Za-z0-9_]*\s*\([^;]*$',
 }
 
 
@@ -7119,7 +7126,8 @@ def _code_symbol_index(root):
 
 
 _CODE_SCOPE_CACHE = {}
-_BRACE_EXTS = {".go", ".js", ".ts", ".rs", ".java", ".kt", ".php"}
+_BRACE_EXTS = {".go", ".js", ".ts", ".rs", ".java", ".kt", ".php",
+               ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh"}
 _DECL_NAME_GO = re.compile(r'^\s*func\s*\([^)]*\)\s*([A-Za-z_][A-Za-z0-9_]*)')
 _DECL_NAME_CALL = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*\(')
 
@@ -7132,11 +7140,15 @@ def _decl_name(line):
     return m.group(1) if m else line.strip()[:40]
 
 
-def _strip_code_line(line):
+def _strip_code_line(line, block=False):
     out, i, n, q = [], 0, len(line), ""
     while i < n:
         c = line[i]
-        if q:
+        if block:
+            if line[i:i + 2] == "*/":
+                block = False
+                i += 1
+        elif q:
             if c == "\\":
                 i += 1
             elif c == q:
@@ -7145,10 +7157,13 @@ def _strip_code_line(line):
             q = c
         elif c == "/" and line[i:i + 2] == "//":
             break
+        elif c == "/" and line[i:i + 2] == "/*":
+            block = True
+            i += 1
         else:
             out.append(c)
         i += 1
-    return "".join(out)
+    return "".join(out), block
 
 
 def _code_scopes(path):
@@ -7196,12 +7211,13 @@ def _code_scopes(path):
         if ext in _BRACE_EXTS:
             how = "braces"
             for i in decls:
-                depth, opened, end = 0, False, None
+                depth, opened, end, blk = 0, False, None, False
                 for j in range(i, min(len(lines), i + 5000)):
                     if j > i and not opened and re.match(pat, lines[j]):
                         break
                     ended = False
-                    for c in _strip_code_line(lines[j]):
+                    code, blk = _strip_code_line(lines[j], blk)
+                    for c in code:
                         if c == "{":
                             depth += 1
                             opened = True
@@ -7215,7 +7231,7 @@ def _code_scopes(path):
                     if opened and depth <= 0:
                         end = j + 1
                         break
-                    if not opened and j > i + 2:
+                    if not opened and j > i + 8:
                         break
                 if opened:
                     scopes.append((_decl_name(lines[i]), "decl", i + 1, end))
@@ -7510,131 +7526,246 @@ def tool_code_read_range(path, start_line, end_line):
         return {"error": str(e)}
 
 
-_SEARCH_RAW_MAX = 2000
-_SEARCH_FUNCTIONS_MAX = 100
+_SEARCH_CACHE = {}
+_SEARCH_PAGE_LINES = 1000
 
 
-def tool_code_search(path, query, file_pattern=None, per_scope=5):
+def _search_counts(root, query, file_pattern, single):
+    t0 = time.time()
+    ql = query.lower()
+    found, engine = [], ""
+    g = shutil.which("grep")
+    if g:
+        cmd = [g, "-rIicHF"]
+        if file_pattern:
+            cmd.append(f"--include={file_pattern}")
+        cmd.append("--exclude-dir=.*")
+        cmd += [f"--exclude-dir={d}" for d in sorted(_CODE_SKIP_DIRS)]
+        cmd += [f"--exclude=*{e}" for e in sorted(_CODE_SKIP_EXTS)]
+        cmd += ["--", query, root]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                               env=dict(os.environ, LC_ALL="C"), timeout=900,
+                               **__import__("hoplita_paths").no_console())
+            for ln in r.stdout.splitlines():
+                fp, _, n = ln.rpartition(":")
+                if n.isdigit() and int(n) > 0:
+                    found.append((fp, int(n)))
+            engine = "grep"
+        except (OSError, subprocess.TimeoutExpired):
+            engine = ""
+    if not engine:
+        engine = "python"
+        if single:
+            paths = [root]
+        else:
+            paths = []
+            for r_, dirs, fnames in os.walk(root):
+                dirs[:] = [d for d in dirs if d not in _CODE_SKIP_DIRS and not d.startswith(".")]
+                for fn in fnames:
+                    if os.path.splitext(fn)[1].lower() in _CODE_SKIP_EXTS:
+                        continue
+                    if file_pattern and not _fnmatch.fnmatch(fn, file_pattern):
+                        continue
+                    paths.append(os.path.join(r_, fn))
+        for fp in paths:
+            n = 0
+            try:
+                with open(fp, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        if ql in line.lower():
+                            n += 1
+            except OSError:
+                continue
+            if n:
+                found.append((fp, n))
+    base = os.path.dirname(root) or "." if single else root
+    files = sorted(((os.path.relpath(fp, base).replace(os.sep, "/"), os.path.abspath(fp), n)
+                    for fp, n in found), key=lambda x: x[0])
+    return files, engine, round(time.time() - t0, 2)
+
+
+def _search_lines(paths, query):
+    ql = query.lower()
+    out = {fp: [] for fp in paths}
+    g = shutil.which("grep")
+    if g and paths:
+        try:
+            for k in range(0, len(paths), 100):
+                chunk = paths[k:k + 100]
+                r = subprocess.run([g, "-nIiHF", "--", query] + chunk, capture_output=True,
+                                   text=True, errors="replace",
+                                   env=dict(os.environ, LC_ALL="C"), timeout=300,
+                                   **__import__("hoplita_paths").no_console())
+                for ln in r.stdout.splitlines():
+                    for fp in chunk:
+                        if ln.startswith(fp + ":"):
+                            rest = ln[len(fp) + 1:]
+                            no, _, text = rest.partition(":")
+                            if no.isdigit():
+                                out[fp].append((int(no), text.strip()[:200]))
+                            break
+            return out
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    for fp in paths:
+        try:
+            with open(fp, "r", encoding="utf-8", errors="replace") as fh:
+                out[fp] = [(i, line.strip()[:200]) for i, line in enumerate(fh, 1)
+                           if ql in line.lower()]
+        except OSError:
+            out[fp] = []
+    return out
+
+
+def _search_call(path, query, file_pattern, cursor):
+    args = f"path={json.dumps(path, ensure_ascii=False)}, query={json.dumps(query, ensure_ascii=False)}"
+    if file_pattern:
+        args += f", file_pattern={json.dumps(file_pattern, ensure_ascii=False)}"
+    return f"code_search({args}, cursor={json.dumps(cursor)})"
+
+
+def tool_code_search(path, query, file_pattern=None, per_scope=5, cursor=None):
     if not (path or "").strip():
         return {"error": "code_search needs 'path': the directory to search. "
                          "In code mode that is the open project's path "
                          "(shown in the [CODE MODE] note).",
                 "searched": None}
-    p = os.path.expanduser(path)
-    skip = _CODE_SKIP_DIRS
-    skip_ext = _CODE_SKIP_EXTS
-    results = []
-    ql = query.lower()
-
-    if os.path.isfile(p):
-        candidates = [(os.path.basename(p), p)]
-        rel_base = os.path.dirname(p) or "."
-    else:
-        candidates = None
-        rel_base = p
-
-    def _scan(fp, relname):
-        try:
-            with open(fp, "r", encoding="utf-8", errors="replace") as f:
-                for i, line in enumerate(f, 1):
-                    if ql in line.lower():
-                        results.append({"file": relname, "line": i,
-                                        "text": line.strip()[:200],
-                                        "_fp": os.path.abspath(fp)})
-                        if len(results) >= _SEARCH_RAW_MAX:
-                            return True
-        except Exception:
-            pass
-        return False
-
-    def _done(out):
-        cap = _tool_line_cap()
-        lines_of = {}
-        for r in out["results"]:
-            fp = r.pop("_fp")
-            try:
-                r.update(_scope_fields(fp, r["line"], cap, lines_of))
-            except Exception as ex:
-                r["scope"] = None
-                r["scope_note"] = f"could not tell which function holds line {r['line']}: {ex}"
-        out["cap_chars"] = cap
-        groups, members, order = {}, {}, []
-        for r in out["results"]:
-            k = (r["file"], r.get("scope"), r.get("scope_lines"))
-            g = groups.get(k)
-            if g is None:
-                g = groups[k] = {"file": r["file"], "scope": r.get("scope"), "hits": 0,
-                                 "_first": r["line"], "_last": r["line"]}
-                for f_ in ("scope_lines", "scope_size", "scope_how", "read", "scope_note"):
-                    if r.get(f_) is not None:
-                        g[f_] = r[f_]
-                members[k] = []
-                order.append(k)
-            g["hits"] += 1
-            g["_last"] = r["line"]
-            members[k].append(r)
-        per = max(0, int(per_scope or 0))
-        shown = []
-        for k in order:
-            g = groups[k]
-            take = members[k] if not per else members[k][:per]
-            g["shown"] = len(take)
-            first, last = g.pop("_first"), g.pop("_last")
-            g["lines"] = f"{first}-{last}" if g["hits"] > 1 else str(first)
-            shown.extend(take)
-        total = len(out["results"])
-        if len(order) > _SEARCH_FUNCTIONS_MAX:
-            kept = set(order[:_SEARCH_FUNCTIONS_MAX])
-            shown = [r for r in shown
-                     if (r["file"], r.get("scope"), r.get("scope_lines")) in kept]
-            out["truncated"] = True
-            out["functions_total"] = len(order)
-            out["note"] = (f"{len(order)} functions hold this text; the first "
-                           f"{_SEARCH_FUNCTIONS_MAX} are listed. Narrow the query, "
-                           f"the path or the file_pattern.")
-            order = order[:_SEARCH_FUNCTIONS_MAX]
-        out["results"] = shown
-        out["functions"] = [groups[k] for k in order]
-        out["hits_total"] = total
-        if per and total > len(shown):
-            out["hint"] = (f"results keeps {per} lines per function ({len(shown)} of {total} hits); "
-                           f"functions lists every function with hits, how many, and the "
-                           f"code_read_range that reads it whole. Read the function, not "
-                           f"lines around a hit.")
-        if out.get("truncated") and "note" not in out:
-            out["note"] = (f"stopped at {_SEARCH_RAW_MAX} matching lines: narrow the query, "
-                           f"the path or the file_pattern.")
+    p = os.path.abspath(os.path.expanduser(path))
+    if not os.path.exists(p):
+        return {"error": f"{p} does not exist", "searched": p}
+    single = os.path.isfile(p)
+    sid = hashlib.sha1(f"{p}|{query.lower()}|{file_pattern or ''}".encode("utf-8")).hexdigest()[:8]
+    ent = _SEARCH_CACHE.get(sid)
+    if ent is None:
+        files, engine, secs = _search_counts(p, query, file_pattern, single)
+        ent = {"files": files, "total": sum(n for _, _, n in files),
+               "engine": engine, "seconds": secs, "t": time.time()}
+        _SEARCH_CACHE[sid] = ent
+        while len(_SEARCH_CACHE) > 12:
+            _SEARCH_CACHE.pop(min(_SEARCH_CACHE, key=lambda k: _SEARCH_CACHE[k]["t"]))
+    ent["t"] = time.time()
+    files, total = ent["files"], ent["total"]
+    out = {"searched": p, "mode": "literal substring", "engine": ent["engine"],
+           "seconds": ent["seconds"], "hits_total": total, "files_total": len(files)}
+    if not files:
+        out.update({"results": [], "functions": [], "page": None, "next": None})
+        if any(c in query for c in "\\^$|()[]{}+*?"):
+            out["note"] = ("your query contains regex metacharacters, but this "
+                           "search is LITERAL: they were matched as plain "
+                           "characters. Write the text exactly as it appears in "
+                           "the code, or use code_outline/code_symbols for "
+                           "structural questions.")
         return out
-
-    if candidates is not None:
-        for fn, fp in candidates:
-            if _scan(fp, fn):
-                return _done({"results": results, "truncated": True,
-                              "searched": os.path.abspath(p),
-                              "mode": "literal substring"})
+    dirs = {}
+    for rel, _, n in files:
+        d = rel.split("/", 1)[0] if "/" in rel else "."
+        h = dirs.setdefault(d, [0, 0])
+        h[0] += n
+        h[1] += 1
+    ranked = sorted(dirs.items(), key=lambda kv: (-kv[1][0], kv[0]))
+    out["by_dir"] = [{"dir": d, "hits": h, "files": f} for d, (h, f) in ranked[:30]]
+    if len(ranked) > 30:
+        out["by_dir"].append({"others": len(ranked) - 30,
+                              "hits": sum(h for _, (h, _) in ranked[30:])})
+    if len(files) <= 60:
+        out["by_file"] = [{"file": rel, "hits": n} for rel, _, n in files]
     else:
-        for root, dirs, fnames in os.walk(p):
-            dirs[:] = [d for d in dirs
-                       if d not in skip and not d.startswith('.')]
-            for fn in fnames:
-                if os.path.splitext(fn)[1].lower() in skip_ext:
+        out["by_file"] = [{"file": rel, "hits": n} for rel, _, n in
+                          sorted(files, key=lambda x: (-x[2], x[0]))[:20]]
+        out["by_file_note"] = f"the 20 of {len(files)} files with most hits; by_dir has them all"
+    fi, after = 0, 0
+    if cursor:
+        try:
+            c_sid, fi_s, ln_s = str(cursor).split(":")
+            fi, after = int(fi_s), int(ln_s)
+        except ValueError:
+            return {"error": f"cursor {cursor!r} is not one this search gave: use the `next` of a page as it came"}
+        if c_sid != sid or fi < 0 or fi > len(files):
+            return {"error": f"cursor {cursor!r} belongs to another search (path, query or file_pattern differ): use the `next` of THIS search's page"}
+    cap = _tool_line_cap()
+    tcap = _turn_line_cap()
+    budget = (tcap - len(json.dumps(out, ensure_ascii=False)) - 700) if tcap else None
+    per = max(0, int(per_scope or 0))
+    functions, results, size, page_lines, lines_of = [], [], 0, 0, {}
+    next_cursor = None
+    i = fi
+    while i < len(files) and next_cursor is None:
+        batch, acc = [], 0
+        for j in range(i, len(files)):
+            batch.append(files[j])
+            acc += files[j][2]
+            if acc >= _SEARCH_PAGE_LINES:
+                break
+        got = _search_lines([ab for _, ab, _ in batch], query)
+        for rel, ab, n in batch:
+            lines = got.get(ab) or []
+            scopes, how = _code_scopes(ab)
+            groups, order = {}, []
+            for no, text in lines:
+                sc = _scope_at(scopes, no) if scopes else None
+                k = (sc[0], sc[2], sc[3]) if sc else None
+                if k not in groups:
+                    groups[k] = []
+                    order.append(k)
+                groups[k].append((no, text))
+            for k in order:
+                allv = groups[k]
+                mine = [x for x in allv if x[0] > after] if (i == fi and after) else allv
+                if not mine:
                     continue
-                if file_pattern and not _fnmatch.fnmatch(fn, file_pattern):
-                    continue
-                fp = os.path.join(root, fn)
-                if _scan(fp, os.path.relpath(fp, rel_base)):
-                    return _done({"results": results, "truncated": True,
-                                  "searched": os.path.abspath(p),
-                                  "mode": "literal substring"})
-    out = {"results": results, "truncated": False,
-           "searched": os.path.abspath(p), "mode": "literal substring"}
-    if not results and any(c in query for c in "\\^$|()[]{}+*?"):
-        out["note"] = ("your query contains regex metacharacters, but this "
-                       "search is LITERAL: they were matched as plain "
-                       "characters. Write the text exactly as it appears in "
-                       "the code, or use code_outline/code_symbols for "
-                       "structural questions.")
-    return _done(out)
+                entry = {"file": rel, "hits": len(allv)}
+                entry.update(_scope_fields(ab, mine[0][0], cap, lines_of))
+                entry["lines"] = (f"{allv[0][0]}-{allv[-1][0]}" if len(allv) > 1 else str(allv[0][0]))
+                est = len(json.dumps(entry, ensure_ascii=False)) + 12
+                if functions and ((budget is not None and size + est > budget)
+                                  or page_lines >= _SEARCH_PAGE_LINES):
+                    next_cursor = f"{sid}:{i}:{mine[0][0] - 1}"
+                    break
+                keep = mine if not per else mine[:per]
+                room = None if budget is None else max(0, budget - size - est)
+                rows = []
+                for no, text in keep:
+                    row = {"file": rel, "line": no, "scope": entry.get("scope"), "text": text}
+                    rl = len(json.dumps(row, ensure_ascii=False)) + 2
+                    if room is not None and rl > room and (rows or functions):
+                        break
+                    if budget is None and page_lines + len(rows) >= _SEARCH_PAGE_LINES and (rows or functions):
+                        break
+                    rows.append(row)
+                    if room is not None:
+                        room -= rl
+                if not rows:
+                    next_cursor = f"{sid}:{i}:{mine[0][0] - 1}"
+                    break
+                entry["shown"] = len(rows)
+                functions.append(entry)
+                results.extend(rows)
+                size += est + sum(len(json.dumps(r_, ensure_ascii=False)) + 2 for r_ in rows)
+                if len(rows) < len(keep):
+                    page_lines += len(rows)
+                    next_cursor = f"{sid}:{i}:{rows[-1]['line']}"
+                    break
+                page_lines += len(mine)
+            if next_cursor is not None:
+                break
+            i += 1
+            after = 0
+    out["results"] = results
+    out["functions"] = functions
+    out["cap_chars"] = cap
+    out["page"] = {"files": f"{fi + 1}-{min(i + (1 if next_cursor else 0), len(files))} of {len(files)}",
+                   "lines": page_lines, "cursor": next_cursor}
+    out["next"] = _search_call(path, query, file_pattern, next_cursor) if next_cursor else None
+    if next_cursor:
+        out["hint"] = (f"{total} hits in {len(files)} files; this page holds {page_lines} of them, "
+                       f"grouped by function ({per or 'all'} lines each). Is this the text you are after? "
+                       f"If so, `next` is the following page: call it until it is null. If not, narrow: "
+                       f"path (by_dir says where the hits are), file_pattern, or a longer text.")
+    else:
+        out["hint"] = (f"every hit is here: {total} in {len(files)} files, grouped by function. "
+                       f"Read a function by its read, not lines around a hit.")
+    return out
 
 
 _CODE_CHECKPOINTS = {}
@@ -7650,7 +7781,7 @@ def _git(args, cwd, env=None, raw=False):
         r = subprocess.run(["git"] + args, capture_output=True, text=True,
                            timeout=30, cwd=cwd,
                            env=dict(os.environ, **(env or {})),
-                           **hoplita_paths.no_console())
+                           **__import__("hoplita_paths").no_console())
         out = r.stdout or ""
         return r.returncode == 0, (out if raw else out.strip())
     except Exception:
@@ -9198,7 +9329,13 @@ def tool_code_references(path, symbol, project_path=None):
             pass
     ext = os.path.splitext(p)[1].lower()
     file_pat = _REF_FILE_PATTERNS.get(ext, '*')
-    refs = tool_code_search(proj, symbol, file_pattern=file_pat, per_scope=0).get("results", [])
+    refs, _cur = [], None
+    for _ in range(50):
+        _r = tool_code_search(proj, symbol, file_pattern=file_pat, per_scope=0, cursor=_cur)
+        refs.extend(_r.get("results") or [])
+        _cur = (_r.get("page") or {}).get("cursor")
+        if not _cur:
+            break
 
     def_patterns = {
         '.py': rf'^\s*(def|class|async def)\s+{re.escape(symbol)}\b',
@@ -10445,9 +10582,9 @@ def register_tools():
                                    "fn": lambda a: tool_code_read_smart(a["path"], a.get("search"))},
         "code_read_range":        {"desc": "Read a range of lines from a file. Ask for a FUNCTION by its span (code_search and code_symbols give it), not a window of N lines around a hit. A range bigger than one result may carry this turn comes back cut on a whole line, saying which lines these are, how many lines of this file fit, and the exact next call.",
                                    "fn": lambda a: tool_code_read_range(a["path"], a["start_line"], a["end_line"])},
-        "code_search":            {"desc": "Search a LITERAL text (case-insensitive substring) across the project. NOT a regex — write the text exactly as it appears in the code. `functions` lists every function (or class) with hits: how many, its line span and the exact code_read_range that reads it whole; `results` keeps five lines per function. Read the function, not N lines around a hit: an initialisation two lines past a window is how a variable gets called uninitialised. When the function cannot be told (a language this does not parse, a script with no declaration above, a brace that never closes) the hit says so in words; the line may still sit inside one.",
+        "code_search":            {"desc": "Search a LITERAL text (case-insensitive substring, NOT a regex) across the project, whatever its size: hits_total and files_total are exact, by_dir says where the hits are, and the hits come in PAGES grouped by function: `functions` (how many hits, the line span, the exact code_read_range that reads it whole), `results` (five lines per function). `next` is the call for the following page (cursor): call it until it is null, or narrow with path, file_pattern or a longer text. Read the function, not N lines around a hit: an initialisation two lines past a window is how a variable gets called uninitialised. When the function cannot be told, the hit says so; the line may still sit inside one.",
                                    "fn": lambda a: tool_code_search(a.get("path", ""), a["query"], a.get("file_pattern"),
-                                                                    per_scope=a.get("per_scope", 5))},
+                                                                    per_scope=a.get("per_scope", 5), cursor=a.get("cursor"))},
         "code_apply_patch":       {"desc": "Apply multiple edits atomically. If one fails, none are applied. Also creates new files if 'old' is empty. In a git repo it takes a checkpoint first, so code_undo can put it back.",
                                    "fn": lambda a: tool_code_apply_patch(a["path"], a["changes"])},
         "code_write_file":        {"desc": "Write a whole file at once, taking a checkpoint first so it can be undone. Use code_apply_patch for surgical edits — it validates what it replaces; this one is for creating a file or replacing it entirely.",
@@ -10972,7 +11109,7 @@ def register_tool_params():
         "code_symbols":           {"properties": {"query": {"type": "string", "description": "The name to locate. Empty = the project's shape."}, "path": {"type": "string", "description": "Project root. Defaults to the open project."}, "limit": {"type": "integer"}}, "required": []},
         "code_read_smart":        {"properties": {"path": {"type": "string"}, "search": {"type": "string"}}, "required": ["path"]},
         "code_read_range":        {"properties": {"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, "required": ["path", "start_line", "end_line"]},
-        "code_search":            {"properties": {"path": {"type": "string", "description": "Directory to search — there is no sensible default (the daemon's cwd is HOPLITA itself). In code mode: the open project's path."}, "query": {"type": "string", "description": "LITERAL text, matched case-insensitively as a substring. Not a regex: metacharacters are searched as plain characters."}, "file_pattern": {"type": "string"}}, "required": ["query", "path"]},
+        "code_search":            {"properties": {"path": {"type": "string", "description": "Directory to search — there is no sensible default (the daemon's cwd is HOPLITA itself). In code mode: the open project's path."}, "query": {"type": "string", "description": "LITERAL text, matched case-insensitively as a substring. Not a regex: metacharacters are searched as plain characters."}, "file_pattern": {"type": "string"}, "cursor": {"type": "string", "description": "The cursor of a page's `next`, for the following page of the same search."}}, "required": ["query", "path"]},
         "code_apply_patch":       {"properties": {"path": {"type": "string"}, "changes": {"type": "array", "items": {"type": "object"}}}, "required": ["path", "changes"]},
         "code_write_file":        {"properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
         "code_undo":              {"properties": {"path": {"type": "string", "description": "Any path inside the project. Defaults to the current directory."}, "steps": {"type": "integer", "description": "How many edits to undo, newest first. Default 1."}}},
