@@ -16,7 +16,19 @@ router, the memory and the tools. Two faces talk to it over HTTP — a desktop
 **GUI** (PyQt6) and a Unix-style **CLI** (Go) — and any third face can use the
 same API.
 
-**Start here:** [Install it on Linux, macOS or Windows](docs/INSTALL.md) ·
+**Install in one line.** Linux and macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1 | iex
+```
+
+No Python needed first; the same line updates. Details and options: [Install](#install) ·
 [First steps: the model and the search key it needs](docs/FIRST-STEPS.md) ·
 [Every command](docs/COMMANDS.md)
 
