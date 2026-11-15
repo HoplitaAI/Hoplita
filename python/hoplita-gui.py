@@ -463,6 +463,33 @@ def _add_redo_key(widget):
         print(f"[GUI] Ctrl+Y not bound: {e}", file=sys.stderr)
 
 
+class ChatView(QTextEdit):
+    RELAYOUT_MS = 120
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        from PyQt6.QtCore import QTimer
+        self._relayout_timer = QTimer(self)
+        self._relayout_timer.setSingleShot(True)
+        self._relayout_timer.setInterval(self.RELAYOUT_MS)
+        self._relayout_timer.timeout.connect(self._relayout_now)
+
+    def resizeEvent(self, ev):
+        from PyQt6.QtCore import QSize
+        from PyQt6.QtGui import QResizeEvent
+        if ev.oldSize().width() != ev.size().width() and ev.oldSize().width() > 0:
+            super().resizeEvent(QResizeEvent(
+                ev.size(), QSize(ev.size().width(), ev.oldSize().height())))
+            self._relayout_timer.start()
+            return
+        super().resizeEvent(ev)
+
+    def _relayout_now(self):
+        from PyQt6.QtCore import QSize
+        from PyQt6.QtGui import QResizeEvent
+        super().resizeEvent(QResizeEvent(self.size(), QSize(-1, self.height())))
+
+
 class ChatInput(QTextEdit):
 
     returnPressed = pyqtSignal()
@@ -2824,11 +2851,24 @@ class ChatAssistantWindow(QMainWindow):
                 panel.update_state(self._agents_cards_for_active())))
 
     def _poll_session_events(self):
+        if getattr(self, "_sess_poll_live", False):
+            return
+        self._sess_poll_live = True
+
+        def work():
+            try:
+                r = requests.get(f"{self._mcp_url}/agent/session-events", timeout=3)
+                return r.json() if r.status_code == 200 else None
+            except Exception:
+                return None
+
+        self._bg(work, self._paint_session_events)
+
+    def _paint_session_events(self, payload):
+        self._sess_poll_live = False
+        if not isinstance(payload, dict):
+            return
         try:
-            r = requests.get(f"{self._mcp_url}/agent/session-events", timeout=3)
-            if r.status_code != 200:
-                return
-            payload = r.json()
             _seen = getattr(self, "_shares_shown", None)
             if _seen is None:
                 _seen = set(); self._shares_shown = _seen
@@ -3091,20 +3131,30 @@ class ChatAssistantWindow(QMainWindow):
         return None
 
     def _poll_pending_approvals(self):
-        try:
-            r = requests.get(f"{self._mcp_url}/agent/pending-approvals", timeout=3)
-            if r.status_code != 200:
-                return
-            for p in r.json().get("pending", []):
-                aid = p.get("id")
-                if aid in self._approvals_shown:
-                    continue
-                self._approvals_shown.add(aid)
-                self.signals.session_incoming.emit(p.get("peer", ""),
-                                                   p.get("message", ""), aid or "")
+        if getattr(self, "_approval_poll_live", False):
+            return
+        self._approval_poll_live = True
 
-        except Exception:
-            pass
+        def work():
+            try:
+                r = requests.get(f"{self._mcp_url}/agent/pending-approvals", timeout=3)
+                return r.json() if r.status_code == 200 else None
+            except Exception:
+                return None
+
+        self._bg(work, self._paint_pending_approvals)
+
+    def _paint_pending_approvals(self, data):
+        self._approval_poll_live = False
+        if not isinstance(data, dict):
+            return
+        for p in data.get("pending", []):
+            aid = p.get("id")
+            if aid in self._approvals_shown:
+                continue
+            self._approvals_shown.add(aid)
+            self.signals.session_incoming.emit(p.get("peer", ""),
+                                               p.get("message", ""), aid or "")
 
     def _approval_still_pending(self, aid, box):
         try:
@@ -3938,12 +3988,26 @@ class ChatAssistantWindow(QMainWindow):
         return None
 
     def _code_wb_poll(self):
-        root = (self._code_project or "").rstrip("/\\")
-        try:
-            jobs = requests.get(f"{self._wb_url()}/wb/api/draw",
-                                params={"root": root}, timeout=3).json().get("jobs", [])
-        except Exception:
+        if getattr(self, "_wb_poll_live", False):
             return
+        root = (self._code_project or "").rstrip("/\\")
+        url = f"{self._wb_url()}/wb/api/draw"
+        self._wb_poll_live = True
+
+        def work():
+            try:
+                return root, requests.get(url, params={"root": root},
+                                          timeout=3).json().get("jobs", [])
+            except Exception:
+                return None
+
+        self._bg(work, self._code_wb_jobs_paint)
+
+    def _code_wb_jobs_paint(self, res):
+        self._wb_poll_live = False
+        if not res:
+            return
+        root, jobs = res
         running = [j for j in jobs if j.get("state") == "running"]
         self._wb_running = [j["id"] for j in running]
         self.code_wb_stop.setVisible(bool(running))
@@ -5390,9 +5454,21 @@ enabled = true
     _REVIEW_STILL_S = {"classify": 330, "facts": 90, "lessons": 330, "duplicates": 330, "apply": 60}
 
     def _review_tick(self):
-        try:
-            p = requests.get(f"{self._mcp_url}/memory/review/progress", timeout=2).json()
-        except Exception:
+        if getattr(self, "_review_poll_live", False):
+            return
+        self._review_poll_live = True
+
+        def work():
+            try:
+                return requests.get(f"{self._mcp_url}/memory/review/progress", timeout=2).json()
+            except Exception:
+                return None
+
+        self._bg(work, self._review_paint)
+
+    def _review_paint(self, p):
+        self._review_poll_live = False
+        if not isinstance(p, dict):
             return
         if not p.get("running"):
             if not self.prop_curate.isEnabled():
@@ -6038,7 +6114,7 @@ enabled = true
         parent_layout.addWidget(self.motd_banner)
 
 
-        self.chat_display = QTextEdit()
+        self.chat_display = ChatView()
         self.chat_display.setReadOnly(True)
         self.chat_display.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.chat_display.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
@@ -6069,6 +6145,7 @@ enabled = true
         _cp.setSpacing(4)
         self._intent_strip = QLabel()
         self._intent_strip.setTextFormat(Qt.TextFormat.RichText)
+        self._intent_strip.setWordWrap(True)
         self._intent_strip.setVisible(False)
         self._intent_strip.setCursor(Qt.CursorShape.PointingHandCursor)
         self._intent_strip.setToolTip(t("agents.intent_strip_tip"))

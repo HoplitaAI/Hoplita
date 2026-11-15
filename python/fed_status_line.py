@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
@@ -61,6 +61,25 @@ class _Bar(QWidget):
             p.drawRoundedRect(QRectF(0, 0, max(6.0, self.width() * self.frac), 6), 3, 3)
 
 
+class _ElideLabel(QLabel):
+
+    def minimumSizeHint(self):
+        return QSize(0, super().minimumSizeHint().height())
+
+    def setText(self, text):
+        super().setText(text)
+        self.setToolTip(text if len(text) > 24 else "")
+
+    def paintEvent(self, ev):
+        if self.fontMetrics().horizontalAdvance(self.text()) <= self.contentsRect().width():
+            return super().paintEvent(ev)
+        p = QPainter(self)
+        p.setPen(self.palette().color(self.foregroundRole()))
+        p.drawText(self.contentsRect(), int(self.alignment()) | Qt.TextFlag.TextSingleLine,
+                   self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight,
+                                                 self.contentsRect().width()))
+
+
 class _Meter(QWidget):
     def __init__(self):
         super().__init__()
@@ -97,17 +116,17 @@ class FedStatusLine(QWidget):
         h = QHBoxLayout(self)
         h.setContentsMargins(12, 4, 12, 4)
         h.setSpacing(14)
-        self.who = QLabel()
+        self.who = _ElideLabel()
         self.who.setObjectName("fed_who")
         h.addWidget(self.who)
-        self.tier = QLabel()
+        self.tier = _ElideLabel()
         self.tier.setObjectName("fed_tier")
         h.addWidget(self.tier)
-        self.lend = QLabel()
+        self.lend = _ElideLabel()
         self.lend.setObjectName("fed_lend")
         self.lend.setVisible(False)
         h.addWidget(self.lend)
-        self.note = QLabel()
+        self.note = _ElideLabel()
         self.note.setObjectName("fed_note")
         h.addWidget(self.note)
         self._meters_at = h.count()
