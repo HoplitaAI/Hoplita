@@ -164,38 +164,21 @@ network.
 
 ## Install
 
-Linux and macOS:
+The lines at the top are the whole install. When the machine has no Python
+3.11+ that can make a virtual environment, the installer fetches a standalone
+one into the install folder; the same line run again updates.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | sh
-```
-
-Windows (PowerShell):
-
-```powershell
-irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1 | iex
-```
-
-No Python needed first: when the machine has no Python 3.11+ that can make a
-virtual environment, a standalone one is fetched into the install folder.
-Run the same line again to update. Options, the manual install from a clone
-(`python install.py`) and what each system needs:
-**[docs/INSTALL.md](docs/INSTALL.md)**.
-
-The installer creates the app folder and a virtual environment, installs the
-core dependencies (`requirements.txt`), creates `config.ini` and the desktop
-shortcuts. `--browser` adds the browsing stack and Playwright's Chromium.
+It creates the app folder (`~/hoplita` on Linux and macOS, `%APPDATA%\hoplita`
+on Windows: your own folder, no root or sudo; `--prefix` picks another), a
+virtual environment with the core dependencies, `config.ini` and the desktop
+shortcuts, and ends by listing which parts are in.
 
 To remove it, `python install.py --uninstall` takes away the program, its
 virtual environment and its shortcuts and keeps your data (config, encrypted
 store, memory, notes); add `--purge` to delete those too.
 
-The default install folder is `~/hoplita` on Linux and macOS and
-`%APPDATA%\hoplita` on Windows — your own folder, no root or sudo needed;
-`--prefix` picks another. Optional parts are
-flags: `--browser`, `--cli` (needs Go), `--desktop`, `--diffr`, `--lsp`,
-`--system-libs`; `--full` is every part that needs neither Go nor root, `--all`
-is every part. `--update` refreshes an existing install.
+The manual install from a clone (`python install.py`), every flag and what
+each system needs: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ## Run
 
