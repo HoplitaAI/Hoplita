@@ -104,7 +104,7 @@ Everything else follows the base on its own; the other tabs carry sane defaults.
 
 ## `[RAG]` — Retrieval
 
-RAG is word search: no model call reads a `[RAG]` endpoint, so it has none. `base_url`/`api_key`/`model` keys in this section (the example still carries them) are left in the file, read by nothing and shown nowhere.
+RAG is word search: no model call reads a `[RAG]` endpoint, so the section has none. An older file may still carry `base_url`, `api_key` or `model` here; they are read by nothing and shown nowhere.
 
 | Key | Type | Default | What it does |
 |---|---|---|---|
@@ -323,7 +323,7 @@ The whiteboard has no `config.ini` section: its store is `<HOPLITA_HOME>/whitebo
 
 ## Keys the code ignores
 
-These may appear in `config.ini.example` or in an older file and do nothing: `[BROWSER] num_ctx`, `[MCP] enabled`, `[RAG] base_url` / `api_key` / `model`, and `[CHAT] num_ctx` (which only triggers the warning described above). Any key not documented on this page belongs here too.
+These may appear in an older file and do nothing: `[BROWSER] num_ctx`, `[MCP] enabled`, `[RAG] base_url` / `api_key` / `model`, and `[CHAT] num_ctx` (which only triggers the warning described above). Any key not documented on this page belongs here too.
 
 ## Internal values (not configurable)
 

@@ -4390,13 +4390,11 @@ api_key =
 model = your-model
 
 [RAG]
-base_url =
-api_key =
-model = nomic-embed-text
-chunk_size = 500
-chunk_overlap = 50
+chunk_size = 25
+chunk_overlap = 5
 search_k = 5
-min_similarity_score = 0.3
+max_chunk_chars = 1600
+min_similarity_score = 0.18
 
 [PERPLEXITY]
 api_key =
@@ -16620,7 +16618,6 @@ enabled = true
     def show_rag_stats(self):
         stats = self.rag_manager.get_stats()
         api_url, _, api_model = self._resolve_endpoint("API")
-        rag_url, _, rag_model = self._resolve_endpoint("RAG")
         chat_mm = t("rag.stats_multimodal") if self._chat_can_see_images() else t("rag.stats_textonly")
         msg = t("rag.stats",
                 platform=platform.system(),
@@ -16633,7 +16630,6 @@ enabled = true
                 fixed_sys=len(self.fixed_context),
                 fixed_usr=len(self.user_fixed_context),
                 api_model=api_model, api_url=api_url, chat_mm=chat_mm,
-                rag_model=rag_model or t("rag.stats_uses_api"), rag_url=rag_url,
                 chunk=self.config.getint('RAG','chunk_size',fallback=200),
                 k=self.config.getint('RAG','search_k',fallback=5),
                 headless=self.config.getboolean('BROWSER','headless',fallback=True))

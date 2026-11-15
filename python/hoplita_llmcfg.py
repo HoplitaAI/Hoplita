@@ -50,12 +50,16 @@ def extra_body_for(cfg, base_url, model, warn=None):
 
 
 def apply_extra_body(payload, extra, warn=None):
+    greedy = "temperature" in payload and not payload["temperature"] \
+        and "temperature" not in (extra or {})
     for k, v in (extra or {}).items():
         if k in _STRUCTURAL:
             if warn:
                 warn("extra_body cannot override '%s' — ignored" % k)
             continue
         payload[k] = v
+    if greedy and payload.get("top_p") not in (None, 1):
+        payload["top_p"] = 1
     return payload
 
 

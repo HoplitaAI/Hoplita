@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QMessageBox, QCheckBox, QComboBox, QDialog,
                              QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 CHAT_TAB = [
-    ("CHAT", "agentic_max_iterations", "int", (1, 200)),
+    ("CHAT", "agentic_max_iterations", "int", (1, 5000)),
     ("CHAT", "client_tool_timeout", "int", (60, 21600)),
     ("CHAT", "max_threads", "int", (1, 64)),
     ("CHAT", "timeout", "int", (5, 36000)),
@@ -689,6 +689,7 @@ class ConfigEditorDialog(QDialog):
         self._model_rows = []
         self._removed_models = []
         self._base_alias = ""
+        self._base_row = None
         self._kv_sections = {}
         self._initial = {}
 
@@ -1000,7 +1001,7 @@ class ConfigEditorDialog(QDialog):
         self._base_combo = QComboBox()
         self._base_combo.setMinimumWidth(320)
         self._base_combo.setToolTip(self._t("cfg.model_is_base_hint"))
-        self._base_combo.currentIndexChanged.connect(lambda _i: self._refresh_role_combos())
+        self._base_combo.currentIndexChanged.connect(lambda _i: self._on_base_picked())
         form.addRow(_blbl, self._base_combo)
         _rv = (self._cp.get("CHAT", "auto_route_models", fallback="true")
                if self._cp.has_section("CHAT") else "true")
@@ -1053,6 +1054,7 @@ class ConfigEditorDialog(QDialog):
         self._seed_pool_from_api()
         self._seed_roles()
         self._refresh_base_combo()
+        self._base_row = self._row_named(self._base_combo.currentData())
         return self._scroll(inner)
 
     def _fill_inherited(self):
@@ -1236,11 +1238,24 @@ class ConfigEditorDialog(QDialog):
                 return sec
         return None
 
+    def _row_named(self, alias):
+        alias = (alias or "").strip()
+        return next((r for r in self._model_rows
+                     if alias and r["name"].text().strip() == alias), None)
+
+    def _on_base_picked(self):
+        self._base_row = self._row_named(self._base_combo.currentData())
+        self._refresh_role_combos()
+
     def _refresh_base_combo(self):
         combo = getattr(self, "_base_combo", None)
         if combo is None:
             return
-        prev = (combo.currentData() or "") if combo.count() else self._base_alias
+        row = self._base_row if self._base_row in self._model_rows else None
+        self._base_row = row
+        prev = row["name"].text().strip() if row and row["enabled"].isChecked() else ""
+        if not prev:
+            prev = (combo.currentData() or "") if combo.count() else self._base_alias
         combo.blockSignals(True)
         combo.clear()
         active = [r["name"].text().strip() for r in self._model_rows

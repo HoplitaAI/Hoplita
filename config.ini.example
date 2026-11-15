@@ -15,9 +15,6 @@ model = your-model
 
 
 [RAG]
-base_url =
-api_key =
-model = nomic-embed
 chunk_size = 25
 chunk_overlap = 5
 search_k = 5
