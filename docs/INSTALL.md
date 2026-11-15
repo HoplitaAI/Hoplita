@@ -221,6 +221,7 @@ one can also be added later.
 | `--lsp` | Diagnostics and navigation in the code editor | — |
 | `--diffr` | The structural diff in the whiteboard | — |
 | `--system-libs` | Linux system libraries for the canvas, the tray and the hands | `sudo` |
+| `--full` | Every part above that needs neither Go nor root: browser, desktop, lsp, diffr | A large download |
 | `--all` | All of the above | |
 
 The default install folder is `~/hoplita` on Linux and macOS and

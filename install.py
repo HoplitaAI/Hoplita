@@ -1205,6 +1205,35 @@ def pip_install(py, pip_args, quiet=False):
 
 
 
+def _parts_report(prefix, py, args):
+    def has(mod):
+        return run([py, "-c", f"import {mod}"], capture_output=True).returncode == 0
+    binname = "hoplita-cli.exe" if IS_WINDOWS else "hoplita-cli"
+    parts = [
+        ("browser", "web browsing (Playwright and its Chromium)",
+         args.browser, lambda: has("playwright")),
+        ("desktop", "desktop hands (pixel layer)",
+         args.desktop, lambda: has("mss")),
+        ("lsp", "Python language server for the code editor",
+         args.lsp or args.all, lambda: has("pylsp")),
+        ("diffr", "structural diff for the whiteboard",
+         args.diffr, lambda: os.path.exists(os.path.join(
+             prefix, "bin", "diffr.exe" if IS_WINDOWS else "diffr"))),
+        ("cli", "command-line client (needs Go)",
+         args.cli, lambda: os.path.exists(os.path.join(prefix, "cli", "dist", binname))),
+    ]
+    print("\nParts:")
+    for flag, what, asked, present in parts:
+        if present():
+            print(f"  {_c('32', '✓')} {what}")
+        elif asked:
+            print(f"  {_c('31', '✗')} {what}: NOT installed (see the lines above); "
+                  f"run the same line again with --{flag}")
+        else:
+            more = "" if flag == "cli" else ", or --full for every part but the CLI"
+            print(f"  · {what}: not included; add --{flag} to the same line{more}")
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True, description="HOPLITA 1.0 installer")
     ap.add_argument("--prefix", default=None, help="install path")
@@ -1224,6 +1253,9 @@ def main():
     ap.add_argument("--diffr", action="store_true",
                     help="+ diffr, the structural diff behind the whiteboard's "
                          "Diff view (a pinned release binary)")
+    ap.add_argument("--full", action="store_true",
+                    help="core + browser + desktop + diffr + lsp: every part that "
+                         "needs neither Go nor root (the CLI stays apart)")
     ap.add_argument("--all", action="store_true", help="core + browser + cli + desktop + diffr + lsp")
     ap.add_argument("--system-libs", action="store_true",
                     help="install system libraries (WebEngine/tray, the hands' "
@@ -1245,6 +1277,8 @@ def main():
     args = ap.parse_args()
     if args.all:
         args.browser = args.cli = args.system_libs = args.desktop = args.diffr = True
+    if args.full:
+        args.browser = args.desktop = args.diffr = args.lsp = True
     spawn = take_spawn_env()
     if args.child and not args.prefix:
         if not spawn.get("HOPLITA_SPAWN_HANDLE"):
@@ -1496,6 +1530,7 @@ def main():
         print(f"  {act}")
         print(f"  {homehint}python hoplita-mcp.py")
         print(f"  {homehint}python hoplita-gui.py   (in another terminal)")
+    _parts_report(prefix, py, args)
     guide = os.path.join(prefix, "docs", "GUIDE.md")
     print(f"\nDocs: {guide if os.path.exists(guide) else os.path.join(prefix, 'README.md')}")
     if os.environ.get("HOPLITA_RERUN"):

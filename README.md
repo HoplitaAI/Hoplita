@@ -28,6 +28,24 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1 | iex
 ```
 
+That is the core: the agent, the window, the coding environment, the memory,
+the federation. **Everything in one go** — the web browsing stack, the desktop
+hands, the editor's language server and the structural diff; only the CLI stays
+apart, it needs Go — is the same line with `--full`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh | sh -s -- --full
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1))) --full
+```
+
+**In pieces**: the plain line first, then the same line with `--browser`,
+`--desktop`, `--lsp`, `--diffr` or `--cli` whenever you want that part; `--all`
+is every part, the CLI and the system packages included. The installer ends by
+listing which parts are in.
+
 No Python needed first; the same line updates. Details and options: [Install](#install) ·
 [First steps: the model and the search key it needs](docs/FIRST-STEPS.md) ·
 [Every command](docs/COMMANDS.md)
@@ -176,7 +194,8 @@ The default install folder is `~/hoplita` on Linux and macOS and
 `%APPDATA%\hoplita` on Windows — your own folder, no root or sudo needed;
 `--prefix` picks another. Optional parts are
 flags: `--browser`, `--cli` (needs Go), `--desktop`, `--diffr`, `--lsp`,
-`--system-libs`, or `--all`. `--update` refreshes an existing install.
+`--system-libs`; `--full` is every part that needs neither Go nor root, `--all`
+is every part. `--update` refreshes an existing install.
 
 ## Run
 
