@@ -25,6 +25,5 @@ venv/
 .venv/
 *.log
 
-tests/personal_tokens.txt
 device.json
 hoplita-mcp.gaveup
