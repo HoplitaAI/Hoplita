@@ -31,7 +31,7 @@ paint as it happens.
 | `qa` | `off` | Quality review: `auto` (turns whose work is worth reviewing: tools used, or a long answer) · `always` · `off`. |
 | `qa_endpoint` | resolved here | Who reviews. Omit it and the MCP expands `[CHAT] qa_model` itself — do not expand the alias on the client, that is how two faces end up judging by different standards. |
 | `endpoint` | the router decides | `{base_url, api_key, model}`. Send it **only when the user pinned a model** (`/model X`, `/model`). Without it `route_turn_model` picks a pool specialist, once, here. |
-| `compact` | `false` | A compaction run as a turn of the conversation: the same preparation, tools and model (the one that served the conversation's last turn when no `endpoint` is sent), thinking off, no log, no review, one iteration, every tool refused. The reply is the summary; the face hands it to `/memory/compact` as `summary`. |
+| `compact` | `false` | A compaction run as a turn of the conversation: the same preparation, tools and model (the one that served the conversation's last turn when no `endpoint` is sent), no log, no review, one iteration, every tool refused. The request differs from the turn's only by its last message: no field of its own, since a thinking switch reshapes the prompt head on some servers and the cached prefix is lost. The reply is the summary; the face hands it to `/memory/compact` as `summary`. |
 | `delegate` | `[]` | Tool names the CLIENT executes, or `["*"]` for all. See below. |
 | `client_tool_timeout` | `900` | How long to wait for a delegated tool. |
 | `inject` | `false` | Build the context here: lessons, skills, facts, language, identity, model pool. Both faces send `true`. |

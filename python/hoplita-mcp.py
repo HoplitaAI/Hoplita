@@ -2997,6 +2997,15 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
         usage = dict(usage)
         usage["prompt_tokens"] = _estimate_prompt_tokens(messages, tools)
         usage["estimated"] = True
+    if tools:
+        _pd = usage.get("prompt_tokens_details")
+        _cached = _pd.get("cached_tokens") if isinstance(_pd, dict) else None
+        if _cached is None:
+            _cached = (data.get("timings") or {}).get("cache_n") \
+                if isinstance(data.get("timings"), dict) else None
+        if _cached is not None:
+            print(f"[PREFIX] served ({model}): {_cached} of "
+                  f"{usage.get('prompt_tokens')} prompt tokens from cache")
     _count_tokens(data.get("model") or model, usage, sent=model)
     return {"message": _fa.flatten_parts(choice.get("message", {}) or {}),
             "usage": usage,
@@ -15537,8 +15546,7 @@ def _agent_turn_events(req):
         _cb, _ck, _cm = ((ep["base_url"], ep.get("api_key"), ep["model"])
                          if ep.get("base_url") and ep.get("model") else _resolve_endpoint("API"))
         llm_override = (lambda m, tl, max_tokens=None: _llm_chat_with_tools(
-            m, tl, base_url=_cb, api_key=_ck, model=_cm, max_tokens=max_tokens,
-            extra={"chat_template_kwargs": {"enable_thinking": False}}))
+            m, tl, base_url=_cb, api_key=_ck, model=_cm, max_tokens=max_tokens))
     elif ep.get("base_url") and ep.get("model"):
         llm_override = (lambda m, tl, max_tokens=None: _llm_chat_with_tools(
             m, tl, base_url=ep["base_url"], api_key=ep.get("api_key"),
