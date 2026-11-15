@@ -1269,12 +1269,20 @@ class ConfigEditorDialog(QDialog):
         combo.blockSignals(False)
         self._refresh_role_combos()
 
+    def _elect_row(self, row):
+        if row["enabled"].isChecked():
+            self._base_row = row
+        self._refresh_base_combo()
+
     def _refresh_badges(self):
         base = (self._base_combo.currentData() or "") if getattr(self, "_base_combo", None) else ""
         for row in self._model_rows:
             b = row.get("badge")
             if b is not None:
-                b.setVisible(bool(base) and row["name"].text().strip() == base)
+                b.blockSignals(True)
+                b.setChecked(bool(base) and row["name"].text().strip() == base)
+                b.setEnabled(row["enabled"].isChecked())
+                b.blockSignals(False)
 
     @staticmethod
     def _host_of(url):
@@ -1315,10 +1323,16 @@ class ConfigEditorDialog(QDialog):
         nm.setPlaceholderText(self._t("cfg.model_alias"))
         nm.setMaximumWidth(150)
         nm.setStyleSheet("font-weight:700;")
-        badge = QLabel(self._t("cfg.row_base_badge"))
-        badge.setStyleSheet("background:#1d4ed8; color:#ffffff; border-radius:6px; "
-                            "padding:1px 7px; font-size:12px; font-weight:800;")
-        badge.setVisible(False)
+        badge = QRadioButton(self._t("cfg.row_base_badge"))
+        badge.setAutoExclusive(False)
+        badge.setToolTip(self._t("cfg.model_is_base_hint"))
+        badge.setStyleSheet(
+            "QRadioButton { color:#e6edf7; font-weight:800; } "
+            "QRadioButton:disabled { color:#64748b; } "
+            "QRadioButton::indicator { width:14px; height:14px; border-radius:9px; "
+            "border:2px solid #64748b; background:#0b1220; } "
+            "QRadioButton::indicator:checked { border:2px solid #93c5fd; background:#2563eb; } "
+            "QRadioButton::indicator:disabled { border-color:#334155; }")
         summary = QLabel("")
         summary.setStyleSheet("color:#cbd5e1;")
         chk = QCheckBox(self._t("cfg.enabled"))
@@ -1420,6 +1434,7 @@ class ConfigEditorDialog(QDialog):
                "orig": name, "orig_section": section, "test": tst,
                "badge": badge, "summary": summary, "details": details, "edit": ed}
         tst.clicked.connect(lambda _=False, r=row: self._test_model_row(r))
+        badge.clicked.connect(lambda _=False, r=row: self._elect_row(r))
 
         def _remove():
             if row["orig"]:
