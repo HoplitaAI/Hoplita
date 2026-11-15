@@ -303,6 +303,8 @@
   "chat.tab_more_tip": "{n} more tabs that do not fit: pick one",
   "chat.tab_new_tip": "New local chat (independent context)",
   "chat.context_full": "[⚠ CONTEXT FULL — the model could not write anything: the prompt is {pt} tokens and the completion was cut at once. Nothing to redo. Reset or compact this conversation, or open a new tab, and ask again.]",
+  "chat.tool_call_cut": "[⚠ TOOL CALL CUT — the model began a call to `{tool}` and the output limit cut it after {ct} completion tokens (max_tokens {cm}): its reasoning spent the budget before the call closed, and the server passed the fragment on as text. Nothing to redo. Raise [CHAT] max_tokens or lower the model's reasoning effort, and ask again.]",
+  "chat.tool_call_text": "[⚠ TOOL CALL AS TEXT — the model wrote its call to `{tool}` as text: its server did not read it as a call and neither could this loop. Nothing to hand over. Ask again; if it repeats, the model's chat template and its server disagree on how a call is written.]",
   "sess.autosave_failed": "⚠ This conversation could not be saved ({e}). After a restart it comes back as last saved.",
   "chat.tab_rename": "Rename tab",
   "chat.tab_rename_body": "New name for this tab (and its saved session, if any):",

@@ -686,6 +686,8 @@ _RECORD_EN = {
                          "completion was cut at once. Nothing to redo. "
                          "Reset or compact this conversation, or open a "
                          "new tab, and ask again.]",
+    "chat.tool_call_cut": "[⚠ TOOL CALL CUT — the model began a call to `{tool}` and the output limit cut it after {ct} completion tokens (max_tokens {cm}): its reasoning spent the budget before the call closed, and the server passed the fragment on as text. Nothing to redo. Raise [CHAT] max_tokens or lower the model's reasoning effort, and ask again.]",
+    "chat.tool_call_text": "[⚠ TOOL CALL AS TEXT — the model wrote its call to `{tool}` as text: its server did not read it as a call and neither could this loop. Nothing to hand over. Ask again; if it repeats, the model's chat template and its server disagree on how a call is written.]",
     "verify.blocked_reply": "[⚠ the check `{cmd}` could NOT run: {why}. The "
                             "definition of done was not checked this turn — "
                             "unblock run_command for this conversation, or "
@@ -1154,21 +1156,133 @@ def _truncation_warning(text, finish_reason, usage):
     return text
 
 
-def _recover_tool_call_from_content(content, iteration):
-    try:
-        cleaned = re.sub(r'<\|[^|]+\|>', '', content).strip()
-        start = cleaned.find("{")
-        if start < 0:
+_TC_NAME = r"[\w./:-]+"
+_TC_MARK = re.compile(r"<tool_call>|<function=|\[TOOL_CALLS\]", re.I)
+
+
+def _tc_visible(content):
+    text = re.sub(r"<think>.*?</think>", "", content or "", flags=re.S | re.I)
+    return re.sub(r"<\|[^|]+\|>", "", text)
+
+
+def _tc_arg(value):
+    s = value.strip()
+    if re.fullmatch(r"-?\d+(\.\d+)?|true|false|null|\{.*\}|\[.*\]", s, re.S):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+    return s
+
+
+def _tc_from_json(obj):
+    if not isinstance(obj, dict):
+        return None
+    if obj.get("type") == "function" and isinstance(obj.get("function"), dict):
+        obj = obj["function"]
+    name = obj.get("name")
+    args = obj.get("arguments", obj.get("parameters"))
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except Exception:
             return None
-        parsed, _ = json.JSONDecoder().raw_decode(cleaned[start:])
-        if isinstance(parsed, dict) and parsed.get("type") == "function" \
-                and "name" in parsed:
-            return [{"id": f"call_{iteration}", "type": "function",
-                     "function": {"name": parsed["name"],
-                                  "arguments": json.dumps(parsed.get("parameters", {}))}}]
+    if args is None:
+        args = {}
+    if not isinstance(name, str) or not name or not isinstance(args, dict):
+        return None
+    return name, args
+
+
+def _tc_json_at(text):
+    start = min((i for i in (text.find("{"), text.find("[")) if i >= 0),
+                default=-1)
+    if start < 0:
+        return None
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(text[start:])
     except Exception:
-        pass
-    return None
+        return None
+    return parsed
+
+
+def _recover_tool_call_from_content(content, iteration, known=None):
+    text = _tc_visible(content)
+    calls = []
+
+    def add(pair):
+        if pair:
+            name, args = pair
+            calls.append({"id": f"call_{iteration}_{len(calls)}", "type": "function",
+                          "function": {"name": name,
+                                       "arguments": json.dumps(args, ensure_ascii=False)}})
+
+    def pairs(body, key_re):
+        return {k: _tc_arg(v) for k, v in re.findall(key_re, body, flags=re.S)}
+
+    for body in re.findall(r"<tool_call>(.*?)</tool_call>", text, flags=re.S | re.I):
+        body = body.strip()
+        if body[:1] in "{[":
+            parsed = _tc_json_at(body)
+            for obj in (parsed if isinstance(parsed, list) else [parsed]):
+                add(_tc_from_json(obj))
+            continue
+        m = re.match(rf"({_TC_NAME})\s*(.*)$", body, flags=re.S)
+        if m and ("<arg_key>" in m.group(2) or not m.group(2).strip()):
+            add((m.group(1), pairs(m.group(2),
+                                   r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>")))
+    for name, body in re.findall(rf"<function=({_TC_NAME})>(.*?)</function>", text,
+                                 flags=re.S | re.I):
+        body = body.strip()
+        if body[:1] == "{":
+            parsed = _tc_from_json(_tc_json_at(body))
+            add((name, parsed[1]) if parsed else (name, {}))
+        else:
+            add((name, pairs(body, rf"<parameter=({_TC_NAME})>(.*?)</parameter>")))
+    m = re.search(r"\[TOOL_CALLS\]\s*([\[{].*)$", text, flags=re.S)
+    if m and not calls:
+        parsed = _tc_json_at(m.group(1))
+        for obj in (parsed if isinstance(parsed, list) else [parsed]):
+            add(_tc_from_json(obj))
+    if not calls and not _TC_MARK.search(text):
+        parsed = _tc_json_at(text)
+        pair = _tc_from_json(parsed)
+        if pair and (parsed.get("type") == "function"
+                     or (known is not None and pair[0] in known)):
+            add(pair)
+    return calls or None
+
+
+def _tool_call_in_text(content):
+    text = _tc_visible(content).strip()
+    if _TC_MARK.match(text):
+        return True
+    last = None
+    for m in _TC_MARK.finditer(text):
+        last = m
+    if last is None:
+        return False
+    tail = text[last.end():]
+    mark = last.group(0).lower()
+    if mark == "<tool_call>":
+        return "</tool_call>" not in tail.lower()
+    if mark == "<function=":
+        return "</function>" not in tail.lower()
+    return _tc_json_at(tail) is None
+
+
+def _tool_call_name_in_text(content):
+    text = _tc_visible(content)
+    m = (re.search(rf"<tool_call>\s*({_TC_NAME})", text, flags=re.I)
+         or re.search(rf"<function=({_TC_NAME})>", text, flags=re.I)
+         or re.search(r'"name"\s*:\s*"([^"]+)"', text))
+    return m.group(1) if m else ""
+
+
+def _tool_names(tools):
+    return {t_["function"]["name"] for t_ in (tools or [])
+            if isinstance(t_, dict) and isinstance(t_.get("function"), dict)
+            and t_["function"].get("name")}
 
 
 _QA_BUDGET_CHARS = 40000
@@ -1992,10 +2106,28 @@ def run_agentic_turn(user_message=None, history=None, system=None,
 
         _tc_rescued = False
         if not tool_calls and content:
-            recovered = _recover_tool_call_from_content(content, iteration)
+            recovered = _recover_tool_call_from_content(content, iteration,
+                                                        known=_tool_names(tools))
             if recovered:
                 tool_calls = recovered
                 _tc_rescued = True
+
+        if not tool_calls and content and _tool_call_in_text(content):
+            _ct = (usage or {}).get("completion_tokens", 0)
+            _cut = finish_reason == "length"
+            _name = _tool_call_name_in_text(content) or "?"
+            emit({"event": "tool_call_unread", "iteration": iteration,
+                  "cut": _cut, "tool": _name, "completion_tokens": _ct,
+                  "chars": len(content)})
+            _why = _rtr("chat.tool_call_cut" if _cut else "chat.tool_call_text",
+                        tool=_name, ct=_ct,
+                        cm=_get_max_tokens() if _get_max_tokens else 0)
+            emit({"event": "error", "error": _why, "iterations": iteration,
+                  "transcript": messages[_turn_base:],
+                  "turn_record": render_turn_record(
+                      tool_trace, qa_verdicts, failed=_why)})
+            return {"error": _why, "iterations": iteration,
+                    "tool_trace": tool_trace}
 
         if not tool_calls:
             if not content and reasoning and finish_reason != "length" \

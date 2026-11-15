@@ -303,6 +303,8 @@
   "chat.tab_more_tip": "{n} pestañas más que no caben: elige una",
   "chat.tab_new_tip": "Nuevo chat local (contexto independiente)",
   "chat.context_full": "[⚠ CONTEXTO LLENO — el modelo no ha podido escribir nada: el prompt son {pt} tokens y la respuesta se cortó de inmediato. No hay nada que rehacer. Resetea o compacta esta conversación, o abre otra pestaña, y vuelve a preguntar.]",
+  "chat.tool_call_cut": "[⚠ LLAMADA CORTADA — el modelo empezó una llamada a `{tool}` y el tope de salida la cortó tras {ct} tokens de respuesta (max_tokens {cm}): su razonamiento gastó el presupuesto antes de cerrar la llamada, y el servidor pasó el fragmento como texto. No hay nada que rehacer. Sube [CHAT] max_tokens o baja el esfuerzo de razonamiento del modelo, y vuelve a preguntar.]",
+  "chat.tool_call_text": "[⚠ LLAMADA COMO TEXTO — el modelo escribió su llamada a `{tool}` como texto: su servidor no la leyó como llamada y este bucle tampoco ha podido. No hay nada que entregar. Vuelve a preguntar; si se repite, la plantilla de chat del modelo y su servidor no coinciden en cómo se escribe una llamada.]",
   "sess.autosave_failed": "⚠ No se ha podido guardar esta conversación ({e}). Si reinicias, volverá como estaba en el último guardado.",
   "chat.tab_rename": "Renombrar pestaña",
   "chat.tab_rename_body": "Nuevo nombre para esta pestaña (y su sesión guardada, si la hay):",
