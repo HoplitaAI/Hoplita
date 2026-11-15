@@ -2990,7 +2990,7 @@ def _llm_chat_with_tools(messages, tools, timeout=None,
         usage["prompt_tokens"] = _estimate_prompt_tokens(messages, tools)
         usage["estimated"] = True
     _count_tokens(data.get("model") or model, usage, sent=model)
-    return {"message": choice.get("message", {}) or {},
+    return {"message": _fa.flatten_parts(choice.get("message", {}) or {}),
             "usage": usage,
             "finish_reason": choice.get("finish_reason", "") or "",
             "window": _window_known(base_url, api_key, model)}

@@ -1081,11 +1081,35 @@ def produced_nothing(reply):
     return bool(reply) and str(reply).lstrip().startswith(NO_REPLY_MARKS)
 
 
+def flatten_parts(msg):
+    parts = msg.get("content")
+    if not isinstance(parts, list):
+        return msg
+    text, thinking = [], []
+    for p in parts:
+        if isinstance(p, str):
+            text.append(p)
+        elif not isinstance(p, dict):
+            continue
+        elif p.get("type") in ("thinking", "reasoning"):
+            v = p.get("thinking") or p.get("reasoning") or p.get("text") or ""
+            if isinstance(v, list):
+                v = "".join(str(q.get("text", "")) for q in v if isinstance(q, dict))
+            thinking.append(str(v))
+        else:
+            text.append(str(p.get("text") or ""))
+    out = dict(msg, content="".join(text), content_parts=parts)
+    if thinking and not (out.get("reasoning_content") or out.get("reasoning")):
+        out["reasoning_content"] = "".join(thinking)
+    return out
+
+
 def _assistant_as_generated(msg, tool_calls=None, keep_content=True):
+    parts = msg.get("content_parts")
     out = {"role": "assistant",
-           "content": (msg.get("content") or "") if keep_content else ""}
+           "content": (parts or msg.get("content") or "") if keep_content else ""}
     for k in ("reasoning_content", "reasoning"):
-        if msg.get(k):
+        if msg.get(k) and not parts:
             out[k] = msg[k]
             break
     if tool_calls:

@@ -16498,6 +16498,9 @@ enabled = true
 
 
     def clean_ai_response(self, text):
+        if isinstance(text, list):
+            import fed_agent
+            text = fed_agent.flatten_parts({"content": text})["content"]
         if not text: return text
         cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
         while "<think>" in cleaned.lower() or "</think>" in cleaned.lower():
@@ -16741,9 +16744,8 @@ enabled = true
             if isinstance(c, list):
                 txt = " ".join(str(p_.get("text", "")) for p_ in c
                                if isinstance(p_, dict) and p_.get("type") == "text").strip()
-                n = sum(1 for p_ in c if isinstance(p_, dict) and p_.get("type") == "image_url")
-                m = {**m, "content": (txt + (f"\n[{n} picture(s) shown to the model]" if n else "")).strip()
-                     or "[picture shown to the model]"}
+                n = sum(1 for p_ in c if isinstance(p_, dict) and "image" in str(p_.get("type", "")))
+                m = {**m, "content": (txt + (f"\n[{n} picture(s) shown to the model]" if n else "")).strip()}
             out.append(m)
         return out
 
@@ -17215,6 +17217,9 @@ enabled = true
             try:
                 chunk = json.loads(data)
                 tok = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                if isinstance(tok, list):
+                    import fed_agent
+                    tok = fed_agent.flatten_parts({"content": tok})["content"]
                 if tok:
                     full.append(tok)
                     self.signals.stream_token.emit(tok, _tab)
