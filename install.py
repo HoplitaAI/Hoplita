@@ -852,12 +852,14 @@ def _sudo_ok(sudo):
     return run(sudo + ["-v"], check=False).returncode == 0
 
 
-_DIFFR_VERSION = "0.1.3"
+_DIFFR_VERSION = "0.1.16"
 _DIFFR_PINS = {
     ("Linux", "x86_64"): ("x86_64-unknown-linux-gnu",
-                          "2bbdc89ffbcd5356c0527cf97e58169ffd9d940db3e518715e24d6cc11f5d4ff"),
+                          "2d6a99e2fe2eea587d68d4929710b8a136beda71c0a0f05ae29b174aef4d9389"),
     ("Darwin", "arm64"): ("aarch64-apple-darwin",
-                          "f4a8ab41893d7a670de7457cfa0090ea9367bdc585500b600e1b692eca216dbe"),
+                          "151188635ca8b72baddd78ac27bcd2e2e3d46fda79746a4748a468f7b2e9da04"),
+    ("Windows", "AMD64"): ("x86_64-pc-windows-msvc",
+                           "460dcde613fda17c9d5a10f523409946f771e9243edd546595fa13f8524c0f6d"),
 }
 
 
@@ -885,22 +887,23 @@ def install_diffr(prefix):
         if got != sha:
             err(f"diffr checksum mismatch ({got[:12]}… ≠ {sha[:12]}…): not installed.")
             return
+        exe = "diffr.exe" if platform.system() == "Windows" else "diffr"
         with tarfile.open(tgz) as tf:
             member = next((m for m in tf.getmembers()
-                           if os.path.basename(m.name) == "diffr" and m.isfile()), None)
+                           if os.path.basename(m.name) == exe and m.isfile()), None)
             if member is None:
                 err("The diffr archive has no diffr binary: not installed.")
                 return
-            member.name = "diffr"
+            member.name = exe
             try:
                 tf.extract(member, tmp, filter="data")
             except TypeError:
                 tf.extract(member, tmp)
         bindir = os.path.join(prefix, "bin")
         os.makedirs(bindir, exist_ok=True)
-        shutil.copy2(os.path.join(tmp, "diffr"), os.path.join(bindir, "diffr"))
-        os.chmod(os.path.join(bindir, "diffr"), 0o755)
-        ok(f"diffr → {os.path.join(bindir, 'diffr')}")
+        shutil.copy2(os.path.join(tmp, exe), os.path.join(bindir, exe))
+        os.chmod(os.path.join(bindir, exe), 0o755)
+        ok(f"diffr → {os.path.join(bindir, exe)}")
     except Exception as e:
         err(f"diffr could not be installed: {e}")
         print("   · The whiteboard keeps working with a textual diff.")

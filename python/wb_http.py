@@ -380,7 +380,7 @@ def _file_rows(root, base, head, path):
                               for s in ("base", "head")}
             out["bands"] = _bands(d, out["rows"], fe.get("visibility"))
             for side, key2 in (("base", "lhs"), ("head", "rhs")):
-                for leaf in V._leaves((d.get(key2) or {}).get("regions")):
+                for leaf in V._leaves(V.regions_of(d.get(key2))):
                     for sp in leaf.get("changed") or []:
                         out["spans"].setdefault(side, {}).setdefault(sp["line"], []).append(
                             [sp["start_column"], sp["end_column"]])
@@ -418,8 +418,8 @@ def _bands(diff, rows, file_vis):
                                   "tags": r.get("tags") or []})
                 continue
             walk(r.get("children"), side_rows, side)
-    walk((diff.get("rhs") or {}).get("regions"), head_row, "head")
-    walk((diff.get("lhs") or {}).get("regions"), base_row, "base")
+    walk(V.regions_of(diff.get("rhs")), head_row, "head")
+    walk(V.regions_of(diff.get("lhs")), base_row, "base")
     bands.sort(key=lambda b: (b["fromRow"], -b["toRow"]))
     merged = []
     for b in bands:

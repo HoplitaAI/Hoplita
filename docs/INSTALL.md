@@ -219,7 +219,7 @@ one can also be added later.
 | `--cli` | The command-line client | [Go](https://go.dev/dl/) |
 | `--desktop` | The desktop hands on Linux and Windows: the model sees and uses your screen (a Mac has them from the plain install) | See the [guide](GUIDE.md) |
 | `--lsp` | Diagnostics and navigation in the code editor | — |
-| `--diffr` | The structural diff in the whiteboard | — |
+| `--diffr` | The structural diff in the whiteboard: Linux x86_64, macOS Apple Silicon, Windows x86_64 | — |
 | `--system-libs` | Linux system libraries for the canvas, the tray and the hands | `sudo` |
 | `--full` | Every part above that needs neither Go nor root: browser, desktop, lsp, diffr | A large download |
 | `--all` | All of the above | |

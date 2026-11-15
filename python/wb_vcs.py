@@ -379,7 +379,7 @@ def diffr_binary():
     cand = [os.environ.get("HOPLITA_DIFFR", "")]
     home = os.environ.get("HOPLITA_HOME", "")
     if home:
-        cand.append(os.path.join(home, "bin", "diffr"))
+        cand.append(os.path.join(home, "bin", "diffr.exe" if os.name == "nt" else "diffr"))
     cand.append(shutil.which("diffr") or "")
     for c in cand:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
@@ -416,6 +416,13 @@ def _leaf_span(region):
     return s["line"], (e["line"] if e.get("column", 0) == 0 else e["line"] + 1)
 
 
+def regions_of(side):
+    side = side or {}
+    if side.get("regions") is not None:
+        return side.get("regions") or []
+    return (side.get("root") or {}).get("children") or []
+
+
 def _leaves(regions, out=None):
     out = [] if out is None else out
     for r in regions or []:
@@ -429,7 +436,7 @@ def _leaves(regions, out=None):
 def structural_rows(diff):
     lhs = (diff.get("lhs") or {})
     rhs = (diff.get("rhs") or {})
-    lleaves, rleaves = _leaves(lhs.get("regions")), _leaves(rhs.get("regions"))
+    lleaves, rleaves = _leaves(regions_of(lhs)), _leaves(regions_of(rhs))
     nl = len((lhs.get("text") or "").split("\n")) if "lhs" in diff else 0
     nr = len((rhs.get("text") or "").split("\n")) if "rhs" in diff else 0
     rpos = {r["alignment_id"]: i for i, r in enumerate(rleaves)}
