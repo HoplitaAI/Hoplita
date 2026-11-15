@@ -572,6 +572,8 @@
   "ctx.compact_nothing": "📦 Nothing to compact yet: {n} message(s) in this tab and the recent window keeps the last {keep} as they are.",
   "msg.compacted_size": "   ≈{before} → ≈{after} tokens. The recent window kept as is weighs ≈{recent}; heaviest in it: {heavy}",
   "msg.subtask_no_tools": "⚠ [{id}] finished without calling a single tool: its result is words, not work.",
+  "msg.tools_withheld_fw": "🛡 {names}: blocked in this tab; the manual was not served.",
+  "msg.tools_withheld_role": "⚠ {names}: not in this role; the manual was not served.",
   "chat.intent_left": "🧭 The turn ended with {n} item(s) of its own list never closed: {goals}",
   "chat.tokens_tip": "Last call measured: {model} · {msgs} messages · {tools} tools · payload ≈{kb} KB · call #{call} of the turn",
   "code.reread_note": "↩ {path} read again this turn: not re-sent whole ({n} chars). The result stays capped; ranges or a search get the rest.",

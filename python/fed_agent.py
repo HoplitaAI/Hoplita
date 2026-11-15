@@ -2468,6 +2468,21 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                                  "content": result})
                 _sterile_tools += 1
                 continue
+            _fw_shut, _role_shut = [], []
+            if name == "load_tools" and isinstance(args, dict):
+                _asked = args.get("names")
+                _asked = ([_asked] if isinstance(_asked, str)
+                          else list(_asked or []))
+                _asked = [str(n).strip() for n in _asked if str(n).strip()]
+                _known = _get_tools() or {}
+                _fw_shut = [n for n in _asked
+                            if callable(is_blocked) and is_blocked(n)]
+                _role_shut = [n for n in _asked if n not in _fw_shut
+                              and n in _known and not _is_allowed(n)]
+                if _fw_shut or _role_shut:
+                    args = dict(args, names=[n for n in _asked
+                                             if n not in _fw_shut
+                                             and n not in _role_shut])
             if _bg is not None:
                 _work = None if delegated else (
                     lambda _n=name, _a=args: _execute_tool(_n, _a, consented=True))
@@ -2550,6 +2565,22 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                     _tool_emit.line_cap = 0
                     _tool_emit.turn = ""
                     _tool_emit.may = None
+            if name == "load_tools" and (_fw_shut or _role_shut):
+                if _fw_shut:
+                    result += ("\n[HOPLITA] 🛡 FIREWALL: " + ", ".join(_fw_shut)
+                               + " blocked in this conversation: not served "
+                                 "and not callable. Do not ask for them "
+                                 "again; work another way or say what you "
+                                 "could not do.")
+                if _role_shut:
+                    result += "\n[HOPLITA] " + _t("tools.withheld",
+                                                  names=", ".join(_role_shut))
+                    if any(g in ("render_html", "dashboard_render")
+                           for g in _role_shut):
+                        result += " " + _t("tools.withheld_canvas")
+                emit({"event": "tools_withheld",
+                      "tools": _fw_shut + _role_shut,
+                      "firewall": list(_fw_shut)})
             if name == "load_tools":
                 if _heavy_cut:
                     try:

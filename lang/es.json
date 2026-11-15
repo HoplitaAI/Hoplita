@@ -572,6 +572,8 @@
   "ctx.compact_nothing": "📦 Nada que compactar todavía: {n} mensaje(s) en esta pestaña y la ventana reciente conserva los últimos {keep} tal cual.",
   "msg.compacted_size": "   ≈{before} → ≈{after} tokens. La ventana reciente que se conserva pesa ≈{recent}; lo más pesado en ella: {heavy}",
   "msg.subtask_no_tools": "⚠ [{id}] terminó sin llamar a una sola tool: su resultado son palabras, no trabajo.",
+  "msg.tools_withheld_fw": "🛡 {names}: bloqueadas en esta pestaña; el manual no se sirvió.",
+  "msg.tools_withheld_role": "⚠ {names}: fuera de este rol; el manual no se sirvió.",
   "chat.intent_left": "🧭 El turno terminó con {n} punto(s) de su propia lista sin cerrar: {goals}",
   "chat.tokens_tip": "Última llamada medida: {model} · {msgs} mensajes · {tools} tools · payload ≈{kb} KB · llamada nº {call} del turno",
   "code.reread_note": "↩ {path} leído otra vez en este turno: no se reenvía entero ({n} chars). El resultado sigue recortado; rangos o búsqueda para el resto.",

@@ -18686,6 +18686,16 @@ enabled = true
                                  "t0": time.time()})
                     elif et == "thought":
                         self.thread_msg(str(ev.get("text") or ""), "thought")
+                    elif et == "tools_withheld":
+                        _fw = [str(n) for n in (ev.get("firewall") or [])]
+                        _rl = [str(n) for n in (ev.get("tools") or [])
+                               if str(n) not in _fw]
+                        if _fw:
+                            self.thread_msg(t("msg.tools_withheld_fw",
+                                              names=", ".join(_fw)), "system")
+                        if _rl:
+                            self.thread_msg(t("msg.tools_withheld_role",
+                                              names=", ".join(_rl)), "system")
                     elif et == "tool_result":
                         if ev.get("delegated") is False:
                             try:
