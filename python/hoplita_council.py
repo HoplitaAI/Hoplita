@@ -117,7 +117,14 @@ class Council:
                                 e=str(e)[:160])
         return [(m, out[m]) for m in members if m in out]
 
-    def deliberate(self, topic, members, first, context="", where=None):
+    def deliberate(self, topic, members, first, context="", where=None,
+                   asked_by=""):
+        res = self._deliberate(topic, members, first, context, where, asked_by)
+        if asked_by and not res.get("error"):
+            res["asked_by"] = asked_by
+        return res
+
+    def _deliberate(self, topic, members, first, context, where, asked_by):
         members = [m for m in (members or []) if m]
         if not members:
             return {"error": _t("council.err_no_members")}
@@ -135,6 +142,9 @@ class Council:
         self._emit(type="convene", members=list(members), first=first,
                    others=list(others), topic=topic,
                    where=dict(where or {}))
+        if asked_by:
+            self._emit(type="note", key="council.asker_out",
+                       args={"member": asked_by})
 
         answer, got = self._one(first, PHASE_ANSWER,
                                 _t("prompts.council_answer_user", topic=topic)

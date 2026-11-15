@@ -101,8 +101,16 @@ def _http():
     return s
 
 
-def _council_available(is_blocked=None, allowed=None):
-    if "call_council" not in TOOLS or len(_council_pool()) < 2:
+def _council_others(ep=None):
+    url, _key, mdl = _orch_base_endpoint(OrchestrationCtx(endpoint=ep or {}))
+    me = (str(url or "").rstrip("/"), str(mdl or ""))
+    return {n: m for n, m in _council_pool().items()
+            if (str(m.get("base_url") or "").rstrip("/"),
+                str(m.get("model") or "")) != me}
+
+
+def _council_available(is_blocked=None, allowed=None, ep=None):
+    if "call_council" not in TOOLS or not _council_others(ep):
         return False
     if is_blocked is not None and is_blocked("call_council"):
         return False
@@ -10272,7 +10280,7 @@ def register_tools():
     TOOLS = {
         "plan_and_orchestrate":   {"desc": "Breaks a task into sub-agents and runs them: you pass the whole task in 'task', it plans the sub-tasks (each with its role, its goal, its capabilities and its dependencies), runs the independent ones in parallel, and synthesises one answer. EACH SUB-TASK CAN NAME ITS OWN MODEL from the pool, and its own machine ('target': local, child:<handle> or friend:<handle>), which is what this can do that a single pass cannot. The plan is shown to the user for approval before it runs. 'task' must be the full description of what has to be achieved, self-contained: the planner sees it and not your conversation.",
                                    "fn": lambda a: tool_plan_and_orchestrate(a.get("task", ""), solo_single=True)},
-        "call_council":           {"desc": "Puts one matter to several of the person's models and returns their DELIBERATED answer. The round: the first member answers, the others examine that answer on two criteria (are there errors in it? can it be done better?), the first reformulates with their feedback, and the others vote placet or not. You get back the agreed answer plus, signed, whoever did not agree. 'topic' must be self-contained: whoever sits down has not read your conversation, so state the matter, what you have tried and what you need decided. 'members' are pool aliases (empty = every pool model that sits on councils; a model marked as not sitting is refused), 'first' is who answers first (empty = the first of the list), and 'context' carries what they need that does not belong in the statement of the matter. Costs one call per member per phase.",
+        "call_council":           {"desc": "Puts one matter to several of the person's models and returns their DELIBERATED answer. The round: the first member answers, the others examine that answer on two criteria (are there errors in it? can it be done better?), the first reformulates with their feedback, and the others vote placet or not. You get back the agreed answer plus, signed, whoever did not agree. 'topic' must be self-contained: whoever sits down has not read your conversation, so state the matter, what you have tried and what you need decided. 'members' are pool aliases (empty = every pool model that sits on councils, except you: the model asking puts the matter and never sits, named as itself or as 'base'; a model marked as not sitting is refused), 'first' is who answers first (empty = the first of the list), and 'context' carries what they need that does not belong in the statement of the matter. Costs one call per member per phase.",
                                    "fn": lambda a: tool_call_council(
                                        a.get("topic", ""), a.get("members"),
                                        a.get("first", ""), a.get("context", ""))},
@@ -10936,7 +10944,7 @@ def register_tool_params():
     global TOOL_PARAMS, TOOLS
     TOOL_PARAMS = {
         "plan_and_orchestrate":   {"properties": {"task": {"type": "string"}}, "required": ["task"]},
-        "call_council":           {"properties": {"topic": {"type": "string", "description": "The matter, stated so it stands on its own: nobody sitting down has read your conversation."}, "members": {"type": "array", "items": {"type": "string"}, "description": "Pool aliases that take a seat. Empty = every pool model that sits on councils. 'base' is the model you are running on."}, "first": {"type": "string", "description": "Who answers first — the one the others examine. Empty = the first of the list."}, "context": {"type": "string", "description": "What they need that does not belong in the statement of the matter: what you already tried, what came back, the constraints."}}, "required": ["topic"]},
+        "call_council":           {"properties": {"topic": {"type": "string", "description": "The matter, stated so it stands on its own: nobody sitting down has read your conversation."}, "members": {"type": "array", "items": {"type": "string"}, "description": "Pool aliases that take a seat. Empty = every pool model that sits on councils except you. The model asking never sits: naming yourself, or 'base', seats nobody."}, "first": {"type": "string", "description": "Who answers first — the one the others examine. Empty = the first of the list."}, "context": {"type": "string", "description": "What they need that does not belong in the statement of the matter: what you already tried, what came back, the constraints."}}, "required": ["topic"]},
         "search_web":             {"properties": {"query": {"type": "string"}}, "required": ["query"]},
         "run_command":            {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait. Raise it well above the default for installs, builds, migrations and test suites — 300 or more."}}, "required": ["command"]},
         "exec_command":           {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait (default 600). A cut returns exit_code -1 with the partial output and the file that holds it."}}, "required": ["command"]},
@@ -14869,7 +14877,8 @@ def _subagent_remote(target, prompt, terminal=False, ctx=None):
 
 
 def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
-                    messages=None, given="", event_sink=None, tool_names=None):
+                    messages=None, given="", event_sink=None, tool_names=None,
+                    seat=False):
     import fed_agent
     base_url, api_key, model = _orch_model_endpoint(model_name, ctx)
     qa_url, qa_key, qa_model = _orch_role_endpoint("qa", ctx)
@@ -14970,7 +14979,8 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
         _n_tools = len([t for t in (res.get("tool_trace") or [])
                         if (t.get("tool") or "") != "intent"])
         ctx.emit({"event": "orch", "orch": {"type": "subtask_acted",
-                                            "id": sid, "tools": _n_tools}})
+                                            "id": sid, "tools": _n_tools,
+                                            "seat": bool(seat)}})
     except Exception:
         pass
     if res.get("cancelled"):
@@ -15255,7 +15265,8 @@ def _council_gate(state, ctx):
     return "again" if str(answer.get("decision") or "") == "again" else "stop"
 
 
-def _run_council(topic, members, first="", context="", ctx=None):
+def _run_council(topic, members, first="", context="", ctx=None,
+                 by_model=False):
     ctx = ctx or getattr(_ORCH, "ctx", None) or OrchestrationCtx()
     try:
         from hoplita_council import Council
@@ -15271,11 +15282,24 @@ def _run_council(topic, members, first="", context="", ctx=None):
     if not seats:
         return {"error": _tr("council.err_no_members")}
 
-    where, clash = {}, {}
+    where, clash, asker = {}, {}, ""
     for m in seats:
         _url, _key, _mdl = _orch_model_endpoint(m, ctx)
         where[m] = {"base_url": _url, "model": _mdl}
-        clash.setdefault((_url, _mdl), []).append(m)
+    if by_model:
+        _au, _ak, _am = _orch_base_endpoint(ctx)
+        asker = _pool_label_of(_au, _am)
+        _me = (str(_au or "").rstrip("/"), str(_am or ""))
+        seats = [m for m in seats
+                 if (str(where[m]["base_url"] or "").rstrip("/"),
+                     str(where[m]["model"] or "")) != _me]
+        if not seats:
+            return {"error": _tr("council.err_only_self", member=asker)}
+        if first not in seats:
+            first = seats[0]
+        where = {m: where[m] for m in seats}
+    for m in seats:
+        clash.setdefault((where[m]["base_url"], where[m]["model"]), []).append(m)
     _dupes = [ms for ms in clash.values() if len(ms) > 1]
     if _dupes:
         return {"error": _tr(
@@ -15290,7 +15314,7 @@ def _run_council(topic, members, first="", context="", ctx=None):
         sid = f"{member}·{phase}{rnd}·{uuid.uuid4().hex[:4]}"
         with _plan_subtask(ctx):
             text = _subagent_local(prompt, "full", member, ctx, sid,
-                                   terminal=False)
+                                   terminal=False, seat=True)
         return {"text": text, "ok": not _fa.produced_nothing(text)}
 
     def progress(ev):
@@ -15305,7 +15329,8 @@ def _run_council(topic, members, first="", context="", ctx=None):
         max_rounds=(CONFIG.getint("CHAT", "council_max_rounds",
                                   fallback=_COUNCIL_MAX_ROUNDS)
                     if CONFIG else _COUNCIL_MAX_ROUNDS))
-    return council.deliberate(topic, seats, first, context=context, where=where)
+    return council.deliberate(topic, seats, first, context=context, where=where,
+                              asked_by=asker)
 
 
 def tool_call_council(topic, members=None, first="", context=""):
@@ -15315,12 +15340,13 @@ def tool_call_council(topic, members=None, first="", context=""):
         return {"error": _tr("council.err_no_topic")}
     if not members:
         members = sorted(_council_pool())
-    res = _run_council(topic, members, first, context)
+    res = _run_council(topic, members, first, context, by_model=True)
     if res.get("error"):
         return res
     return {"_verbatim": _council_verdict_line(res),
             "council": True, "placet": bool(res.get("placet")),
             "members": res.get("members") or [], "first": res.get("first", ""),
+            "asked_by": res.get("asked_by", ""),
             "rounds": len(res.get("rounds") or []),
             "dissent": res.get("dissent") or [],
             "deliberation": hoplita_council.render_record(res),
@@ -15336,6 +15362,8 @@ def _council_verdict_line(res):
              f"{len(members)} seats: {', '.join(members)}. "
              f"{first} answered and reformulated; "
              f"{', '.join(others) or 'nobody'} examined and voted."]
+    if res.get("asked_by"):
+        parts.append(f"{res['asked_by']} put the matter and did not sit.")
     if rounds:
         last = rounds[-1]
         votes = ", ".join(f"{v.get('member', '?')} "
@@ -15681,7 +15709,8 @@ def _agent_turn_events(req):
                     goal=req.goal, verify_goal=req.verify_goal,
                     escalate=_build_escalator(ep),
                     qa_self=_qa_self,
-                    council=_council_available(_turn_is_blocked, _turn_allowed),
+                    council=_council_available(_turn_is_blocked, _turn_allowed,
+                                               ep),
                     qa_max_rounds=(CONFIG.getint("CHAT", "qa_max_rounds",
                                                  fallback=2) if CONFIG else 2))
         except Exception as e:

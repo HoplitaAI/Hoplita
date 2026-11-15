@@ -17583,7 +17583,7 @@ enabled = true
                               n=ev.get("attempts", 1)), "system")
         elif et == "subtask_acted":
             self._set_subtask_field(ev.get("id"), "tools", int(ev.get("tools", 0) or 0))
-            if int(ev.get("tools", 0) or 0) == 0:
+            if int(ev.get("tools", 0) or 0) == 0 and not ev.get("seat"):
                 self.thread_msg(t("msg.subtask_no_tools", id=ev.get("id")),
                                 "system")
         elif et == "subtask_retry":
