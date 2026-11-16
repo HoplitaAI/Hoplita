@@ -218,6 +218,7 @@ A conversation can leave work running and go on, or end its turn and be woken. E
 | `chat_session_list` | — | Lists saved sessions (metadata, newest first). |
 | `chat_session_load` | `uuid` | Loads a full session with its history. |
 | `chat_session_delete` | `uuid` | Deletes a session (a tombstone that syncs). |
+| `chat_session_star` | `uuid` `starred?` | Stars or unstars a saved session: a starred one stands at the top of the list whatever its date, the prune leaves it alone, and the mark syncs to the user's other machines. |
 
 
 ## 🎨 Canvas

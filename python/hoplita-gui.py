@@ -6908,9 +6908,8 @@ enabled = true
             pass
         tid = getattr(c, "turn_id", None)
         if tid:
-            url = self._tab_url(c)
-            self._bg(lambda: requests.post(f"{url}/agent/stop",
-                                           json={"turn_id": tid}, timeout=15),
+            self._bg(lambda u=self._tab_url(c): requests.post(f"{u}/agent/stop",
+                                                            json={"turn_id": tid}, timeout=15),
                      lambda _r: None)
 
     def _overview_stop_job(self, tab_id, job_id):
@@ -7964,21 +7963,48 @@ enabled = true
             "padding:3px 0;}"
             "QPushButton:hover{border-color:%s;color:#f4f7fc;}")
         cards = {}
-        for s in sessions:
+        _starred_n = sum(1 for s in sessions if s.get("starred"))
+        _group_css = ("QLabel{color:#e6edf7;font-size:11px;font-weight:600;"
+                      "letter-spacing:1.2px;background:transparent;border:none;"
+                      "padding:6px 2px 0;}")
+        if _starred_n:
+            _gh = QLabel(t("sess.starred_head").upper())
+            _gh.setObjectName("sessgroup")
+            _gh.setStyleSheet(_group_css)
+            il.addWidget(_gh)
+        for i, s in enumerate(sessions):
+            if _starred_n and i == _starred_n:
+                _gh = QLabel(t("sess.recent_head").upper())
+                _gh.setObjectName("sessgroup")
+                _gh.setStyleSheet(_group_css)
+                il.addWidget(_gh)
+            _star = bool(s.get("starred"))
             row = QWidget()
             row.setObjectName("sesscard")
-            row.setStyleSheet(_SESS_CARD_CSS % "#2a3547")
+            row.setProperty("sess_uuid", s.get("uuid"))
+            row.base_border = "#4d4120" if _star else "#2a3547"
+            row.setStyleSheet(_SESS_CARD_CSS % row.base_border)
             cards[s.get("uuid")] = row
             rl = QVBoxLayout(row)
             rl.setContentsMargins(14, 10, 14, 9)
             rl.setSpacing(3)
+            _tl = QHBoxLayout()
+            _tl.setSpacing(6)
+            if _star:
+                _sg = QLabel("★")
+                _sg.setObjectName("sessstarmark")
+                _sg.setStyleSheet("QLabel{color:#f5b800;font-size:14px;"
+                                  "background:transparent;border:none;}")
+                _tl.addWidget(_sg, 0, Qt.AlignmentFlag.AlignTop)
             title = QLabel(s.get("title") or t("sess.untitled"))
+            title.setTextFormat(Qt.TextFormat.PlainText)
             title.setToolTip(s.get("title") or t("sess.untitled"))
             title.setWordWrap(True)
             title.setStyleSheet(
                 "QLabel{color:#f2e8d5;font-size:14px;font-weight:600;"
                 "letter-spacing:0.4px;background:transparent;border:none;}")
-            rl.addWidget(title)
+            _tl.addWidget(title, 1)
+            rl.addLayout(_tl)
             meta = QLabel(f"{s.get('n', 0)} msgs · "
                           f"{(s.get('updated_at') or '')[:16].replace('T', ' ')}")
             meta.setStyleSheet("QLabel{color:#e6edf7;font-size:12px;"
@@ -8003,6 +8029,15 @@ enabled = true
             dele.clicked.connect(lambda _=False, u=uid:
                                  self._delete_session(u, dlg))
             acts.addWidget(dele)
+            star = QPushButton("★" if _star else "☆")
+            star.setObjectName("sessstar")
+            star.setToolTip(t("sess.unstar") if _star else t("sess.star"))
+            star.setFixedSize(38, 26)
+            star.setCursor(Qt.CursorShape.PointingHandCursor)
+            star.setStyleSheet(_icon_css % "#f5b800")
+            star.clicked.connect(lambda _=False, u=uid, on=not _star:
+                                 self._star_session(u, on, dlg))
+            acts.addWidget(star)
             acts.addStretch()
             rl.addLayout(acts)
             il.addWidget(row)
@@ -8024,12 +8059,26 @@ enabled = true
         close.clicked.connect(dlg.reject)
         dlg.exec()
 
+    def _star_session(self, uuid, on, dlg):
+        def work():
+            return self._mcp_call_json("chat_session_star",
+                                       {"uuid": uuid, "starred": bool(on)})
+
+        def done(res):
+            if isinstance(res, dict) and res.get("error"):
+                self.add_message(t("sess.star_fail", err=res["error"]), "system")
+            dlg.accept()
+            self._open_sessions_dialog()
+
+        self._bg(work, done)
+
     def _sessions_prune_bar(self, sessions, dlg, cards):
         from PyQt6.QtWidgets import QDateEdit
         from PyQt6.QtCore import QDate, QSettings
         keep = {getattr(c, "session_uuid", None)
                 for c in (getattr(self, "_chat_ctxs", {}) or {}).values()}
         keep |= {x.get("uuid") for x in sessions if x.get("pinned_device")}
+        keep |= {x.get("uuid") for x in sessions if x.get("starred")}
         try:
             keep.add(QSettings("hoplita", "hoplita").value("cron_session_uuid", ""))
         except Exception:
@@ -8113,7 +8162,8 @@ enabled = true
                 msgs += x.get("n", 0) if inside else 0
                 c = cards.get(x.get("uuid"))
                 if c is not None:
-                    c.setStyleSheet(_SESS_CARD_CSS % ("#7f1d1d" if inside else "#2a3547"))
+                    c.setStyleSheet(_SESS_CARD_CSS % (
+                        "#7f1d1d" if inside else getattr(c, "base_border", "#2a3547")))
             go.setEnabled(n > 0)
             go.setText(t("sess.prune_go", n=n, msgs=msgs) if n else t("sess.prune_none"))
             kept.setText(t("sess.prune_kept", k=held) if held else "")

@@ -9910,6 +9910,10 @@ def tool_chat_session_save(args):
     prev = next((r for r in _chat_sessions_rows() if r.get("uuid") == sid), None)
     sess["uuid"] = sid
     sess.pop("deleted", None)
+    if "starred" not in sess and prev is not None:
+        sess["starred"] = bool(prev.get("starred"))
+        if prev.get("starred_at"):
+            sess["starred_at"] = prev["starred_at"]
     try:
         import hoplita_device as _hd
         sess["writer_device"] = _hd.device_id()
@@ -9983,9 +9987,32 @@ def tool_chat_session_list(args):
                     "updated_at": r.get("updated_at", ""),
                     "pinned_device": r.get("pinned_device") or None,
                     "sync_id": r.get("sync_id") or "",
+                    "starred": bool(r.get("starred")),
                     "n": len(r.get("history") or [])})
     out.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    out.sort(key=lambda x: not x.get("starred"))
     return {"sessions": out}
+
+
+def tool_chat_session_star(args):
+    sql = _get_sql()
+    if sql is None:
+        return {"error": "SQL store unavailable"}
+    sid = str(args.get("uuid") or "").strip()
+    on = args.get("starred", True)
+    if isinstance(on, str):
+        on = on.strip().lower() in ("1", "true", "yes", "on")
+    on = bool(on)
+    row = next((r for r in _chat_sessions_rows()
+                if r.get("uuid") == sid and not r.get("deleted")), None)
+    if row is None:
+        return {"error": f"no saved session {sid!r}"}
+    row = dict(row)
+    row["starred"] = on
+    row["starred_at"] = _chat_now_iso() if on else ""
+    row["rev"] = int(row.get("rev", 0)) + 1
+    sql.upsert("chat_sessions", sid, row)
+    return {"ok": True, "uuid": sid, "starred": on, "rev": row["rev"]}
 
 
 def tool_chat_session_load(args):
@@ -10058,8 +10085,8 @@ def tool_chat_session_prune(args):
     hit, rows = [], _chat_sessions_rows()
     for r in rows:
         day = str(r.get("updated_at") or r.get("created_at") or "")[:10]
-        if (r.get("deleted") or r.get("uuid") in keep or not day
-                or (lo and day < lo) or (hi and day > hi)):
+        if (r.get("deleted") or r.get("uuid") in keep or r.get("starred")
+                or not day or (lo and day < lo) or (hi and day > hi)):
             continue
         hit.append(r)
     out = {"sessions": [r.get("uuid") for r in hit], "n": len(hit),
@@ -11233,6 +11260,8 @@ def register_tool_params():
                                 "fn": lambda a: tool_chat_session_load(a)},
         "chat_session_delete": {"desc": "Delete a chat session (tombstone, syncs).",
                                 "fn": lambda a: tool_chat_session_delete(a)},
+        "chat_session_star":   {"desc": "Star or unstar a saved chat session: a starred one stands at the top of the list whatever its date, the prune leaves it alone, and the mark syncs.",
+                                "fn": lambda a: tool_chat_session_star(a)},
         "chat_session_prune":  {"desc": "Delete every saved chat session last used between two dates (YYYY-MM-DD, inclusive; 'to' alone = older than). dry_run lists them first.",
                                 "fn": lambda a: tool_chat_session_prune(a)},
         "working_memory_forget": {"desc": "Drop what a conversation left in a "
@@ -11267,6 +11296,7 @@ def register_tool_params():
         "chat_session_list":   {"properties": {}},
         "chat_session_load":   {"properties": {"uuid": {"type": "string"}}, "required": ["uuid"]},
         "chat_session_delete": {"properties": {"uuid": {"type": "string"}}, "required": ["uuid"]},
+        "chat_session_star":   {"properties": {"uuid": {"type": "string"}, "starred": {"type": "boolean", "description": "true to star (the default), false to unstar."}}, "required": ["uuid"]},
         "chat_session_prune":  {"properties": {"from": {"type": "string", "description": "YYYY-MM-DD, first day included; omit for since the first one."}, "to": {"type": "string", "description": "YYYY-MM-DD, last day included."}, "keep": {"type": "array", "items": {"type": "string"}, "description": "uuids to leave alone."}, "dry_run": {"type": "boolean"}}, "required": []},
         "working_memory_forget": {"properties": {
             "session": {"type": "string",

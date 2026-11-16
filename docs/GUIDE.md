@@ -735,6 +735,13 @@ before stopping and handing you the disagreement.
 
 **When a turn is stuck, it is offered.** The model can convene a council on its own with `call_council`. With two or more models and the tool not blocked, the metacognition's first question in a stall offers it explicitly: tell them what you are doing, what keeps happening and what you have, and ask whether to stop or what else to try. It is offered, not forced, because the question alone often unblocks the turn. One model talking to itself is no council, so with a single model it is not offered.
 
+Conversations save themselves. 💬 in the tab strip lists them, newest
+first, each with its size and date: Restore opens one in a new tab, Delete
+removes it from every machine, and the bar above deletes by date. The star on
+a card keeps that conversation at the top of the list whatever its date, on
+every machine of yours, and the prune leaves it alone: the one with the rules
+you keep coming back to never sinks under a thousand passing chats.
+
 ## The CODE tab — a real repo, not a chat about files
 
 Opening a project is not «picking a folder»: it is entering code mode. The path
