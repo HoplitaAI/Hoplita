@@ -751,9 +751,11 @@ slot, and the needle swings to whatever is running now, with its arguments
 and its clock under the dial. A belt: every call is a box that arrives from
 the right and pushes the older ones left, grows while it runs, settles into
 the lower lane when it ends, turns red when it fails, and wears the
-sub-agent's name when a sub-agent made it. A call lands once, repeats fold
-into their slot's count, and when nothing runs nothing moves and no frame is
-painted. Its width and whether it is shown are remembered.
+sub-agent's name when a sub-agent made it; a box is never narrower than its
+name, and finished calls of one tool that follow each other fold into one box
+with their count, so a loop of forty reads as one box. A call lands once,
+repeats fold into their slot's count, and when nothing runs nothing moves and
+no frame is painted. Its width and whether it is shown are remembered.
 
 ## The CODE tab — a real repo, not a chat about files
 

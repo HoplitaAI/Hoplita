@@ -195,6 +195,7 @@ class MachineView(QWidget):
         self._mono.setPixelSize(11)
         self._small = QFont()
         self._small.setPixelSize(10)
+        self._fm_small = QFontMetricsF(self._small)
 
     def set_machine(self, m):
         if m is not self._m:
@@ -247,12 +248,31 @@ class MachineView(QWidget):
         self._needle_to = self._slot_angle(target)
         self._needle_t0 = now
 
+    def items(self, now=None):
+        now = now or self._now
+        out = []
+        for c in self._m.belt:
+            settled = c["t1"] is not None and now - c["t1"] >= EASE_S
+            last = out[-1] if out else None
+            if (settled and last is not None and last["folded"]
+                    and last["tool"] == c["tool"] and last["agent"] == c["agent"]):
+                last["n"] += 1
+                last["dur"] += c["dur"]
+                last["t1"] = c["t1"]
+                if c["ok"] is False:
+                    last["ok"] = False
+                continue
+            out.append({"seq": c["seq"], "tool": c["tool"], "agent": c["agent"],
+                        "t0": c["t0"], "t1": c["t1"], "ok": c["ok"], "dur": c["dur"],
+                        "n": 1, "folded": settled})
+        return out
+
     def _place(self, now):
         w = self.width()
         right = w - 14
         x = right
         seen = set()
-        for c in reversed(self._m.belt):
+        for c in reversed(self.items(now)):
             bw = self._box_w(c, now)
             x -= bw
             seen.add(c["seq"])
@@ -275,9 +295,14 @@ class MachineView(QWidget):
         for seq in [s for s in self._boxes if s not in seen]:
             del self._boxes[seq]
 
+    def _box_label(self, c):
+        n = c.get("n", 1)
+        return c["tool"] + (f" ×{n}" if n > 1 else "")
+
     def _box_w(self, c, now):
         d = c["dur"] if c["t1"] is not None else now - c["t0"]
-        return min(170.0, 58.0 + 16.0 * math.log2(1.0 + max(0.0, d)))
+        by_time = min(170.0, 58.0 + 16.0 * math.log2(1.0 + max(0.0, d)))
+        return max(self._fm_small.horizontalAdvance(self._box_label(c)) + 14.0, by_time)
 
     def _moving(self, now):
         if self._m.busy():
@@ -298,8 +323,7 @@ class MachineView(QWidget):
         if target != self._target:
             self._aim(target, now)
             self._lit[target] = now
-        if self._m.running:
-            self._place(now)
+        self._place(now)
         p = _ease((now - self._needle_t0) / EASE_S)
         self._needle = self._needle_from + (self._needle_to - self._needle_from) * p
         for b in self._boxes.values():
@@ -337,7 +361,10 @@ class MachineView(QWidget):
         names = m.slot_names()
         fm = QFontMetricsF(self._ui)
         cx = area.center().x()
-        r = max(60.0, min(area.width() / 2.0 - 96, (area.height() - 170) / 2.0))
+        longest = max((fm.horizontalAdvance(t("machine.model_slot") if n == MODEL_SLOT else n)
+                       for n in names), default=60.0)
+        margin = min(max(96.0, longest + 40.0), area.width() / 2.0 - area.width() / 5.0)
+        r = max(60.0, min(area.width() / 2.0 - margin, (area.height() - 170) / 2.0))
         cy = area.top() + 36 + r
         rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
         p.setPen(QPen(QColor(RAIL), 2))
@@ -354,10 +381,12 @@ class MachineView(QWidget):
                        QPointF(cx + math.cos(a) * (r + 7), cy + math.sin(a) * (r + 7)))
             s = m.slots[name]
             label = t("machine.model_slot") if name == MODEL_SLOT else name
-            label = fm.elidedText(label, Qt.TextElideMode.ElideMiddle, 96)
             count = f"×{s['count']}" if s["count"] else ""
-            lw = fm.horizontalAdvance(label)
             cw = fm.horizontalAdvance(count) + (6 if count else 0)
+            side = abs(math.cos(a)) > 0.3
+            room = (area.width() / 2.0 - r - 16 - cw - 10) if side else (area.width() / 2.0 - cw)
+            label = fm.elidedText(label, Qt.TextElideMode.ElideRight, max(40.0, room))
+            lw = fm.horizontalAdvance(label)
             lx = cx + math.cos(a) * (r + 16)
             ly = cy + math.sin(a) * (r + 16)
             if math.cos(a) < -0.3:
@@ -463,7 +492,7 @@ class MachineView(QWidget):
         p.setClipRect(QRectF(area.left() + 8, area.top(), area.width() - 16, area.height()))
         fm = QFontMetricsF(self._small)
         bh = 32.0
-        for c in m.belt:
+        for c in self.items(now):
             b = self._boxes.get(c["seq"])
             if b is None:
                 continue
@@ -480,8 +509,7 @@ class MachineView(QWidget):
             p.drawRoundedRect(rect, 5, 5)
             p.setFont(self._small)
             p.setPen(QColor(INK))
-            label = fm.elidedText(c["tool"], Qt.TextElideMode.ElideMiddle, bw - 8)
-            p.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignCenter, label)
+            p.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignCenter, self._box_label(c))
             if c["agent"]:
                 p.setPen(QColor(AGENT))
                 p.drawText(QRectF(x, y - 11, bw, 10), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
