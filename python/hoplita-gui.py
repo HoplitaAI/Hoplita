@@ -899,6 +899,7 @@ class WorkerSignals(QObject):
     cancel_ack_tab = pyqtSignal(str)
     intent_changed = pyqtSignal(str)
     council_event = pyqtSignal(str, dict)
+    machine_event = pyqtSignal(str, dict)
     council_ack = pyqtSignal(object)
     hands_event = pyqtSignal(str, dict)
     config_event = pyqtSignal(str, dict)
@@ -1825,6 +1826,8 @@ class ChatAssistantWindow(QMainWindow):
         self.signals.plan_ack_close.connect(self._on_plan_ack_close)
         self.signals.cancel_ack_tab.connect(self._cancel_pending_ack)
         self.signals.task_state.connect(self._on_task_state)
+        self.signals.task_state.connect(self._machine_task_state)
+        self.signals.machine_event.connect(self._on_machine_event)
         self.signals.queue_changed.connect(self._on_queue_changed)
         self.signals.token_usage.connect(self._on_token_usage)
         self.signals.token_first.connect(self._on_token_first)
@@ -6183,7 +6186,27 @@ enabled = true
         _sb.addWidget(self._sticky_edit)
         self._sticky_open = False
         _cp.addWidget(self._sticky_bar)
-        _cp.addWidget(self.chat_display, 1)
+        from machine_view import MachineView
+        self.machine_view = MachineView()
+        self._machines = {}
+        self._chat_split = QSplitter(Qt.Orientation.Horizontal)
+        self._chat_split.setChildrenCollapsible(False)
+        self._chat_split.setHandleWidth(6)
+        self._chat_split.setStyleSheet("QSplitter::handle { background:#0b1220; }")
+        self._chat_split.addWidget(self.chat_display)
+        self._chat_split.addWidget(self.machine_view)
+        self._chat_split.setStretchFactor(0, 1)
+        self._chat_split.setStretchFactor(1, 0)
+        try:
+            _mq = QSettings("hoplita", "hoplita")
+            self._machine_on = str(_mq.value("machine/visible", "0")) == "1"
+            _mw = int(_mq.value("machine/width", 380) or 380)
+        except Exception:
+            self._machine_on, _mw = False, 380
+        self.machine_view.setVisible(self._machine_on)
+        self._chat_split.setSizes([max(300, 1200 - _mw), _mw])
+        self._chat_split.splitterMoved.connect(self._machine_resized)
+        _cp.addWidget(self._chat_split, 1)
         self._chat_stack.addWidget(_chat_page)
         self._session_cards = {}
         try:
@@ -6499,6 +6522,21 @@ enabled = true
                  f"QPushButton:hover {{ background:#334155; }}"))
             ob.clicked.connect(self._toggle_overview)
             lay.addWidget(ob)
+        if getattr(self, "machine_view", None) is not None:
+            mcol = "#93c5fd"
+            mon = bool(getattr(self, "_machine_on", False))
+            mb = QPushButton("◎")
+            mb.setCursor(Qt.CursorShape.PointingHandCursor)
+            mb.setToolTip(t("machine.toggle_tip"))
+            mb.setStyleSheet(
+                (f"QPushButton {{ background:{self._hex_rgba(mcol, 0.18)}; color:{mcol}; "
+                 f"border:1px solid {mcol}; border-radius:8px; padding:5px 12px; "
+                 f"font-weight:700; }}") if mon else
+                (f"QPushButton {{ background:#1e293b; color:{mcol}; border:1px solid {mcol}; "
+                 f"border-radius:8px; padding:5px 12px; }} "
+                 f"QPushButton:hover {{ background:#334155; }}"))
+            mb.clicked.connect(self._toggle_machine)
+            lay.addWidget(mb)
         if getattr(self, "agents_panel", None) is not None:
             n = len(self._agents_cards_for_active())
             showing = (getattr(self, "_chat_stack", None) is not None
@@ -6875,6 +6913,51 @@ enabled = true
         else:
             self._code_view_placeholder(idx == getattr(self, "_code_page_idx",
                                                        None))
+
+    def _machine(self, tab_id):
+        m = self._machines.get(tab_id)
+        if m is None:
+            from machine_view import Machine
+            m = self._machines[tab_id] = Machine()
+        return m
+
+    def _on_machine_event(self, tab_id, ev):
+        if not tab_id:
+            return
+        m = self._machine(tab_id)
+        m.event(ev)
+        if tab_id == self._active_tab_id and self.machine_view.isVisible():
+            if self.machine_view.machine() is not m:
+                self.machine_view.set_machine(m)
+            else:
+                self.machine_view.poke()
+
+    def _machine_task_state(self, tab_id, running):
+        self._on_machine_event(tab_id, {"kind": "turn" if running else "end"})
+
+    def _machine_emit(self, kind, **kw):
+        tab = getattr(self._tls, "tab_id", None) or self._active_tab_id
+        self.signals.machine_event.emit(tab or "", dict(kind=kind, **kw))
+
+    def _toggle_machine(self):
+        self._machine_on = not getattr(self, "_machine_on", False)
+        self.machine_view.setVisible(self._machine_on)
+        if self._machine_on:
+            self.machine_view.set_machine(self._machine(self._active_tab_id))
+        try:
+            QSettings("hoplita", "hoplita").setValue("machine/visible",
+                                                    "1" if self._machine_on else "0")
+        except Exception:
+            pass
+        self._render_chat_tabs()
+
+    def _machine_resized(self, *_):
+        try:
+            sizes = self._chat_split.sizes()
+            if len(sizes) > 1 and sizes[1] > 0:
+                QSettings("hoplita", "hoplita").setValue("machine/width", int(sizes[1]))
+        except Exception:
+            pass
 
     def _toggle_overview(self):
         idx = getattr(self, "_overview_page_idx", None)
@@ -7617,6 +7700,15 @@ enabled = true
                 self.agents_panel.update_state(self._agents_cards_for_active())
 
     def _set_subtask_step(self, ev):
+        if ev.get("type") == "step":
+            self._machine_emit("call", tool=ev.get("tool", ""),
+                               args=str(ev.get("args") or "")[:200],
+                               agent=str(ev.get("id") or ""))
+        else:
+            self._machine_emit("result", tool=ev.get("tool", ""),
+                               ok=bool(ev.get("ok", True)),
+                               duration=float(ev.get("duration_s") or 0),
+                               agent=str(ev.get("id") or ""))
         ctx = self._turn_ctx()
         cards = [dict(c) for c in (ctx.agents or [])]
         hit = False
@@ -8645,6 +8737,8 @@ enabled = true
     def _switch_chat_tab(self, tab_id):
         if tab_id == self._active_tab_id:
             return
+        if getattr(self, "machine_view", None) is not None:
+            self.machine_view.set_machine(self._machine(tab_id))
         cur = self._tab_by_id(self._active_tab_id)
         if cur is not None:
             cur["html"] = self.chat_display.toHtml()
@@ -8811,6 +8905,7 @@ enabled = true
         self._enchant_t0.pop(tab_id, None)
         self._chat_tabs = [x for x in self._chat_tabs if x["id"] != tab_id]
         self._chat_ctxs.pop(tab_id, None)
+        getattr(self, "_machines", {}).pop(tab_id, None)
         if self._active_tab_id == tab_id:
             self._active_tab_id = "local"
             loc = self._tab_by_id("local")
@@ -18507,6 +18602,8 @@ enabled = true
                         _p["done"] = True
                         _p["duration"] = time.time() - float(_p.get("t0") or time.time())
                         _p["ok"] = not _text.lstrip().startswith(('{"error"', "❌"))
+                        self._machine_emit("result", tool=name, ok=_p["ok"],
+                                           duration=_p["duration"])
                         break
             except Exception:
                 pass
@@ -18581,6 +18678,7 @@ enabled = true
                                                           int(ev.get("max") or 0))
                         except Exception:
                             pass
+                        self._machine_emit("round", n=ev.get("n"), max=ev.get("max"))
                         self.thread_msg(t("chat.iteration", n=ev.get("n"),
                                           max=ev.get("max")))
                     elif et == "injected":
@@ -18759,6 +18857,7 @@ enabled = true
                             self._turn_ctx().last_llm_call = dict(ev)
                         except Exception:
                             pass
+                        self._machine_emit("model", model=ev.get("model") or model)
                         self.thread_msg(
                             f"⏳ LLM (MCP) → {ev.get('model') or model} "
                             f"msgs={ev.get('n_messages')} "
@@ -18766,6 +18865,7 @@ enabled = true
                             "system")
                     elif et == "llm_done":
                         dt = ev.get("duration_s", 0)
+                        self._machine_emit("model_done", duration=dt)
                         if dt > 10:
                             self.thread_msg(t("msg.llm_slow", dt=f"{dt:.1f}"), "system")
                         else:
@@ -18790,6 +18890,7 @@ enabled = true
                         name = ev.get("tool", "")
                         _src = self._picture_sources_label(name, ev.get("args") or {})
                         self.thread_msg(f"  {tool_idx}. {name}{_src}({str(ev.get('args') or {})[:80]}...)")
+                        self._machine_emit("call", tool=name, args=str(ev.get("args") or {})[:200])
                         self._tu_tools(tool_idx)
                         _sctx = getattr(self, "_chat_ctxs", {}).get(tab)
                         if _sctx is not None:
@@ -18808,6 +18909,7 @@ enabled = true
                         name = ev.get("tool", "")
                         self.thread_msg(f"  {tool_idx}. {name}({ev.get('args_preview') or ''})")
                         self.thread_msg(f"🔗 MCP ⟲ {name}", "system")
+                        self._machine_emit("call", tool=name, args=str(ev.get("args_preview") or "")[:200])
                         self._tu_tools(tool_idx)
                         _sctx = getattr(self, "_chat_ctxs", {}).get(tab)
                         if _sctx is not None:
@@ -18819,6 +18921,7 @@ enabled = true
                                  "t0": time.time()})
                     elif et == "thought":
                         self.thread_msg(str(ev.get("text") or ""), "thought")
+                        self._machine_emit("thought", chars=len(str(ev.get("text") or "")))
                     elif et == "tools_withheld":
                         _fw = [str(n) for n in (ev.get("firewall") or [])]
                         _rl = [str(n) for n in (ev.get("tools") or [])
@@ -18842,6 +18945,11 @@ enabled = true
                                         break
                             except Exception:
                                 pass
+                            self._machine_emit(
+                                "result", tool=ev.get("tool", ""),
+                                ok=not str(ev.get("result_preview", "")).lstrip()
+                                .startswith(('{"error"', "❌")),
+                                duration=float(ev.get("duration_s") or 0))
                         if ev.get("tool") not in ("intent", "load_tools"):
                             _tcx = self._turn_ctx()
                             _tcx.turn_tools_used = getattr(_tcx, "turn_tools_used", 0) + 1

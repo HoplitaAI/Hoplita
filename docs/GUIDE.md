@@ -742,6 +742,19 @@ a card keeps that conversation at the top of the list whatever its date, on
 every machine of yours, and the prune leaves it alone: the one with the rules
 you keep coming back to never sinks under a thousand passing chats.
 
+## ◎ The machine beside the transcript
+
+◎ in the tab strip opens an instrument beside the transcript that shows what
+the active tab is doing as it does it. A dial: every tool the tab has used
+is a slot around the arc with its count, the model's own rounds the first
+slot, and the needle swings to whatever is running now, with its arguments
+and its clock under the dial. A belt: every call is a box that arrives from
+the right and pushes the older ones left, grows while it runs, settles into
+the lower lane when it ends, turns red when it fails, and wears the
+sub-agent's name when a sub-agent made it. A call lands once, repeats fold
+into their slot's count, and when nothing runs nothing moves and no frame is
+painted. Its width and whether it is shown are remembered.
+
 ## The CODE tab — a real repo, not a chat about files
 
 Opening a project is not «picking a folder»: it is entering code mode. The path
