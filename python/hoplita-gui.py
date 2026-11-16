@@ -6944,16 +6944,17 @@ enabled = true
         lines = []
         if working and c is not None:
             it = getattr(c, "turn_iter", (0, 0)) or (0, 0)
-            lines.append({"depth": 0, "kind": "turn", "glyph": "spin", "color": "#38bdf8",
+            lines.append({"depth": 0, "kind": "turn", "key": "turn", "glyph": "spin",
+                          "color": "#38bdf8",
                           "text": t("ovw.turn_line", i=it[0], n=it[1],
                                     ago=tabs_overview_ago(since or 0)),
                           "cancel": ["turn", tid, ""], "tip": t("ovw.stop_turn_tip")})
             steps = [s for s in (getattr(c, "turn_steps", []) or []) if isinstance(s, dict)]
             if len(steps) > 8:
-                lines.append({"depth": 1, "kind": "earlier", "glyph": "·", "color": "#64748b",
-                              "text": t("ovw.earlier", n=len(steps) - 8)})
+                lines.append({"depth": 1, "kind": "earlier", "key": "earlier", "glyph": "·",
+                              "color": "#64748b", "text": t("ovw.earlier", n=len(steps) - 8)})
                 steps = steps[-8:]
-            for s in steps:
+            for si, s in enumerate(steps):
                 done = bool(s.get("done")) or "result" in s
                 okk = s.get("ok", True)
                 detail = str(s.get("detail") or "")
@@ -6968,6 +6969,7 @@ enabled = true
                 if s.get("result"):
                     tip += "\n→ " + str(s["result"])[:300]
                 lines.append({"depth": 1, "kind": "step",
+                              "key": f"step/{s.get('step') or s.get('t0') or si}",
                               "glyph": ("✓" if okk else "✗") if done else "spin",
                               "color": ("#e6edf7" if okk else "#fca5a5") if done else "#38bdf8",
                               "text": head + tail, "tip": tip})
@@ -6977,8 +6979,8 @@ enabled = true
                 cur = (next((i for i in intent if str(i.get("status", "")).lower() == "doing"), None)
                        or next((i for i in intent if str(i.get("status", "")).lower()
                                 in ("", "pending")), None))
-                lines.append({"depth": 1, "kind": "plan", "glyph": "◐" if cur else "✓",
-                              "color": "#c4b5fd",
+                lines.append({"depth": 1, "kind": "plan", "key": "plan",
+                              "glyph": "◐" if cur else "✓", "color": "#c4b5fd",
                               "text": t("ovw.plan_line", done=done_n, n=len(intent),
                                         goal=str((cur or intent[-1]).get("goal", ""))[:70]),
                               "tip": "\n".join(f"[{i.get('status', '')}] {i.get('goal', '')}"
@@ -6996,8 +6998,8 @@ enabled = true
                 _head.append(t("ovw.agents_running", n=_run))
             if _bad:
                 _head.append(t("ovw.agents_failed", n=_bad))
-            lines.append({"depth": 1, "kind": "agents", "glyph": "▸", "color": "#c4b5fd",
-                          "text": " · ".join(_head)})
+            lines.append({"depth": 1, "kind": "agents", "key": "agents", "glyph": "▸",
+                          "color": "#c4b5fd", "text": " · ".join(_head)})
         for a in agents:
             st = str(a.get("status") or "pending")
             o = a.get("origin") if a.get("origin") in ("out", "in") else "local"
@@ -7009,19 +7011,21 @@ enabled = true
                 parts.append(t("ovw.agent_tools", n=int(a.get("tools") or 0)))
             if st not in ("running", "pending"):
                 parts.append(st)
-            lines.append({"depth": 1, "kind": "agent",
+            lines.append({"depth": 1, "kind": "agent", "key": f"agent/{a.get('id', '')}",
                           "glyph": {"running": "spin", "done": "✓", "failed": "✗",
                                     "cancelled": "⊘"}.get(st, "○"),
                           "color": {"running": "#f5b800", "done": "#86efac",
                                     "failed": "#fca5a5"}.get(st, "#94a3b8"),
                           "text": " · ".join(parts), "tip": str(a.get("goal") or "")})
-            for s in [x for x in (a.get("steps") or []) if isinstance(x, dict)][-3:]:
+            _steps = [x for x in (a.get("steps") or []) if isinstance(x, dict)]
+            for si, s in enumerate(_steps[-3:], start=max(0, len(_steps) - 3)):
                 done = bool(s.get("done"))
                 dur = s.get("duration")
                 tail = (f"  {float(dur):.1f}s" if done and dur is not None
                         else (f"  {tabs_overview_ago(now - float(s['t0']))}…"
                               if not done and s.get("t0") else ""))
                 lines.append({"depth": 2, "kind": "agent_step",
+                              "key": f"agent/{a.get('id', '')}/{s.get('t0') or si}",
                               "glyph": ("✓" if s.get("ok", True) else "✗") if done else "spin",
                               "color": "#cbd5e1" if done else "#38bdf8",
                               "text": f"{s.get('tool', '')}({str(s.get('args') or '')[:50]}){tail}",
@@ -7033,7 +7037,8 @@ enabled = true
                                 in ("", "pending")), None))
                 if cur:
                     done_n = sum(1 for i in its if str(i.get("status", "")).lower() == "done")
-                    lines.append({"depth": 2, "kind": "agent_plan", "glyph": "◐",
+                    lines.append({"depth": 2, "kind": "agent_plan",
+                                  "key": f"agent/{a.get('id', '')}/plan", "glyph": "◐",
                                   "color": "#c4b5fd",
                                   "text": t("ovw.plan_line", done=done_n, n=len(its),
                                             goal=str(cur.get("goal", ""))[:60])})
@@ -7048,7 +7053,8 @@ enabled = true
                 text = t("ovw.job_run", label=j.get("label", ""), tool=j.get("tool", ""),
                          ago=tabs_overview_ago(j.get("age_s") or 0))
                 glyph = "⚙"
-            lines.append({"depth": 1, "kind": "job", "glyph": glyph, "color": "#f5b800",
+            lines.append({"depth": 1, "kind": "job", "key": f"job/{j.get('id', '')}",
+                          "glyph": glyph, "color": "#f5b800",
                           "text": text, "tip": t("ovw.stop_job_tip"),
                           "cancel": ["job", tid, str(j.get("id", ""))]})
         return self._tree_prefixes(lines)

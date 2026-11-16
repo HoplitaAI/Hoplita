@@ -891,7 +891,10 @@ arguments (each ticked with its clock when it ends, the running one turning),
 the plan it keeps and the item it is on, its sub-agents with where they run,
 their model, their own calls and their own list, and the background jobs
 alive for it with their last probe. A ✕ on the turn stops it, a ✕ on a job
-ends it. A card opens its tab.
+ends it. A card opens its tab. The tree moves by three rules: a call lands
+once (its line enters with a band of its colour that fades), a finished
+call's mark settles once, and the running mark is the only thing that keeps
+turning; when nothing works, nothing moves and no frame is painted.
 
 A tab can also leave work running and go on, or end its turn and be woken.
 The model starts any tool in the background (`background_run`: a test suite,
