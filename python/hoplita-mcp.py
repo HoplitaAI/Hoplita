@@ -6610,6 +6610,7 @@ def _browse_endpoint(endpoint=None):
 
 
 async def _browse_async(task, start_url, headless, max_steps, endpoint=None):
+    os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     try:
         from browser_use.agent.service import Agent
         from browser_use.llm import ChatOpenAI as BUChatOpenAI

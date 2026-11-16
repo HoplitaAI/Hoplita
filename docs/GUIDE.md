@@ -1612,7 +1612,8 @@ generic answer is not good enough. HOPLITA ships none; you write your own.
 
 ## Web browsing (browser-use)
 
-- Library: `browser-use>=0.13.4` (detects LLM truncation and allows the rescue with `fallback_llm`)
+- Library: `browser-use>=0.13.4,<1` (0.13.4 detects LLM truncation and allows the rescue with `fallback_llm`; 1.0 replaced the engine and the API, and browse_web is written for 0.13)
+- The library's anonymized telemetry is switched off before it is imported (`ANONYMIZED_TELEMETRY=false`, unless the environment already says otherwise)
 - Client: `browser_use.llm.ChatOpenAI` (any OpenAI-compatible endpoint)
 - `[BROWSER] structured_output = auto` FORCES the schema on the server (local or cloud): small models are exactly the ones that ramble out of a schema. `off` is the escape hatch for a server that does not support it
 - `[BROWSER] use_vision = auto` follows what the model declares: it gets screenshots only if its pool line (or `[CHAT] vision`) says it sees. `true`/`false` force it
