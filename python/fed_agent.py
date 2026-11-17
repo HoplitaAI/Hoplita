@@ -454,6 +454,17 @@ def inject(turn_id, text, kind="user"):
         return True
 
 
+def withdraw(turn_id, text):
+    text = (text or "").strip()
+    with _INJECT_LOCK:
+        box = _INJECT.get(turn_id)
+        for i, (msg, kind) in enumerate(box or []):
+            if msg == text and kind == "user":
+                del box[i]
+                return True
+    return False
+
+
 def forget_turn(turn_id):
     with _INJECT_LOCK:
         _INJECT.pop(turn_id, None)

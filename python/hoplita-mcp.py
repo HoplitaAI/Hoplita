@@ -17209,6 +17209,7 @@ class AgentInjectReq(BaseModel):
     turn_id: str
     message: str
     kind: str = "user"
+    withdraw: bool = False
 
 
 _VAULT_LOCK = threading.Lock()
@@ -17373,6 +17374,9 @@ def shutdown_mcp(request: Request):
 @app.post("/agent/inject")
 def agent_inject(req: AgentInjectReq):
     import fed_agent
+    if req.withdraw:
+        return {"withdrawn": fed_agent.withdraw(req.turn_id, req.message),
+                "turn_id": req.turn_id}
     if fed_agent.inject(req.turn_id, req.message, kind=req.kind or "user"):
         return {"injected": True, "turn_id": req.turn_id}
     return {"injected": False,

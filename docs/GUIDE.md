@@ -662,8 +662,10 @@ anchored to the lines that did it.
 **The chat has tabs.** Each one is a conversation with its own context, its model
 (`/model`), its judge (`/qa`), its code project, its `/verify` and its `/goal`.
 Turns are serialized per tab — talking in one does not interrupt another's work;
-what you type while a turn runs waits in the tab's queue, shown above the box,
-where a click on a line takes it back to edit and ✕ drops it —
+what you type while a turn runs is handed to the turn, or waits in the tab's
+queue when it carries files; both show above the box, where a click on a line
+takes it back to edit (out of the turn's hands while it has not read it) and
+✕ drops it —
 and the session is stored encrypted and synced. The ⏰ CRON tab is a special case:
 a singleton, and it only exists from the moment a cron fires or you open it.
 

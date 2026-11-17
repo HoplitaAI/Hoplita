@@ -330,7 +330,10 @@ Work that goes on without the turn (`hoplita_background.py`): a tool started wit
 `{turn_id, message}` → `{injected}`. Says something to a turn that is **already
 running**: the text is appended as a user message at the top of the next
 iteration and the stream emits `injected`. `{injected: false}` means that turn
-is not running — queue the message instead.
+is not running — queue the message instead. `{turn_id, message, withdraw: true}`
+→ `{withdrawn}` takes a message of the person's back out of the mailbox while
+the loop has not read it; `withdrawn: false` means it already reached the model
+or the turn is gone.
 
 ## `POST /agent/memory_snapshot`
 `{session, action: "reset"}` → `{reset, held}`. Drops a conversation's MEMORY

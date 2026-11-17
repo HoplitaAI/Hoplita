@@ -16350,10 +16350,11 @@ enabled = true
             return f'<a href="{href}" style="color:#fbbf24;text-decoration:none">{text}</a>'
 
         lines = []
+        _x = lambda href: _link(href, "✕") + "&nbsp;"
         if sent:
             lines.append(_html.escape(t("queue.box_sent", n=len(sent))))
-            lines += [f"&nbsp;&nbsp;· {_cut(m)}" for m in sent]
-        _x = lambda href: _link(href, "✕") + "&nbsp;"
+            lines += [f"&nbsp;&nbsp;{_x(f'sx:{i}')}{_link(f's:{i}', _cut(m))}"
+                      for i, m in enumerate(sent, 1)]
         if q:
             lines.append(_html.escape(t("queue.box_header", n=len(q))))
             lines += [f"&nbsp;&nbsp;{_x(f'x:{i}')}{_link(f'q:{i}', f'{i}. {_cut(m)}')}"
@@ -16370,6 +16371,13 @@ enabled = true
                 _c.compact_pending = False
                 self.add_message(t("ctx.compact_unqueued"), "system")
             self._update_queue_label()
+            return
+        if href.startswith("s:") or href.startswith("sx:"):
+            try:
+                self._injected_take(int(href.split(":", 1)[1]),
+                                    drop=href.startswith("sx:"))
+            except ValueError:
+                pass
             return
         if href.startswith("q:") or href.startswith("x:"):
             try:
@@ -16394,6 +16402,30 @@ enabled = true
                 pass
             self.entry.setFocus()
             self.add_message(t("msg.queue_pulled", n=n), "system")
+        self._update_queue_label()
+        return True
+
+    def _injected_take(self, n, drop=False):
+        ctx = self._view_ctx()
+        sent = list(getattr(ctx, "injected_pending", None) or [])
+        if not (1 <= n <= len(sent)):
+            self._update_queue_label()
+            return False
+        msg = sent[n - 1]
+        if not self._withdraw_from_turn(getattr(ctx, "turn_id", None), msg):
+            self.add_message(t("msg.injected_read"), "system")
+            self._update_queue_label()
+            return False
+        try:
+            ctx.injected_pending.remove(msg)
+        except ValueError:
+            pass
+        if drop:
+            self.add_message(t("msg.injected_dropped"), "system")
+        else:
+            self.entry.setText(msg)
+            self.entry.setFocus()
+            self.add_message(t("msg.injected_pulled"), "system")
         self._update_queue_label()
         return True
 
@@ -16595,6 +16627,10 @@ enabled = true
                 _cq = self._chat_ctxs.get(self._active_tab_id)
                 if _cq is not None:
                     _cq.compact_pending = False
+                    for _m in list(getattr(_cq, "injected_pending", None) or []):
+                        if self._withdraw_from_turn(getattr(_cq, "turn_id", None), _m):
+                            _cq.injected_pending.remove(_m)
+                            n += 1
                 self._update_queue_label()
                 self.add_message(t("msg.queue_cleared", n=n), "system")
             elif _qm:
@@ -17366,6 +17402,18 @@ enabled = true
                               json={"turn_id": turn_id, "message": msg,
                                     "kind": kind})
             return bool(r.ok and r.json().get("injected"))
+        except Exception as e:
+            print(f"[INJECT] {e}", file=sys.stderr)
+            return False
+
+    def _withdraw_from_turn(self, turn_id, msg):
+        if not turn_id:
+            return False
+        try:
+            r = requests.post(f"{self._tab_url()}/agent/inject", timeout=5,
+                              json={"turn_id": turn_id, "message": msg,
+                                    "withdraw": True})
+            return bool(r.ok and r.json().get("withdrawn"))
         except Exception as e:
             print(f"[INJECT] {e}", file=sys.stderr)
             return False
