@@ -18,8 +18,6 @@ AGENT = "#f5b800"
 MODEL = "#c4b5fd"
 MAX_SLOTS = 12
 BELT_KEEP = 40
-BOX_H = 24.0
-ROW_H = 30.0
 FRAME_MS = 33
 EASE_S = 0.35
 MODEL_SLOT = "model"
@@ -182,8 +180,6 @@ class MachineView(QWidget):
         self._needle_to = 0.0
         self._needle_t0 = 0.0
         self._target = MODEL_SLOT
-        self._boxes = {}
-        self._rows = 0
         self._lit = {}
         self._timer = QTimer(self)
         self._timer.setInterval(FRAME_MS)
@@ -198,12 +194,10 @@ class MachineView(QWidget):
         self._mono.setPixelSize(11)
         self._small = QFont()
         self._small.setPixelSize(10)
-        self._fm_small = QFontMetricsF(self._small)
 
     def set_machine(self, m):
         if m is not self._m:
             self._m = m
-            self._boxes = {}
             self._lit = {}
             self._needle = self._needle_to = self._slot_angle(self._m.current())
             self._needle_t0 = 0.0
@@ -221,7 +215,6 @@ class MachineView(QWidget):
             self._lit[target] = now
         elif self._m.busy():
             self._lit[target] = now
-        self._place(now)
         if self.isVisible() and not self._timer.isActive() and self._moving(now):
             self._timer.start()
         self.update()
@@ -251,55 +244,11 @@ class MachineView(QWidget):
         self._needle_to = self._slot_angle(target)
         self._needle_t0 = now
 
-    def items(self, now=None):
-        return [{"seq": c["seq"], "tool": c["tool"], "agent": c["agent"], "t0": c["t0"],
-                 "t1": c["t1"], "ok": c["ok"], "dur": c["dur"], "n": 1}
-                for c in self._m.belt]
-
-    def _place(self, now):
-        w = self.width()
-        left, right = 14.0, w - 14.0
-        x, row = left, 0
-        seen = set()
-        items = self.items(now)
-        for c in items:
-            bw = self._box_w(c, now)
-            if x > left and x + bw > right:
-                x, row = left, row + 1
-            seen.add(c["seq"])
-            b = self._boxes.get(c["seq"])
-            if b is None:
-                self._boxes[c["seq"]] = {"x": float(w), "x_from": float(w), "x_to": x,
-                                         "t0": now, "row": row}
-            else:
-                b["row"] = row
-                if abs(b["x_to"] - x) > 4:
-                    b["x_from"], b["x_to"], b["t0"] = b["x"], x, now
-                else:
-                    b["x_to"] = x
-                    if now - b["t0"] >= EASE_S:
-                        b["x"] = x
-            x += bw + 6
-        self._rows = row + 1 if items else 0
-        for seq in [s for s in self._boxes if s not in seen]:
-            del self._boxes[seq]
-
-    def _box_label(self, c):
-        return c["tool"]
-
-    def _box_w(self, c, now):
-        d = c["dur"] if c["t1"] is not None else now - c["t0"]
-        by_time = min(120.0, 48.0 + 14.0 * math.log2(1.0 + max(0.0, d)))
-        return max(self._fm_small.horizontalAdvance(self._box_label(c)) + 14.0, by_time)
-
     def _moving(self, now):
         if self._m.busy():
             return True
         if now - self._needle_t0 < EASE_S:
             return True
-        for b in self._boxes.values():
-            if now - b["t0"] < EASE_S:
-                return True
         if any(now - t < EASE_S for t in self._lit.values()):
             return True
         return False
@@ -311,35 +260,19 @@ class MachineView(QWidget):
         if target != self._target:
             self._aim(target, now)
             self._lit[target] = now
-        self._place(now)
         p = _ease((now - self._needle_t0) / EASE_S)
         self._needle = self._needle_from + (self._needle_to - self._needle_from) * p
-        for b in self._boxes.values():
-            q = _ease((now - b["t0"]) / EASE_S)
-            b["x"] = b["x_from"] + (b["x_to"] - b["x_from"]) * q
         if not self._moving(now):
             self._needle = self._needle_to
             self._timer.stop()
         self.update()
-
-    def resizeEvent(self, ev):
-        super().resizeEvent(ev)
-        self._place(self._now)
-        for b in self._boxes.values():
-            b["x"] = b["x_to"]
-            b["t0"] = 0.0
 
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.fillRect(self.rect(), QColor(BED))
-        w, h = self.width(), self.height()
-        now = self._now
-        self._place(now)
-        belt_h = min(h * 0.45, 56 + max(1, self._rows) * ROW_H)
-        self._paint_dial(p, QRectF(0, 0, w, h - belt_h), now)
-        self._paint_belt(p, QRectF(0, h - belt_h, w, belt_h), now)
+        self._paint_dial(p, QRectF(0, 0, self.width(), self.height()), self._now)
         p.end()
 
     def _paint_dial(self, p, area, now):
@@ -472,46 +405,11 @@ class MachineView(QWidget):
             line = t("machine.turn_line", calls=m.turn_calls, ago=_clock(now - m.turn_t0))
         else:
             line = t("machine.title")
-        p.drawText(QRectF(area.left() + 14, area.bottom() - fs.height() - 6, area.width() - 28, fs.height()),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, line)
-
-    def _paint_belt(self, p, area, now):
-        m = self._m
-        p.fillRect(area, QColor(PANEL))
-        p.setPen(QPen(QColor(RAIL), 1))
-        p.drawLine(QPointF(area.left(), area.top()), QPointF(area.right(), area.top()))
-        fm = QFontMetricsF(self._small)
-        rows_fit = max(1, int((area.height() - 56) // ROW_H))
-        first = max(0, self._rows - rows_fit)
-        items = self.items(now)
-        hidden = sum(1 for c in items
-                     if c["seq"] in self._boxes and self._boxes[c["seq"]]["row"] < first)
-        p.setClipRect(QRectF(area.left() + 8, area.top() + 1, area.width() - 16,
-                             area.height() - fm.height() - 12))
-        p.setFont(self._small)
-        for c in items:
-            b = self._boxes.get(c["seq"])
-            if b is None or b["row"] < first:
-                continue
-            bw = self._box_w(c, now)
-            x = b["x"]
-            if x + bw < area.left() or x > area.right():
-                continue
-            y = area.top() + 12 + (b["row"] - first) * ROW_H
-            rect = QRectF(x, y, bw, BOX_H)
-            run = c["t1"] is None
-            col = RUN if run else (FAIL if c["ok"] is False else (AGENT if c["agent"] else INK))
-            p.setPen(QPen(QColor(col), 1.5 if run else 1.0))
-            p.setBrush(_tint(col, 0.18 if run else 0.07))
-            p.drawRoundedRect(rect, 5, 5)
-            p.setPen(QColor(INK))
-            p.drawText(rect.adjusted(4, 0, -4, 0), Qt.AlignmentFlag.AlignCenter, self._box_label(c))
-        p.setClipping(False)
         n, fails, secs = m.totals()
-        p.setFont(self._small)
-        p.setPen(QColor(INK))
-        line = t("machine.totals", n=n, fails=fails, secs=_clock(secs), open=len(m.running))
-        if hidden:
-            line += "  ·  " + t("machine.earlier", n=hidden)
-        p.drawText(QRectF(area.left() + 14, area.bottom() - fm.height() - 6, area.width() - 28, fm.height() + 4),
+        totals = t("machine.totals", n=n, fails=fails, secs=_clock(secs), open=len(m.running))
+        y_tot = area.bottom() - fs.height() - 6
+        p.drawText(QRectF(area.left() + 14, y_tot - fs.height() - 4, area.width() - 28, fs.height()),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, line)
+        p.drawText(QRectF(area.left() + 14, y_tot, area.width() - 28, fs.height()),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, totals)
+

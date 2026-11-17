@@ -2280,7 +2280,6 @@
   "machine.by_agent": "sub-agente {agent}",
   "machine.turn_line": "este turno · {calls} llamadas · {ago}",
   "machine.totals": "{n} llamadas · {fails} fallidas · {secs} en tools · {open} abiertas",
-  "machine.earlier": "+{n} anteriores",
   "ovw.secs": "{n} s",
   "ovw.mins": "{n} min",
   "ovw.hours": "{n} h",
