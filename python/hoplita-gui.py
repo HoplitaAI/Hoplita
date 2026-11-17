@@ -75,7 +75,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QTabBar
 )
 from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QObject, QTimer
+    Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
 )
 
 _SESS_CARD_CSS = (
@@ -465,23 +465,66 @@ def _add_redo_key(widget):
 
 class ChatView(QTextEdit):
     RELAYOUT_MS = 120
+    DRAG_MS = 300
 
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
-        from PyQt6.QtCore import QTimer
         self._relayout_timer = QTimer(self)
         self._relayout_timer.setSingleShot(True)
         self._relayout_timer.setInterval(self.RELAYOUT_MS)
         self._relayout_timer.timeout.connect(self._relayout_now)
+        self._width_changed_at = 0.0
+        self.follow = True
+        self.verticalScrollBar().valueChanged.connect(self._follow_update)
+        self.verticalScrollBar().rangeChanged.connect(self._range_changed)
+
+    def _follow_update(self, value):
+        sb = self.verticalScrollBar()
+        self.follow = value >= sb.maximum() - max(24, sb.singleStep())
+
+    def _range_changed(self, lo, hi):
+        if self.follow:
+            sb = self.verticalScrollBar()
+            if sb.value() != hi:
+                sb.setValue(hi)
+
+    def load_html(self, html):
+        self.setHtml(html)
+        cur = self.textCursor()
+        cur.movePosition(cur.MoveOperation.End)
+        self.setTextCursor(cur)
+        self.scroll_bottom(force=True)
+
+    def append_block(self, html):
+        from PyQt6.QtGui import QTextBlockFormat, QTextCharFormat
+        cur = QTextCursor(self.document())
+        cur.movePosition(cur.MoveOperation.End)
+        if not self.document().isEmpty():
+            cur.insertBlock(QTextBlockFormat(), QTextCharFormat())
+        cur.insertHtml(html)
+
+    def scroll_bottom(self, force=False):
+        if force:
+            self.follow = True
+        if not self.follow:
+            return
+        sb = self.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
 
     def resizeEvent(self, ev):
         from PyQt6.QtCore import QSize
         from PyQt6.QtGui import QResizeEvent
         if ev.oldSize().width() != ev.size().width() and ev.oldSize().width() > 0:
-            super().resizeEvent(QResizeEvent(
-                ev.size(), QSize(ev.size().width(), ev.oldSize().height())))
-            self._relayout_timer.start()
-            return
+            now = time.monotonic()
+            in_drag = (now - self._width_changed_at) * 1000 < self.DRAG_MS
+            self._width_changed_at = now
+            if in_drag:
+                super().resizeEvent(QResizeEvent(
+                    ev.size(), QSize(ev.size().width(), ev.oldSize().height())))
+                self._relayout_timer.start()
+                return
+            self._relayout_timer.stop()
         super().resizeEvent(ev)
 
     def _relayout_now(self):
@@ -3390,41 +3433,41 @@ class ChatAssistantWindow(QMainWindow):
     def _on_stream_token(self, token, tab_id=""):
         tab_id = tab_id or self._active_tab_id
         self._stream_bufs[tab_id] = self._stream_bufs.get(tab_id, "") + token
-        if tab_id != self._active_tab_id:
+        live = self._active_stream_live and self._stream_live_tab == tab_id
+        if not live and tab_id != self._active_tab_id:
             return
-        if not self._active_stream_live or self._stream_live_tab != tab_id:
+        view = self._chat_view(tab_id)
+        if not live:
             self._active_stream_live = True
             self._stream_live_tab = tab_id
             self._deferred_messages = []
-            end_cursor = self.chat_display.textCursor()
+            end_cursor = view.textCursor()
             end_cursor.movePosition(end_cursor.MoveOperation.End)
             self._stream_start_pos = end_cursor.position()
             self._stream_ts = datetime.now().strftime("%H:%M:%S")
             header = (f'<span style="color:#64748b">[{self._stream_ts}]</span> '
                       f'<span style="color:#e2e8f0;font-weight:bold">IA:</span> '
                       f'<span style="color:#e2e8f0">')
-            self.chat_display.append(header)
-        cursor = self.chat_display.textCursor()
+            view.append_block(header)
+        cursor = QTextCursor(view.document())
         cursor.movePosition(cursor.MoveOperation.End)
         cursor.insertText(token)
-        if getattr(self, "_chat_follow", True):
-            self.chat_display.setTextCursor(cursor)
-            sb = self.chat_display.verticalScrollBar()
+        if view.follow:
+            sb = view.verticalScrollBar()
             sb.setValue(sb.maximum())
 
     def _on_stream_done(self, tab_id=""):
         tab_id = tab_id or self._active_tab_id
         buf = self._stream_bufs.pop(tab_id, "")
         ts = getattr(self, "_stream_ts", datetime.now().strftime("%H:%M:%S"))
-        live_here = (self._active_stream_live and self._stream_live_tab == tab_id
-                     and tab_id == self._active_tab_id)
+        live_here = self._active_stream_live and self._stream_live_tab == tab_id
+        view = self._chat_view(tab_id)
         rate = self._rating_footer(tab_id, buf)
         if live_here and buf.strip() and _MARKDOWN_OK:
             start = getattr(self, "_stream_start_pos", None)
             if start is not None:
-                keep = (None if getattr(self, "_chat_follow", True)
-                        else self.chat_display.verticalScrollBar().value())
-                cursor = self.chat_display.textCursor()
+                keep = None if view.follow else view.verticalScrollBar().value()
+                cursor = QTextCursor(view.document())
                 cursor.setPosition(start)
                 cursor.movePosition(cursor.MoveOperation.End,
                                     cursor.MoveMode.KeepAnchor)
@@ -3434,14 +3477,10 @@ class ChatAssistantWindow(QMainWindow):
                         f'<span style="color:#e2e8f0;font-weight:bold">IA:</span> '
                         f'{body}{rate}<br>')
                 cursor.insertHtml(html)
-                self.chat_display.setTextCursor(cursor)
-                self._reset_block_format()
-                cursor = self.chat_display.textCursor()
                 cursor.movePosition(cursor.MoveOperation.End)
                 cursor.insertHtml('</span><br>')
-                self.chat_display.setTextCursor(cursor)
                 if keep is not None:
-                    self.chat_display.verticalScrollBar().setValue(keep)
+                    view.verticalScrollBar().setValue(keep)
         elif buf.strip():
             body = self._render_markdown(buf, "#e2e8f0") if _MARKDOWN_OK else buf
             html = (f'<span style="color:#64748b">[{ts}]</span> '
@@ -3455,8 +3494,7 @@ class ChatAssistantWindow(QMainWindow):
             self._deferred_messages = []
             for msg, snd in deferred:
                 self._paint_message(msg, snd, tab_id)
-        if tab_id == self._active_tab_id:
-            self._chat_scroll_bottom()
+        view.scroll_bottom()
 
     def _rating_footer(self, tab_id, reply):
         if not (reply or "").strip():
@@ -6105,7 +6143,7 @@ enabled = true
     def _setup_chat_area(self, parent_layout):
         self._chat_tabs = [{
             "id": "local", "kind": "local", "peer": None,
-            "title": t("chat.tab_local"), "html": "", "history_ref": True,
+            "title": t("chat.tab_local"), "history_ref": True,
         }]
         self._active_tab_id = "local"
         from fed_status_line import FedStatusLine
@@ -6153,17 +6191,9 @@ enabled = true
         parent_layout.addWidget(self.motd_banner)
 
 
-        self.chat_display = ChatView()
-        self.chat_display.setReadOnly(True)
-        self.chat_display.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.chat_display.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
-        self._chat_follow = True
-        self.chat_display.verticalScrollBar().valueChanged.connect(
-            self._chat_follow_update)
-        self.chat_display.verticalScrollBar().rangeChanged.connect(
-            self._chat_range_changed)
-        self.chat_display.setFont(QFont("Consolas" if IS_WINDOWS else "Monospace", 12))
-        self.chat_display.setObjectName("chat_display")
+        from PyQt6.QtWidgets import QStackedWidget
+        self._chat_views = QStackedWidget()
+        self._chat_view_by_tab = {}
         self._chat_font_base = self.config.getint("CHAT", "font_size",
                                                   fallback=13)
         try:
@@ -6172,10 +6202,9 @@ enabled = true
                 "chat_font_size", self._chat_font_base))
         except Exception:
             self._chat_font_pt = self._chat_font_base
-        self._zoom_targets = [(self.chat_display, "", 0)]
-        self._apply_zoom()
-        self.chat_display.viewport().setMouseTracking(True)
-        self.chat_display.viewport().installEventFilter(self)
+        self._zoom_targets = []
+        self.chat_display = self._show_chat_view(
+            getattr(self, "_active_tab_id", None) or "local")
         from PyQt6.QtWidgets import QStackedWidget
         self._chat_stack = QStackedWidget()
         _chat_page = QWidget()
@@ -6229,7 +6258,7 @@ enabled = true
         self._chat_split.setChildrenCollapsible(False)
         self._chat_split.setHandleWidth(6)
         self._chat_split.setStyleSheet("QSplitter::handle { background:#0b1220; }")
-        self._chat_split.addWidget(self.chat_display)
+        self._chat_split.addWidget(self._chat_views)
         if self.dashboard is not None:
             self._chat_split.addWidget(self.dashboard)
         self._chat_split.addWidget(self.machine_view)
@@ -7895,10 +7924,7 @@ enabled = true
         ctx = self._chat_ctxs.get(tab_id)
         if act is None or ctx is None:
             return None
-        html = (self.chat_display.toHtml()
-                if tab_id == self._active_tab_id
-                and getattr(self, "_chat_stack", None)
-                and self._chat_stack.currentIndex() == 0 else act.get("html", ""))
+        html = self._chat_view(tab_id).toHtml()
         sess = {
             "uuid": ctx.session_uuid,
             "title": name,
@@ -8388,11 +8414,7 @@ enabled = true
                 return
             ctx.session_uuid = sess.get("uuid") or uuid
             ctx.history = sess.get("history") or []
-            tab["html"] = sess.get("html", "") or ""
-            if self._active_tab_id == tab_id and getattr(self, "_chat_stack", None) \
-                    and self._chat_stack.currentIndex() == 0:
-                self.chat_display.setHtml(tab["html"])
-                self._chat_scroll_bottom(force=True)
+            self._chat_view(tab_id).load_html(sess.get("html", "") or "")
 
         self._bg(work, done)
 
@@ -8429,10 +8451,8 @@ enabled = true
                 if _cctx is not None and _ctab is not None:
                     _cctx.session_uuid = sess.get("uuid")
                     _cctx.history = sess.get("history") or []
-                    _ctab["html"] = sess.get("html", "") or ""
+                    self._chat_view(CRON_TAB_ID).load_html(sess.get("html", "") or "")
                     self._tu_restore(sess, CRON_TAB_ID)
-                    if self._active_tab_id == CRON_TAB_ID:
-                        self.chat_display.setHtml(_ctab["html"])
                     if not quiet:
                         self._switch_chat_tab(CRON_TAB_ID)
                         self.add_message(t("sess.restored",
@@ -8463,8 +8483,8 @@ enabled = true
             self._chat_ctxs[tid] = ctx
             self._tu_restore(sess, tid)
             self._chat_tabs.append({"id": tid, "kind": "local", "peer": None,
-                                    "title": title, "html": sess.get("html", "") or "",
-                                    "history_ref": True})
+                                    "title": title, "history_ref": True})
+            self._chat_view(tid).load_html(sess.get("html", "") or "")
             self._render_chat_tabs()
             try:
                 _b, _k, _m = self._chat_base_endpoint()
@@ -8543,9 +8563,8 @@ enabled = true
                 return
             ctx.session_uuid = uuid
             ctx.history = (sess.get("history") or []) + (ctx.history or [])
-            tab["html"] = (sess.get("html", "") or "") + (tab.get("html") or "")
-            if self._active_tab_id == CRON_TAB_ID:
-                self.chat_display.setHtml(tab["html"])
+            _view = self._chat_view(CRON_TAB_ID)
+            _view.load_html((sess.get("html", "") or "") + _view.toHtml())
 
         self._bg(work, done)
 
@@ -8690,7 +8709,7 @@ enabled = true
             pass
         self._chat_ctxs[tid] = ctx
         self._chat_tabs.append({"id": tid, "kind": "local", "peer": None,
-                                "title": title, "html": "", "history_ref": True})
+                                "title": title, "history_ref": True})
         self._render_chat_tabs()
         return tid
 
@@ -8704,7 +8723,7 @@ enabled = true
         title = title or t("chat.tab_local_n", n=n + 1)
         self._chat_ctxs[tid] = ChatCtx(tid, title)
         self._chat_tabs.append({"id": tid, "kind": "local", "peer": None,
-                                "title": title, "html": "", "history_ref": True})
+                                "title": title, "history_ref": True})
         self._render_chat_tabs()
         if switch:
             self._switch_chat_tab(tid)
@@ -8797,7 +8816,7 @@ enabled = true
         if self._tab_by_id(CRON_TAB_ID) is None:
             self._chat_tabs.append({
                 "id": CRON_TAB_ID, "kind": "cron", "peer": None,
-                "title": t("cron.tab_title"), "html": "", "history_ref": True})
+                "title": t("cron.tab_title"), "history_ref": True})
             self._render_chat_tabs()
             if not getattr(self, "_cron_rehydrated", False):
                 self._cron_rehydrated = True
@@ -8814,11 +8833,6 @@ enabled = true
             return
         if getattr(self, "machine_view", None) is not None:
             self.machine_view.set_machine(self._machine(tab_id))
-        cur = self._tab_by_id(self._active_tab_id)
-        if cur is not None:
-            cur["html"] = self.chat_display.toHtml()
-            cur["scroll"] = (None if getattr(self, "_chat_follow", True)
-                             else self.chat_display.verticalScrollBar().value())
         self._stash_draft(self._active_tab_id)
         if getattr(self, "code_editor", None) is not None:
             try:
@@ -8831,8 +8845,6 @@ enabled = true
             return
         self._active_tab_id = tab_id
         self._sticky_paint(tab_id)
-        self.chat_display.setHtml(tgt.get("html", ""))
-        self._chat_place_view(tgt.get("scroll"))
         _c = self._chat_ctxs.get(tab_id)
         if hasattr(self, "_code_project"):
             self._code_project = getattr(_c, "code_project", "") or ""
@@ -8842,19 +8854,50 @@ enabled = true
         self._restore_draft(tab_id)
         if self._canvas_sync():
             self._render_chat_tabs()
+        self._chat_split.refresh()
+        self._show_chat_view(tab_id)
 
-    def _chat_place_view(self, pos):
-        sb = self.chat_display.verticalScrollBar()
-        self._chat_land = None if pos is None else (int(pos), time.time() + 3.0)
+    def _new_chat_view(self):
+        v = ChatView()
+        v.setReadOnly(True)
+        v.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        v.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        v.setFont(QFont("Consolas" if IS_WINDOWS else "Monospace", 12))
+        v.setObjectName("chat_display")
+        self._zoom_targets.append((v, "", 0))
+        self._apply_zoom()
+        v.viewport().setMouseTracking(True)
+        v.viewport().installEventFilter(self)
+        return v
 
-        def _place():
-            if pos is None:
-                self._chat_follow = True
-                sb.setValue(sb.maximum())
-            else:
-                sb.setValue(min(int(pos), sb.maximum()))
-        _place()
-        QTimer.singleShot(0, _place)
+    def _chat_view(self, tab_id):
+        v = self._chat_view_by_tab.get(tab_id)
+        if v is None:
+            v = self._chat_view_by_tab[tab_id] = self._new_chat_view()
+            self._chat_views.addWidget(v)
+        return v
+
+    def _show_chat_view(self, tab_id):
+        v = self._chat_view(tab_id)
+        self.chat_display = v
+        self._chat_views.setCurrentWidget(v)
+        return v
+
+    def _drop_chat_view(self, tab_id):
+        v = self._chat_view_by_tab.pop(tab_id, None)
+        if v is None:
+            return
+        self._zoom_targets = [z for z in self._zoom_targets if z[0] is not v]
+        self._chat_views.removeWidget(v)
+        v.deleteLater()
+
+    @property
+    def _chat_follow(self):
+        return self.chat_display.follow
+
+    @_chat_follow.setter
+    def _chat_follow(self, value):
+        self.chat_display.follow = bool(value)
 
     def _stash_draft(self, tab_id):
         ctx = self._chat_ctxs.get(tab_id)
@@ -8945,10 +8988,9 @@ enabled = true
                 _old.stop_requested.set()
             self._chat_ctxs["local"] = ChatCtx("local", t("chat.tab_local"))
             tab["title"] = t("chat.tab_local")
-            tab["html"] = ""
+            self._chat_view("local").clear()
             self._canvas_drop("local")
             if self._active_tab_id == "local":
-                self.chat_display.clear()
                 self._canvas_sync()
                 if hasattr(self, "_code_project"):
                     self._code_close_project(silent=True)
@@ -8960,8 +9002,7 @@ enabled = true
             self._chat_tabs = [x for x in self._chat_tabs if x["id"] != tab_id]
             if self._active_tab_id == tab_id:
                 self._active_tab_id = "local"
-                loc = self._tab_by_id("local")
-                self.chat_display.setHtml(loc.get("html", "") if loc else "")
+                self._show_chat_view("local")
                 self._refresh_chat_meta()
                 self._canvas_sync()
             self._render_chat_tabs()
@@ -8989,10 +9030,10 @@ enabled = true
         self._canvas_drop(tab_id)
         if self._active_tab_id == tab_id:
             self._active_tab_id = "local"
-            loc = self._tab_by_id("local")
-            self.chat_display.setHtml(loc.get("html", "") if loc else "")
+            self._show_chat_view("local")
             self._refresh_chat_meta()
             self._canvas_sync()
+        self._drop_chat_view(tab_id)
         self._render_chat_tabs()
         self._set_enchanting(self._busy_now())
         self._update_queue_label()
@@ -9003,7 +9044,7 @@ enabled = true
         if self._tab_by_id(tid) is None:
             self._chat_tabs.append({
                 "id": tid, "kind": "green", "peer": peer,
-                "title": f"🟢 {peer}", "html": "", "history_ref": False})
+                "title": f"🟢 {peer}", "history_ref": False})
             self._render_chat_tabs()
         return tid
 
@@ -9012,50 +9053,19 @@ enabled = true
         if self._tab_by_id(tid) is None:
             self._chat_tabs.append({
                 "id": tid, "kind": "red", "peer": peer,
-                "title": f"🔴 {peer}", "html": "", "history_ref": False})
+                "title": f"🔴 {peer}", "history_ref": False})
             self._render_chat_tabs()
         return tid
 
-    def _chat_follow_update(self, value):
-        sb = self.chat_display.verticalScrollBar()
-        self._chat_follow = value >= sb.maximum() - max(24, sb.singleStep())
-
-    def _chat_range_changed(self, lo, hi):
-        sb = self.chat_display.verticalScrollBar()
-        if getattr(self, "_chat_follow", True):
-            if sb.value() != hi:
-                sb.setValue(hi)
-            return
-        land = getattr(self, "_chat_land", None)
-        if land and time.time() < land[1]:
-            sb.setValue(min(int(land[0]), hi))
-
     def _chat_scroll_bottom(self, force=False):
-        if force:
-            self._chat_follow = True
-        if not getattr(self, "_chat_follow", True):
-            return
-        sb = self.chat_display.verticalScrollBar()
-        sb.setValue(sb.maximum())
-        QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
+        self.chat_display.scroll_bottom(force)
 
     def _append_html_to_tab(self, tab_id, fragment):
-        tab = self._tab_by_id(tab_id)
-        if tab is None:
+        if self._tab_by_id(tab_id) is None:
             return
-        if tab_id == self._active_tab_id:
-            self.chat_display.append(fragment)
-            self._reset_block_format()
-            self._chat_scroll_bottom()
-            return
-        fragment = ('<p style="margin-top:0px; margin-bottom:0px;">'
-                    + fragment + '</p>')
-        doc = tab.get("html", "")
-        if "</body>" in doc:
-            doc = doc.replace("</body>", fragment + "</body>", 1)
-        else:
-            doc = doc + fragment
-        tab["html"] = doc
+        view = self._chat_view(tab_id)
+        view.append_block(fragment)
+        view.scroll_bottom()
 
     def _chat_frag(self, text, color, label, rich=False):
         import html as _html
@@ -13798,9 +13808,9 @@ enabled = true
                 f'text-decoration:none;">{_h.escape(self._tu_summary(rec))}'
                 f'&nbsp;&nbsp;·&nbsp;&nbsp;{_h.escape(t(key))}</a>')
 
-    def _tu_anchor_span(self, href):
+    def _tu_anchor_span(self, href, view=None):
         start = end = None
-        blk = self.chat_display.document().begin()
+        blk = (view or self.chat_display).document().begin()
         while blk.isValid():
             it = blk.begin()
             s0 = e0 = None
@@ -13834,15 +13844,15 @@ enabled = true
                 sb.setValue(sb.maximum() if at_bottom else keep)
                 return
         else:
-            tab = self._tab_by_id(tab_id)
-            if tab is not None:
-                for verb in ("tu-hide", "tu"):
-                    pat = re.compile(rf'<a href="hoplita:{verb}:{rid}"[^>]*>.*?</a>', re.S)
-                    if pat.search(tab.get("html", "")):
-                        tab["html"] = pat.sub(
-                            lambda m, v=verb: self._tu_link_html(rid, hide=(v == "tu-hide")),
-                            tab.get("html", ""), count=1)
-                        return
+            view = self._chat_view(tab_id)
+            for verb in ("tu-hide", "tu"):
+                span = self._tu_anchor_span(f"hoplita:{verb}:{rid}", view)
+                if span is not None:
+                    cur = QTextCursor(view.document())
+                    cur.setPosition(span[0])
+                    cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
+                    cur.insertHtml(self._tu_link_html(rid, hide=(verb == "tu-hide")))
+                    return
         ts = datetime.now().strftime("%H:%M:%S")
         self._append_html_to_tab(tab_id, (
             f'<span style="color:#64748b">[{ts}]</span> '
@@ -14350,7 +14360,7 @@ enabled = true
         target = tab_id or self._active_tab_id
         if target == CRON_TAB_ID and self._tab_by_id(CRON_TAB_ID) is None:
             self._ensure_cron_tab()
-        if self._active_stream_live and target == self._active_tab_id:
+        if self._active_stream_live and target == self._stream_live_tab:
             self._deferred_messages.append((message, sender))
             return
         self._paint_message(message, sender, tab_id)
@@ -14409,17 +14419,6 @@ enabled = true
                 f'{body}{rate}<br>')
         self._append_html_to_tab(tab_id or self._active_tab_id, html)
 
-    def _reset_block_format(self):
-        from PyQt6.QtGui import QTextBlockFormat, QTextCharFormat
-        cursor = self.chat_display.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        cursor.setBlockFormat(QTextBlockFormat())
-        cursor.setCharFormat(QTextCharFormat())
-        sb = self.chat_display.verticalScrollBar()
-        keep = None if getattr(self, "_chat_follow", True) else sb.value()
-        self.chat_display.setTextCursor(cursor)
-        if keep is not None:
-            sb.setValue(keep)
 
     def update_rag_status(self):
         stats = self.rag_manager.get_stats()
@@ -20196,11 +20195,7 @@ enabled = true
                 return
         ctx.history = []
         ctx.turn_steps = []
-        tab = self._tab_by_id(CRON_TAB_ID)
-        if tab is not None:
-            tab["html"] = ""
-        if self._active_tab_id == CRON_TAB_ID:
-            self.chat_display.clear()
+        self._chat_view(CRON_TAB_ID).clear()
         if getattr(ctx, "session_uuid", None):
             self._persist_tab(CRON_TAB_ID, ctx.title, quiet=True)
         self.add_message(t("cron.purge_done"), "system")
