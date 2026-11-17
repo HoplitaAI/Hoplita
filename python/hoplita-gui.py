@@ -72,7 +72,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QScrollArea, QCalendarWidget,
     QSystemTrayIcon, QMenu, QInputDialog,
     QGroupBox, QFormLayout, QCheckBox, QTreeWidget, QTreeWidgetItem,
-    QStackedWidget, QTabBar
+    QStackedWidget, QTabBar, QStyle, QStyleOptionButton
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QObject, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QSettings
@@ -531,6 +531,31 @@ class ChatView(QTextEdit):
         from PyQt6.QtCore import QSize
         from PyQt6.QtGui import QResizeEvent
         super().resizeEvent(QResizeEvent(self.size(), QSize(-1, self.height())))
+
+
+class TabTitleButton(QPushButton):
+
+    def __init__(self, text, mark_w=0.0):
+        super().__init__(text)
+        self.spin = False
+        self.spin_colour = "#38bdf8"
+        self._mark_w = float(mark_w)
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        if not self.spin:
+            return
+        from tabs_overview import draw_arc
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        cr = self.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, opt, self)
+        tw = self.fontMetrics().horizontalAdvance(self.text())
+        x0 = cr.x() + max(0.0, (cr.width() - tw) / 2.0)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        draw_arc(p, x0 + self._mark_w / 2.0, cr.y() + cr.height() / 2.0, 4.6,
+                 self.spin_colour, time.monotonic())
+        p.end()
 
 
 class CurtainGrip(QWidget):
@@ -6374,9 +6399,7 @@ enabled = true
             except RuntimeError:
                 pass
 
-    _SPIN = "◐◓◑◒"
-    _WORK_TICK_MS = 150
-    _WORK_BREATH_S = 1.6
+    _WORK_TICK_MS = 33
 
     def _tab_working(self, tab_id):
         c = self._chat_ctxs.get(tab_id)
@@ -6403,16 +6426,9 @@ enabled = true
             tmr.stop()
 
     def _work_pulse_tick(self):
-        import math
-        self._spin_i = (getattr(self, "_spin_i", 0) + 1) % len(self._SPIN)
-        glyph = self._SPIN[self._spin_i] + " "
-        w = 0.5 - 0.5 * math.cos(2 * math.pi * time.time() / self._WORK_BREATH_S)
-        for frame, btn, col, act, rest in list(getattr(self, "_work_tabs", []) or []):
+        for btn in list(getattr(self, "_work_tabs", []) or []):
             try:
-                if rest is not None:
-                    QPushButton.setText(btn, glyph + rest)
-                a = (0.12 + 0.20 * w) if act else (0.04 + 0.20 * w)
-                frame.setStyleSheet(self._chat_tab_css(col, act, self._hex_rgba(col, round(a, 3))))
+                btn.update()
             except RuntimeError:
                 pass
 
@@ -6520,13 +6536,16 @@ enabled = true
             _fl = QHBoxLayout(frame)
             _fl.setContentsMargins(0, 0, 4, 0)
             _fl.setSpacing(0)
-            _spin = self._SPIN[getattr(self, "_spin_i", 0) % len(self._SPIN)] + " "
+            _mark_w = _fm.horizontalAdvance("◐")
+            _blank = " " * max(2, round(_fm.horizontalAdvance("◐ ") / max(1.0, _fm.horizontalAdvance(" "))))
             _eye = "👁 " if getattr(self._chat_ctxs.get(tab["id"]), "bg_live", 0) else ""
-            _pre = "⏸ " if waiting else _spin if working else _eye
+            _pre = "⏸ " if waiting else _blank if working else _eye
             _room = int(_title_w) - _fm.horizontalAdvance(_pre + _mark)
             _shown_label = _pre + _fm.elidedText(
                 tab["title"], Qt.TextElideMode.ElideRight, max(24, _room)) + _mark
-            btn = QPushButton(_shown_label)
+            btn = TabTitleButton(_shown_label, _mark_w)
+            btn.spin = bool(working)
+            btn.spin_colour = col
             btn.setObjectName("tabTitle")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             _tips = [tab["title"]]
@@ -6552,9 +6571,7 @@ enabled = true
             btn.setToolTip("\n".join(_tips))
             frame.setStyleSheet(self._chat_tab_css(col, active))
             if working:
-                _work_tabs.append((frame, btn, col, active,
-                                   _shown_label[len(_spin):]
-                                   if _shown_label.startswith(_spin) else None))
+                _work_tabs.append(btn)
             elif _pin:
                 frame.setProperty("_pin_col", col)
                 frame.setProperty("_pin_active", active)

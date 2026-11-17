@@ -58,7 +58,7 @@ def _tint(colour, alpha):
     return c
 
 
-def _draw_arc(p, cx, cy, r, colour, now, width=1.6):
+def draw_arc(p, cx, cy, r, colour, now, width=1.6):
     rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
     p.setPen(QPen(_tint(colour, 0.22), width))
     p.setBrush(Qt.BrushStyle.NoBrush)
@@ -92,7 +92,7 @@ class _Spin(QWidget):
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        _draw_arc(p, 8, 8, 5.0, self._colour, self._now, 1.8)
+        draw_arc(p, 8, 8, 5.0, self._colour, self._now, 1.8)
         p.end()
 
 
@@ -236,7 +236,7 @@ class _Tree(QWidget):
                 x += fm.horizontalAdvance(prefix)
             gx = x
             if r["spin"]:
-                _draw_arc(p, gx + self._cell / 2.0, y + lh / 2.0, 4.6, colour, now)
+                draw_arc(p, gx + self._cell / 2.0, y + lh / 2.0, 4.6, colour, now)
             else:
                 glyph = str(r.get("glyph") or "")
                 if glyph:

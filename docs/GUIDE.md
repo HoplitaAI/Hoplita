@@ -903,9 +903,10 @@ Jobs run while HOPLITA's window is open: the scheduler lives in it.
 
 ## Tabs that show they are working, and ▦ the overview
 
-A tab with a turn running wears a turning ◐ before its title and its
-background breathes, so a tab you are not looking at still tells you it is
-busy; ⏸ in amber is a tab waiting for your OK.
+A tab with a turn running wears a small arc turning before its title, the
+same mark the overview page draws, so a tab you are not looking at still
+tells you it is busy; nothing else of the tab moves for it. ⏸ in amber is a
+tab waiting for your OK.
 
 **▦** at the right of the strip (it reads `▦ 2/5` when two of five tabs are
 working) opens every tab on one page: down the left, one row per tab with
