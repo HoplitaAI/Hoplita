@@ -641,9 +641,9 @@ parts, and each one does one thing:
 |---|---|---|---|
 | `rules` | your standing orders for this project | you (the agent only reads them) | Notes, the project's folder |
 | `spec` | what the project IS and how it must behave, in short annotations | the agent (`project_write note=spec`) and you | Notes |
-| `future` | what is pending and not being done now — a plan lives here | the agent and you | Notes |
+| `future` | what is pending and not being done now — a plan lives here; a finished line is closed and leaves for the journal, never left as done | the agent and you | Notes |
 | board | at most **seven** open tasks: only what is being done now and you asked for or approved | the agent and you | CODE tab; the 🧩/🕸/🕒 pages of the TODO tab |
-| `journal` | what happened, dated — decisions, traps, what changed, and every finished whiteboard | the agent; a whiteboard writes its own line | Notes; its tail rides every code turn |
+| `journal` | what happened, dated — decisions, traps, what changed, every closed `future` line and every finished whiteboard; never rewritten | the agent; a whiteboard writes its own line | Notes; its tail rides every code turn |
 | whiteboard | **seeing and weighing a change**: what, why, the design as one diagram, the old and new call path, each claim anchored to the code at pinned commits | the agent (`wb_*`), or one in the background from the page | CODE → 🧭; «Whiteboard of these changes» in CODE |
 | scratchpad | sketching how existing code works, when there is no change | the agent | CODE → 🧭 |
 | canvas | free visuals that are not about code: charts, pictures, pages | the agent | the tab's canvas panel (▣) |
@@ -800,8 +800,12 @@ recreated it) it tells you instead of showing you something else.
 
 **The model knows its hooks.** The code-mode block tells it the contract: what
 is being done now → the board (`add_task`, moved with
-`update_task_progress`); a settled truth → `spec`; what is pending → `future`;
-what happened → `journal`. And the twin task project carries a 💻 badge so you
+`update_task_progress`); a settled truth → `spec`; what is pending → `future`,
+and a line of it finished → closed (`project_write note=future done=true`), which
+moves it to the `journal`; what happened → `journal`. A turn that lands code
+with nothing open on the board and nothing written is asked once whether it
+holds a decision, a trap or a changed truth for the journal, or was a routine
+edit; what a turn did has that door, so it never lands in `future` as done. And the twin task project carries a 💻 badge so you
 can tell which one belongs to the repo.
 
 ### The VERIFY page — a command, what you expect to see, one button

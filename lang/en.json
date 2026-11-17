@@ -512,7 +512,7 @@
   "code.memory_menu": "Project memory (Notes)",
   "code.memory_started": "📓 Folder \"{name}\" created in Notes with \"rules\" and \"project\" — write in \"rules\" the orders the agent must obey ALWAYS in this project. Share or publish it like any folder; the other door is the chat: tell it and IT writes (specs, changes, journal).",
   "code.memory_tpl_spec": "THE CURRENT TRUTH of this project, in short lines: what it is, how it builds, how it is tested, how it must behave. Read at the start of every turn with the project open — keep it true and SHORT; when a change alters a truth, fix the line.\n\n- What it is: \n- Build: \n- Test: \n- Status: \n",
-  "code.memory_tpl_future": "WHAT IS PENDING in this project — one line per item, not on the board (the board is only for what is being done now). Take from here when you start something; strike out what is done or no longer wanted.\n\n- \n",
+  "code.memory_tpl_future": "WHAT IS PENDING in this project — one line per item, not on the board (the board is only for what is being done now). Take from here when you start something; what is finished is closed and leaves here for the journal. Nothing done is written here.\n\n- \n",
   "code.memory_tpl_rules": "STANDING ORDERS for the agent in THIS project. They ride whole on every turn and are obeyed without reminders. Few, imperative, one per line — what you write here is local law.\n\n- \n\n(Style examples: «run make test before calling anything done» · «never touch vendor/» · «commit messages in the project's language».)",
   "code.mine_none_but": "HOPLITA has touched nothing here, but {n} file(s) were changed by you.",
   "code.n_changed": "{n} file(s) changed.",
@@ -1216,7 +1216,7 @@
   "inject.lessons_truncated": "  • …and {n} more lower-confidence lesson(s) — search_lessons reaches them.",
   "inject.metacog_list": "Your intent list right now:\n{list}",
   "inject.metacog_nudge": "[PAUSE — think before acting] Is the current path producing new data? If not, take a different one (another source, angle or tool) and update your intent list with intent(). If the goal is met or out of reach, say so.",
-  "inject.plan_gate": "[HOPLITA] This reads like a plan and nothing of it was written to the project's memory. If it IS a plan: project_write('{cat}', note='future', text=<one line per pending item>) — and at most a couple of add_task for what starts NOW — then answer with a short summary saying so. If it is NOT a plan, reply exactly: {token}",
+  "inject.plan_gate": "[HOPLITA] This reads like a plan and nothing of it was written to the project's memory. If it IS a plan — things NOT done yet: project_write('{cat}', note='future', text=<one line per pending item>), and at most a couple of add_task for what starts NOW — then answer with a short summary saying so. Only what is still pending goes to 'future': what you DID or READ this turn is not a plan, and if the list is that, reply exactly: {token}",
   "inject.progress_gate": "[HOPLITA] This turn changed code in '{cat}' and none of its open tasks moved. For each task below that is DONE: update_task_progress('<title>', 100). If none landed, reply exactly: {token}\nOpen tasks:\n{tasks}",
   "inject.order": "🧭 ORDER OF WORK, ALWAYS THE SAME:\n  1. DO I ALREADY HAVE THIS? Look at what is in front of you: the user's facts and the skills index. Do not search to find out whether something is saved — you can see it.\n  2. IS THERE A SKILL THAT COVERS IT? Pull it with use_skill and FOLLOW IT. It exists because the generic answer was not good enough; a saved skill beats any search.\n  3. ONLY THEN, tools or the web, carrying what you learned in 1 and 2 into the request.\nGoing to the internet with the answer already at home is the most expensive mistake you can make here.",
   "inject.rules_header": "[RULES THE USER GAVE YOU. They dictated them while correcting you. These are not suggestions: follow them. If you believe one does not apply to this case, say so out loud instead of quietly skipping it.]",
@@ -2423,5 +2423,6 @@
   "vault.err_local_only": "The password is changed from this machine only.",
   "vault.err_failed": "The password could not be changed: {message}",
   "vault.err_unreachable": "The HOPLITA server does not answer at {url}. Start it and try again.",
-  "vault.cli_intro": "Changes the vault password of the HOPLITA server running at {url}."
+  "vault.cli_intro": "Changes the vault password of the HOPLITA server running at {url}.",
+  "inject.journal_gate": "[HOPLITA] This turn changed code in '{cat}' and wrote nothing to its memory. If something in it must outlive this session — a decision taken, a trap found, a truth that changed — write it: project_journal('{cat}', entry=<what happened and why>); a truth that changed also fixes its line in 'spec' (project_write note='spec'); a line of 'future' you finished is closed with project_write('{cat}', note='future', text=<its line>, done=true). A routine edit is none of that: then reply exactly: {token}"
 }

@@ -512,7 +512,7 @@
   "code.memory_menu": "Memoria del proyecto (Notas)",
   "code.memory_started": "📓 Carpeta «{name}» creada en Notas con «rules» y «project» — escribe en «rules» las órdenes que el agente debe obedecer SIEMPRE en este proyecto. Compártela o publícala como cualquier carpeta; la otra puerta es el chat: díselo y escribe él (specs, cambios, journal).",
   "code.memory_tpl_spec": "LA VERDAD ACTUAL de este proyecto, en líneas cortas: qué es, cómo se construye, cómo se prueba, cómo debe comportarse. Se lee al inicio de cada turno con el proyecto abierto — mantenla cierta y CORTA; cuando un cambio altere una verdad, corrige la línea.\n\n- Qué es: \n- Build: \n- Test: \n- Estado: \n",
-  "code.memory_tpl_future": "LO PENDIENTE de este proyecto — una línea por punto, fuera del tablero (el tablero es solo para lo que se está haciendo ahora). Toma de aquí cuando empieces algo; tacha lo hecho o lo que ya no se quiere.\n\n- \n",
+  "code.memory_tpl_future": "LO PENDIENTE de este proyecto — una línea por punto, fuera del tablero (el tablero es solo para lo que se está haciendo ahora). Toma de aquí cuando empieces algo; lo terminado se cierra y pasa de aquí al journal. Aquí no se escribe nada hecho.\n\n- \n",
   "code.memory_tpl_rules": "ÓRDENES PERMANENTES para el agente en ESTE proyecto. Viajan enteras en cada turno y se obedecen sin recordatorio. Pocas, imperativas, una por línea — lo que escribas aquí es ley local.\n\n- \n\n(Ejemplos del estilo: «los tests se corren con make test antes de dar nada por hecho» · «ni tocar la carpeta vendor/» · «los commits en el idioma del proyecto».)",
   "code.mine_none_but": "HOPLITA no ha tocado nada aquí, pero hay {n} fichero(s) cambiado(s) por ti.",
   "code.n_changed": "{n} fichero(s) con cambios.",
@@ -1216,7 +1216,7 @@
   "inject.lessons_truncated": "  • …y {n} lección(es) más de menor confianza — search_lessons las alcanza.",
   "inject.metacog_list": "Tu lista de intención ahora:\n{list}",
   "inject.metacog_nudge": "[PARA — piensa antes de seguir] ¿La vía actual está dando datos nuevos? Si no, toma otra (otra fuente, otro ángulo, otra herramienta) y actualiza tu lista con intent(). Si el objetivo está cumplido o fuera de alcance, dilo.",
-  "inject.plan_gate": "[HOPLITA] Esto tiene forma de plan y nada suyo quedó en la memoria del proyecto. Si ES un plan: project_write('{cat}', note='future', text=<una línea por punto pendiente>) — y como mucho un par de add_task para lo que empieza AHORA — y responde con un resumen corto diciéndolo. Si NO es un plan, responde exactamente: {token}",
+  "inject.plan_gate": "[HOPLITA] Esto tiene forma de plan y nada suyo quedó en la memoria del proyecto. Si ES un plan — cosas AÚN NO hechas: project_write('{cat}', note='future', text=<una línea por punto pendiente>), y como mucho un par de add_task para lo que empieza AHORA — y responde con un resumen corto diciéndolo. A 'future' va solo lo que sigue pendiente: lo que HICISTE o LEÍSTE en este turno no es un plan, y si la lista es eso, responde exactamente: {token}",
   "inject.progress_gate": "[HOPLITA] Este turno cambió código en '{cat}' y ninguna de sus tareas abiertas se movió. Por cada tarea de abajo que esté HECHA: update_task_progress('<título>', 100). Si ninguna quedó hecha, responde exactamente: {token}\nTareas abiertas:\n{tasks}",
   "inject.order": "🧭 ORDEN DE TRABAJO, SIEMPRE EL MISMO:\n  1. ¿ESTO YA LO TENGO? Mira lo que llevas delante: los hechos del usuario y el índice de skills. No busques para saber si algo está guardado — lo estás viendo.\n  2. ¿HAY UNA SKILL QUE LO CUBRA? Tráela con use_skill y SÍGUELA. Existe porque la respuesta genérica no valía; una skill guardada gana a cualquier búsqueda.\n  3. SOLO ENTONCES, herramientas o web, y con lo aprendido en 1 y 2 dentro de la petición.\nSalir a internet teniendo la respuesta en casa es el error más caro que puedes cometer aquí.",
   "inject.rules_header": "[REGLAS QUE TE DIO EL USUARIO. Te las dictó él, corrigiéndote. No son sugerencias: cúmplelas. Si crees que alguna no aplica a este caso, dilo en voz alta en vez de saltártela en silencio.]",
@@ -2423,5 +2423,6 @@
   "vault.err_local_only": "La contraseña solo se cambia desde la propia máquina.",
   "vault.err_failed": "No se pudo cambiar la contraseña: {message}",
   "vault.err_unreachable": "El servidor de HOPLITA no responde en {url}. Arráncalo y vuelve a intentarlo.",
-  "vault.cli_intro": "Cambia la contraseña de la bóveda del servidor de HOPLITA que corre en {url}."
+  "vault.cli_intro": "Cambia la contraseña de la bóveda del servidor de HOPLITA que corre en {url}.",
+  "inject.journal_gate": "[HOPLITA] Este turno cambió código en '{cat}' y no escribió nada en su memoria. Si algo de él debe sobrevivir a esta sesión — una decisión tomada, una trampa encontrada, una verdad que cambió — escríbelo: project_journal('{cat}', entry=<qué pasó y por qué>); una verdad que cambió corrige además su línea en 'spec' (project_write note='spec'); una línea de 'future' que terminaste se cierra con project_write('{cat}', note='future', text=<su línea>, done=true). Un retoque rutinario no es nada de eso: entonces responde exactamente: {token}"
 }

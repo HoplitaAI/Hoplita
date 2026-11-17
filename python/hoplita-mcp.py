@@ -5564,6 +5564,10 @@ def tool_add_note(category, title, content, _system=False):
     _wrong = _project_title_refusal(category, title, _system)
     if _wrong:
         return {"added": False, **_wrong}
+    if not _system:
+        _routed = _project_title_route(category, title, content)
+        if _routed is not None:
+            return _routed
     if category not in notes_mgr.get_categories():
         notes_mgr.add_category(category)
     n = notes_mgr.add_note(category, title, content)
@@ -8431,6 +8435,8 @@ _SPEC_ENTRY_CAP = 600
 _SPEC_CAP = 12000
 _FUTURE_CAP = 8000
 _OPEN_TASKS_CAP = 7
+_FUTURE_ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s*\S")
+_FUTURE_MARK = re.compile(r"^\s*(?:[-*]|\d+[.)])\s*")
 
 
 def _project_title_refusal(category, title, system=False):
@@ -8445,6 +8451,28 @@ def _project_title_refusal(category, title, system=False):
                        f"'skill: …' notes). A settled truth → project_write(note="
                        f"'spec'); something pending → project_write(note='future'); "
                        f"what happened → project_journal. Nothing else is created."}
+
+
+def _project_title_route(category, title, content):
+    if not category or not _is_project_folder(category):
+        return None
+    t_ = (title or "").strip().lower()
+    if t_ not in PROJECT_NOTES:
+        return None
+    if t_ == "rules":
+        return {"added": False, "error": "project_notes",
+                "message": "'rules' are the person's standing orders: read "
+                           "them, never write them."}
+    if t_ == "journal":
+        r = tool_project_journal(category, content)
+    else:
+        r = tool_project_write(category, t_, content)
+    if r.get("error"):
+        return {"added": False, **r}
+    out = {k: v for k, v in r.items() if k != "ok"}
+    out.update({"added": True, "title": t_,
+                "routed": "project_journal" if t_ == "journal" else "project_write"})
+    return out
 
 
 def _project_note(cat, title):
@@ -8519,7 +8547,32 @@ def _board_fold(cat):
     return len(excess)
 
 
-def tool_project_write(path, note, text, replace=False):
+def _future_close(cat, path, text):
+    cur = _project_note(cat, "future")
+    lines = ((cur.get("content") or "") if cur else "").splitlines()
+    needle = _FUTURE_MARK.sub("", (text or "").strip()).strip().lower()
+    items = {i: _FUTURE_MARK.sub("", l).strip() for i, l in enumerate(lines)
+             if _FUTURE_ITEM.match(l)}
+    hits = [i for i, it in items.items() if needle and needle in it.lower()]
+    exact = [i for i in hits if items[i].lower() == needle]
+    if len(hits) > 1 and len(exact) == 1:
+        hits = exact
+    if len(hits) != 1:
+        why = ("no pending line of 'future' says that" if not hits
+               else f"{len(hits)} pending lines say that: name one whole")
+        return {"error": f"{why}.", "pending": list(items.values())[:40]}
+    item = items[hits[0]]
+    del lines[hits[0]]
+    body = "\n".join(lines).rstrip() + "\n"
+    notes_mgr.update_note(cat, cur["id"], content=body)
+    fed_tools.after_local_mutation("notes", "update_note", (cat,), {}, None)
+    jr = tool_project_journal(path, f"Done: {item}")
+    left = sum(1 for l in lines if _FUTURE_ITEM.match(l))
+    return {"ok": True, "closed": item, "pending": left,
+            "journal": "a dated line says it is done" if jr.get("ok") else jr}
+
+
+def tool_project_write(path, note, text, replace=False, done=False):
     cat = _project_resolve(path)
     if not cat:
         return {"error": f"'{path}' is neither an open project directory "
@@ -8531,7 +8584,16 @@ def tool_project_write(path, note, text, replace=False):
     text = (text or "").strip()
     if not text:
         return {"error": "project_write needs the text."}
-    if note == "journal" and not replace:
+    if done:
+        if note != "future":
+            return {"error": "done=true closes a pending line of 'future'; "
+                             "nothing else is closed."}
+        return _future_close(cat, path, text)
+    if note == "journal":
+        if replace:
+            return {"error": "the journal is never rewritten: project_journal "
+                             "adds a dated entry, and the person edits it in "
+                             "Notes."}
         return tool_project_journal(path, text)
     if note == "spec" and not replace and len(text) > _SPEC_ENTRY_CAP:
         return {"error": f"a spec annotation is a line or a short paragraph "
@@ -8543,7 +8605,13 @@ def tool_project_write(path, note, text, replace=False):
     if replace:
         body = text + "\n"
     else:
-        bullet = text if text.startswith(("-", "*", "#")) else f"- {text}"
+        if note == "future":
+            bullet = "\n".join(
+                l.rstrip() if (_FUTURE_ITEM.match(l) or l.lstrip().startswith("#"))
+                else f"- {l.strip()}"
+                for l in text.splitlines() if l.strip())
+        else:
+            bullet = text if text.startswith(("-", "*", "#")) else f"- {text}"
         body = (prev + "\n" if prev else "") + bullet + "\n"
     cap = _SPEC_CAP if note == "spec" else _FUTURE_CAP
     if replace and len(body) > cap:
@@ -8590,7 +8658,7 @@ def tool_project_journal(path, entry, title=""):
         if not r.get("updated"):
             return {"error": "could not update the journal note"}
     else:
-        tool_add_note(cat, "journal", text)
+        tool_add_note(cat, "journal", text, _system=True)
     return {"ok": True, "category": cat,
             "entries": len(re.findall(r"^## ", text, re.M))}
 
@@ -10704,10 +10772,10 @@ def register_tools():
         "git_commit":             {"desc": "Record a commit. By default it commits ONLY the files you edited this session, not everything dirty in the tree — the user's work-in-progress is not yours to sign. NEVER pushes. Refuses to commit on main/master unless the user explicitly asked (allow_main), because the trunk is the user's decision, not the loop's.",
                                    "fn": lambda a: tool_git_commit(a.get("path"), a.get("message", ""),
                                                                    a.get("files"), a.get("allow_main", False))},
-        "project_journal":        {"desc": "Append a dated entry to the open project's journal — a note in the project's own folder, which holds its memory in four notes ('rules', 'spec', 'future', 'journal', plus the project's 'skill: …' notes) read at the start of the conversation, and again whenever one of them changes. Write down decisions taken, traps found and how things really build, and the next session starts knowing it — on every machine and every face, because it is a notes folder like any other.",
+        "project_journal":        {"desc": "Append a dated entry to the open project's journal: what HAPPENED (a decision, a trap, what changed and why). One of the four notes of the project's memory, read at the start of the conversation and when it changes; never rewritten, so the next session starts knowing it.",
                                    "fn": lambda a: tool_project_journal(a["path"], a["entry"], a.get("title", ""))},
-        "project_write":          {"desc": "Write one of the open project's notes: 'spec' (a settled truth, SHORT — one annotation, one breath), 'future' (something pending, one line per item) or 'journal' (what happened, dated). Appends; replace=true rewrites the note whole, which is how a grown spec is kept short. These three plus the user's 'rules' are the project's whole memory: add_note refuses any other title in a project folder.",
-                                   "fn": lambda a: tool_project_write(a.get("path", ""), a.get("note", ""), a.get("text", ""), bool(a.get("replace", False)))},
+        "project_write":          {"desc": "Write one of the open project's notes: 'spec' (a settled truth), 'future' (what is still PENDING, one line per item, never what was done) or 'journal' (a dated entry, never rewritten). replace=true rewrites 'spec' or 'future' whole. done=true with note='future' closes the pending line that says `text`: it moves to the journal, dated. add_note with one of these titles goes the same way; any other title in a project folder is refused.",
+                                   "fn": lambda a: tool_project_write(a.get("path", ""), a.get("note", ""), a.get("text", ""), bool(a.get("replace", False)), bool(a.get("done", False)))},
         "search_working_memory":  {"desc": "Search INSIDE the full texts of the large results digested in this conversation (its working memory): the digest you got is an extract, the original is here whole. Words, a name, a figure — whatever you think of — and it returns the passages that mention it with the paragraphs around them and their lines; regex=true is grep. Use it before re-calling a tool for something an earlier result may already hold.",
                                    "fn": lambda a: tool_search_working_memory(a.get("query", ""), a.get("title", ""), bool(a.get("regex")), a.get("context", 1), a.get("k", 5))},
         "search_conversation":    {"desc": "Search what was said in the conversation your task comes from, when you are a sub-agent of a plan: your brief is a summary, this is the original. Words, a name, a figure, a condition — it returns the passages of the conversation that mention them, with the paragraphs around them; regex=true is grep. Search before assuming what the person meant; where the brief and the conversation disagree, the conversation wins. From the turn itself there is nothing behind to search.",
@@ -11224,7 +11292,7 @@ def register_tool_params():
                                                   "entry": {"type": "string", "description": "What to record: a decision, a trap, state worth keeping across sessions."},
                                                   "title": {"type": "string", "description": "Short header for the entry; default is its first line."}},
                                    "required": ["path", "entry"]},
-        "project_write":          {"properties": {"path": {"type": "string", "description": "The open project's directory (or its folder name)."}, "note": {"type": "string", "enum": ["spec", "future", "journal"]}, "text": {"type": "string", "description": "spec: one short truth (≤600 chars). future: one line per pending item. journal: the entry."}, "replace": {"type": "boolean", "description": "Rewrite the whole note instead of appending (default false)."}}, "required": ["path", "note", "text"]},
+        "project_write":          {"properties": {"path": {"type": "string", "description": "The open project's directory (or its folder name)."}, "note": {"type": "string", "enum": ["spec", "future", "journal"]}, "text": {"type": "string", "description": "spec: one short truth (≤600 chars). future: one pending line per item (done=true: the line to close). journal: the entry."}, "replace": {"type": "boolean", "description": "Rewrite 'spec' or 'future' whole (default false)."}, "done": {"type": "boolean", "description": "note='future' only: close the pending line that says `text`."}}, "required": ["path", "note", "text"]},
         "search_working_memory":  {"properties": {"query": {"type": "string", "description": "Words to look for (ranked by how many of the rarer ones a passage covers), or a pattern with regex=true."}, "title": {"type": "string", "description": "One stored text (its title, or part of it); empty searches all of this conversation's."}, "regex": {"type": "boolean"}, "context": {"type": "integer", "description": "Paragraphs before and after each hit (0-5, default 1)."}, "k": {"type": "integer", "description": "How many passages (default 5)."}}, "required": ["query"]},
         "search_conversation":    {"properties": {"query": {"type": "string", "description": "Words to look for (ranked by how many of the rarer ones a passage covers), or a pattern with regex=true."}, "regex": {"type": "boolean"}, "context": {"type": "integer", "description": "Paragraphs before and after each hit (0-5, default 1)."}, "k": {"type": "integer", "description": "How many passages (default 5)."}}, "required": ["query"]},
         "read_note":              {"properties": {"category": {"type": "string", "description": "The notes folder."},
@@ -13925,7 +13993,8 @@ def _plan_gate_for(cat):
         if names & _CODE_EDIT_TOOLS:
             rows = _project_open_task_rows(cat, cap=8)
             if not rows:
-                return None
+                return _tr("inject.journal_gate", cat=cat,
+                           token=_fa.JOURNAL_GATE_KEEP)
             return _tr("inject.progress_gate", cat=cat,
                        token=_fa.PROGRESS_GATE_KEEP, tasks="\n".join(rows))
         if names & _CODE_WRITE_TOOLS:
@@ -14036,10 +14105,13 @@ def _project_memory_block(root):
         stats["pending"] = len(re.findall(r"^\s*(?:[-*]|\d+[.)]|##)\s*\S", fut, re.M))
         if len(fut) > _FUTURE_CAP:
             fut = fut[:_FUTURE_CAP] + "\n…(truncated — read_note for the rest)"
-        parts.append("── 'future' — what is PENDING (not on the board: the board "
-                     "is only for what you are doing now). Take from here when "
-                     "you start something; strike out what is done or moot ──\n"
-                     + fut)
+        parts.append("── 'future' — what is PENDING and not being done now, one "
+                     "line each (not on the board: the board is only for what you "
+                     "are doing now). Take from here when you start something; "
+                     "when a line is finished, close it: project_write(note="
+                     "'future', text=<its line>, done=true) takes it out of here "
+                     "and into the journal, dated. Nothing done is ever written "
+                     "here ──\n" + fut)
         stats["sections"]["future"] = parts[-1]
     jr = _one("journal")
     if jr:
@@ -14048,7 +14120,9 @@ def _project_memory_block(root):
             j = cut.find("\n## ")
             jr = ("…(older entries trimmed — read_note for the past)\n"
                   + (cut[j + 1:] if j >= 0 else cut))
-        parts.append("── 'journal' (latest at the end) ──\n" + jr)
+        parts.append("── 'journal' — what HAPPENED, dated, latest at the end; "
+                     "project_journal adds an entry, nothing here is rewritten ──\n"
+                     + jr)
         stats["sections"]["journal"] = parts[-1]
     mine, room = [], _USER_NOTES_CAP
     for n_ in notes:
@@ -14080,8 +14154,9 @@ def _project_memory_block(root):
         f"[PROJECT MEMORY] Folder '{cat}' is this project's memory across "
         "sessions and faces (a shared folder shares it). You write FOUR notes "
         "and nothing else: rules (the user's, read only), spec (settled truths, "
-        "short lines — project_write note='spec'), future (what is pending — "
-        "project_write note='future'), journal (what happened — "
+        "short lines — project_write note='spec'), future (what is still "
+        "PENDING — project_write note='future'; a line you finished is closed "
+        "with done=true, never left there as done), journal (what HAPPENED — "
         "project_journal). Any other note there is the user's own. The board "
         "holds only what is being done NOW.")
     return head + "\n\n" + "\n\n".join(parts), stats
@@ -14139,9 +14214,13 @@ def _code_project_note(path):
             f"go to the journal.\n"
             f"- 'future': what is pending and NOT being done now — "
             f"project_write(note='future', text=<one line per item>). A plan "
-            f"lives here, not as tasks.\n"
-            f"- 'journal': what happened — project_journal, only significant "
-            f"events (a decision, a trap, what changed).\n"
+            f"lives here, not as tasks. When you finish one of its lines, "
+            f"close it: project_write(note='future', text=<the line>, "
+            f"done=true) — it leaves 'future' and lands in the journal. What "
+            f"was done is NEVER written into 'future'.\n"
+            f"- 'journal': what HAPPENED — project_journal(entry=<a decision "
+            f"taken, a trap found, what changed and why>), dated by the tool, "
+            f"never rewritten. Only what the next session must know.\n"
             f"THE BOARD IS SMALL AND IMMEDIATE: at most {_OPEN_TASKS_CAP} open "
             f"tasks per project (add_task refuses beyond), only what is being "
             f"done in this session AND that the user asked for or approved in "

@@ -30,8 +30,11 @@ _GATE_WORK_TOOLS = frozenset(("add_note", "update_note", "add_task", "task_depen
                               "update_task_progress", "project_write"))
 
 
-def _did_gate_work(trace, since):
-    return any(isinstance(s, dict) and str(s.get("tool")) in _GATE_WORK_TOOLS
+def _did_gate_work(trace, since, nudge=""):
+    work = _GATE_WORK_TOOLS
+    if JOURNAL_GATE_KEEP in (nudge or ""):
+        work = work | {"project_journal"}
+    return any(isinstance(s, dict) and str(s.get("tool")) in work
                for s in (trace or [])[since:])
 
 def _real_tools(trace):
@@ -73,7 +76,8 @@ def is_harness(m):
 
 PLAN_GATE_KEEP = "[not a plan]"
 PROGRESS_GATE_KEEP = "[no task landed]"
-GATE_KEEP_TOKENS = (PLAN_GATE_KEEP, PROGRESS_GATE_KEEP)
+JOURNAL_GATE_KEEP = "[nothing to journal]"
+GATE_KEEP_TOKENS = (PLAN_GATE_KEEP, PROGRESS_GATE_KEEP, JOURNAL_GATE_KEEP)
 NEVER_DELEGATE_PREFIXES = ("hands_", "wb_")
 
 _FALLBACK_STRINGS = {
@@ -1737,6 +1741,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
     _plan_gated = False
     _thought_only_retried = False
     _plan_original = None
+    _plan_nudge = ""
     _plan_trace_len = 0
     _plan_backup = None
     _plan_nudge_at = -1
@@ -2159,7 +2164,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
             if _plan_original is not None:
                 _plan_nudge_at = -1
                 if not reply.strip().startswith(GATE_KEEP_TOKENS) \
-                        and not _did_gate_work(tool_trace, _plan_trace_len):
+                        and not _did_gate_work(tool_trace, _plan_trace_len, _plan_nudge):
                     emit({"event": "plan_gate_ignored", "iteration": iteration})
                 reply = _plan_original
                 _plan_original = None
@@ -2172,6 +2177,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 if _pg:
                     _plan_gated = True
                     _plan_original = _plan_backup = reply
+                    _plan_nudge = _pg
                     _plan_trace_len = len(tool_trace)
                     _plan_nudge_at = len(messages)
                     messages.append(_assistant_as_generated(msg))
