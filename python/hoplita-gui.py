@@ -16070,6 +16070,8 @@ enabled = true
             self._autosave_tab(tab_id)
             self._job_after_turn(tab_id)
             self._drain_tab_queue(tab_id)
+            if tab_id == self._active_tab_id:
+                self._update_queue_label()
 
     def _on_queue_changed(self, tab_id):
         if not tab_id or tab_id == self._active_tab_id:
@@ -16367,7 +16369,7 @@ enabled = true
             if _c is not None and getattr(_c, "compact_pending", False):
                 _c.compact_pending = False
                 self.add_message(t("ctx.compact_unqueued"), "system")
-                self._update_queue_label()
+            self._update_queue_label()
             return
         if href.startswith("q:") or href.startswith("x:"):
             try:
@@ -16543,6 +16545,8 @@ enabled = true
         _reserve = min(self._max_tokens(), lim // 2) if lim else 0
         if lim and ((prompt_tokens + _reserve) / lim) >= threshold:
             ctx.compact_pending = True
+            if (tab_id or self._active_tab_id) == self._active_tab_id:
+                self._update_queue_label()
         elif not lim:
             ctx.ctx_measured = False
 
@@ -19217,6 +19221,7 @@ enabled = true
                             _oc.compact_pending = True
                             if not getattr(_oc, "overflow_replayed", False):
                                 _oc.overflow_replay = True
+                            self.signals.queue_changed.emit(tab or "")
                         self.thread_msg(t("ctx.overflow_compact", prompt=ev.get("prompt", "?"),
                                           reply=ev.get("reply", "?"), window=ev.get("window", "?")),
                                         "system", keep=True)
@@ -19328,6 +19333,8 @@ enabled = true
                 if getattr(_ctx, "compact_pending", False):
                     _ctx.compact_pending = False
                     _ctx.compacting = True
+                    self.signals.queue_changed.emit(
+                        getattr(self._tls, "tab_id", "") or "")
                     _replay = getattr(_ctx, "overflow_replay", False)
                     _q = None
                     if _replay:
