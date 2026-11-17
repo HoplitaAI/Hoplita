@@ -2290,7 +2290,7 @@
   "ovw.state_ended": "terminada",
   "ovw.state_idle": "en reposo",
   "ovw.next": "próxima {when}",
-  "ovw.sub": "Qué está haciendo cada pestaña. Pulsa una tarjeta para abrir su pestaña.",
+  "ovw.sub": "Las pestañas a la izquierda, cada una con lo que hace; elige una para ver su trabajo a la derecha. Pulsa la tarjeta, o doble clic en la fila, para abrir la pestaña.",
   "ovw.head_tabs": "{n} pestañas",
   "ovw.head_busy": "{n} trabajando",
   "ovw.head_wait": "{n} esperan tu OK",

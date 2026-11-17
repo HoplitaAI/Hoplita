@@ -906,14 +906,18 @@ background breathes, so a tab you are not looking at still tells you it is
 busy; ⏸ in amber is a tab waiting for your OK.
 
 **▦** at the right of the strip (it reads `▦ 2/5` when two of five tabs are
-working) opens every tab on one page: its state and for how long, the job it
-works for and its next run, its goal, the last thing it said, and a tree of
-its work the way a process tree reads: the turn with its tool calls and their
-arguments (each ticked with its clock when it ends, the running one turning),
-the plan it keeps and the item it is on, its sub-agents with where they run,
-their model, their own calls and their own list, and the background jobs
-alive for it with their last probe. A ✕ on the turn stops it, a ✕ on a job
-ends it. A card opens its tab. The tree moves by three rules: a call lands
+working) opens every tab on one page: down the left, one row per tab with
+its colour, whether it works, waits or rests and for how long, and its title;
+at the right, the tab you pick (the page opens on the one you are in): its
+state, the job it works for and its next run, its goal, the last thing it
+said, and a tree of its work the way a process tree reads: the turn with its
+tool calls and their arguments (each ticked with its clock when it ends, the
+running one turning), the plan it keeps and the item it is on, its sub-agents
+with where they run, their model, their own calls and their own list, and
+the background jobs alive for it with their last probe. A ✕ on the turn
+stops it, a ✕ on a job ends it. A click on the card, or a double click on a
+row, opens the tab; six tabs or twelve read the same, one at a time. The
+tree moves by three rules: a call lands
 once (its line enters with a band of its colour that fades), a finished
 call's mark settles once, and the running mark is the only thing that keeps
 turning; when nothing works, nothing moves and no frame is painted.

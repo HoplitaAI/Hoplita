@@ -2,8 +2,8 @@ import time
 
 from PyQt6.QtCore import QEvent, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
-from PyQt6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
-                             QScrollArea, QSizePolicy, QToolTip, QVBoxLayout,
+from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QScrollArea,
+                             QSizePolicy, QSplitter, QToolTip, QVBoxLayout,
                              QWidget)
 
 from hoplita_i18n import t
@@ -369,6 +369,7 @@ class _Card(QFrame):
             lb.setTextFormat(Qt.TextFormat.RichText)
             lay.addWidget(lb)
             setattr(self, name, lb)
+        lay.addStretch(1)
         self._skin = None
         self._state = "idle"
         self._texts = {}
@@ -441,6 +442,100 @@ class _Card(QFrame):
         return self.tree.text_lines()
 
 
+class _Row(QFrame):
+    picked = pyqtSignal(str)
+    opened = pyqtSignal(str)
+
+    def __init__(self, tab_id):
+        super().__init__()
+        self.tab_id = tab_id
+        self.setObjectName("ovwRow")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(2)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.spin = _Spin()
+        self.mark = QLabel()
+        self.mark.setObjectName("ovwRowMark")
+        self.mark.setFixedWidth(16)
+        self.title = QLabel()
+        self.title.setObjectName("ovwRowTitle")
+        self.title.setTextFormat(Qt.TextFormat.PlainText)
+        head.addWidget(self.spin)
+        head.addWidget(self.mark)
+        head.addWidget(self.title, 1)
+        lay.addLayout(head)
+        self.when = QLabel()
+        self.when.setObjectName("ovwRowWhen")
+        self.when.setContentsMargins(24, 0, 0, 0)
+        lay.addWidget(self.when)
+        self._skin = None
+        self._state = "idle"
+        self._texts = {}
+        self._title = ""
+
+    def _set(self, label, text):
+        if self._texts.get(label) != text:
+            self._texts[label] = text
+            label.setText(text)
+
+    def paint(self, row, picked, now):
+        st = row.get("state", "idle")
+        col = row.get("color") or "#3b82f6"
+        scol = _STATE_COL.get(st, "#64748b")
+        skin = (st, col, picked)
+        if skin != self._skin:
+            self._skin = skin
+            self.setStyleSheet(
+                f"#ovwRow {{ background:{'#16223a' if picked else '#111a2b'}; border:1px solid "
+                f"{_INK if picked else '#1f2a3d'}; border-left:3px solid {col}; "
+                f"border-radius:8px; }} "
+                f"#ovwRow:hover {{ background:#16223a; }} "
+                f"#ovwRow QLabel {{ background:transparent; border:none; }} "
+                f"#ovwRowTitle {{ color:{_INK}; font-size:13px; font-weight:600; }} "
+                f"#ovwRowMark {{ color:{scol}; font-size:13px; }} "
+                f"#ovwRowWhen {{ color:{scol}; font-size:11px; }}")
+        self._state = st
+        self.spin.setVisible(st == "working")
+        self.mark.setVisible(st != "working")
+        self._set(self.mark, {"waiting": "⏸", "ended": "⏹"}.get(st, "·"))
+        self._title = row.get("title", "")
+        self._fit_title()
+        when = t("ovw.state_" + st)
+        if row.get("since") is not None:
+            when += " · " + ago(row["since"])
+        self._set(self.when, when)
+        self.setToolTip(self._title + "\n" + when)
+
+    def _fit_title(self):
+        room = max(80, self.width() - 70)
+        self._set(self.title, QFontMetricsF(self.title.font()).elidedText(
+            self._title, Qt.TextElideMode.ElideRight, room))
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._fit_title()
+
+    def moving(self, now):
+        return self._state == "working"
+
+    def frame(self, now):
+        if self._state == "working":
+            self.spin.frame(now)
+
+    def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self.picked.emit(self.tab_id)
+        super().mouseReleaseEvent(ev)
+
+    def mouseDoubleClickEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self.opened.emit(self.tab_id)
+        super().mouseDoubleClickEvent(ev)
+
+
 class TabsOverview(QWidget):
     open_tab = pyqtSignal(str)
     stop_turn = pyqtSignal(str)
@@ -463,36 +558,69 @@ class TabsOverview(QWidget):
         self.sub.setStyleSheet(f"QLabel {{ color:{_INK}; font-size:12px; "
                                "background:transparent; }")
         outer.addWidget(self.sub)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background:transparent; }")
-        body = QWidget()
-        body.setStyleSheet("background:transparent;")
-        self.grid = QGridLayout(body)
-        self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setSpacing(10)
-        self.grid.setAlignment(Qt.AlignmentFlag.AlignTop)
-        scroll.setWidget(body)
-        outer.addWidget(scroll, 1)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(6)
+        split.setStyleSheet("QSplitter::handle { background:#0b1220; }")
+        left = QScrollArea()
+        left.setWidgetResizable(True)
+        left.setFrameShape(QFrame.Shape.NoFrame)
+        left.setStyleSheet("QScrollArea { background:transparent; }")
+        left.setMinimumWidth(200)
+        left.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lbody = QWidget()
+        lbody.setStyleSheet("background:transparent;")
+        self.list = QVBoxLayout(lbody)
+        self.list.setContentsMargins(0, 0, 6, 0)
+        self.list.setSpacing(6)
+        self.list.setAlignment(Qt.AlignmentFlag.AlignTop)
+        left.setWidget(lbody)
+        self.detail = QScrollArea()
+        self.detail.setWidgetResizable(True)
+        self.detail.setFrameShape(QFrame.Shape.NoFrame)
+        self.detail.setStyleSheet("QScrollArea { background:transparent; }")
+        split.addWidget(left)
+        split.addWidget(self.detail)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([260, 640])
+        outer.addWidget(split, 1)
+        self._hold = QWidget(self)
+        self._hold.hide()
+        self.rows_w = {}
         self.cards = {}
+        self.picked = None
         self._order = []
-        self._cols = 0
         self._rows = []
         self._head = ""
         self._pulse = QTimer(self)
         self._pulse.setInterval(_FRAME_MS)
         self._pulse.timeout.connect(self._frame)
 
-    def _columns(self):
-        w = self.width() or 900
-        return max(1, min(3, w // 380))
-
     def _on_stop(self, kind, tab_id, job_id):
         if kind == "turn":
             self.stop_turn.emit(tab_id)
         elif kind == "job" and job_id:
             self.stop_job.emit(tab_id, job_id)
+
+    def select(self, tab_id):
+        card = self.cards.get(tab_id)
+        if card is None:
+            return
+        self.picked = tab_id
+        if self.detail.widget() is card:
+            return
+        old = self.detail.takeWidget()
+        if old is not None:
+            old.hide()
+            old.setParent(self._hold)
+        self.detail.setWidget(card)
+        card.show()
+        now = time.monotonic()
+        for r in self._rows:
+            w = self.rows_w.get(r["id"])
+            if w is not None:
+                w.paint(r, r["id"] == tab_id, now)
 
     def update_rows(self, rows):
         self._rows = list(rows)
@@ -508,28 +636,38 @@ class TabsOverview(QWidget):
             self._head = head
             self.head.setText(head)
         ids = [r["id"] for r in rows]
-        cols = self._columns()
-        if ids != self._order or cols != self._cols:
-            while self.grid.count():
-                self.grid.takeAt(0)
+        if ids != self._order:
+            while self.list.count():
+                self.list.takeAt(0)
             for gone in set(self.cards) - set(ids):
-                self.cards.pop(gone).deleteLater()
-            for i, tid in enumerate(ids):
-                card = self.cards.get(tid)
-                if card is None:
+                card = self.cards.pop(gone)
+                if self.detail.widget() is card:
+                    self.detail.takeWidget()
+                card.deleteLater()
+                self.rows_w.pop(gone).deleteLater()
+                if gone == self.picked:
+                    self.picked = None
+            for tid in ids:
+                row = self.rows_w.get(tid)
+                if row is None:
+                    row = _Row(tid)
+                    row.picked.connect(self.select)
+                    row.opened.connect(self.open_tab.emit)
+                    self.rows_w[tid] = row
                     card = _Card(tid)
                     card.clicked.connect(self.open_tab.emit)
                     card.stop.connect(self._on_stop)
+                    card.setParent(self._hold)
                     self.cards[tid] = card
-                self.grid.addWidget(card, i // cols, i % cols,
-                                    Qt.AlignmentFlag.AlignTop)
-            for c in range(3):
-                self.grid.setColumnStretch(c, 1 if c < cols else 0)
-            last_row = (len(ids) - 1) // cols + 1 if ids else 0
-            for r in range(self.grid.rowCount() + 1):
-                self.grid.setRowStretch(r, 1 if r == last_row else 0)
-            self._order, self._cols = ids, cols
+                self.list.addWidget(row)
+            self.list.addStretch(1)
+            self._order = ids
+        if self.picked not in self.cards:
+            self.picked = None
+        if self.picked is None and rows:
+            self.select(next((r["id"] for r in rows if r.get("active")), rows[0]["id"]))
         for r in rows:
+            self.rows_w[r["id"]].paint(r, r["id"] == self.picked, now)
             self.cards[r["id"]].paint(r, now)
         if any(c.moving(now) for c in self.cards.values()):
             if not self._pulse.isActive():
@@ -543,21 +681,21 @@ class TabsOverview(QWidget):
             return
         now = time.monotonic()
         alive = False
-        for c in self.cards.values():
+        for r in self.rows_w.values():
+            if r.moving(now):
+                alive = True
+                r.frame(now)
+        for tid, c in self.cards.items():
             if c.moving(now):
                 alive = True
-                c.frame(now)
+                if tid == self.picked:
+                    c.frame(now)
         if not alive:
             self._pulse.stop()
 
     def tree_text(self, tab_id):
         c = self.cards.get(tab_id)
         return c.tree_text() if c is not None else []
-
-    def resizeEvent(self, ev):
-        super().resizeEvent(ev)
-        if self._rows and self._columns() != self._cols:
-            self.update_rows(self._rows)
 
 
 def state_since(started, now=None):

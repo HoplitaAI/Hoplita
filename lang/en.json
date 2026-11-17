@@ -2290,7 +2290,7 @@
   "ovw.state_ended": "ended",
   "ovw.state_idle": "idle",
   "ovw.next": "next {when}",
-  "ovw.sub": "What each tab is doing. Click a card to open its tab.",
+  "ovw.sub": "The tabs on the left, each with what it is at; pick one to see its work on the right. Click the card, or double-click the row, to open the tab.",
   "ovw.head_tabs": "{n} tabs",
   "ovw.head_busy": "{n} working",
   "ovw.head_wait": "{n} waiting for your OK",

@@ -7073,6 +7073,7 @@ enabled = true
             self._chat_stack.setCurrentIndex(idx)
             self._ovw_fetch_jobs()
             self._overview_tick()
+            self.tabs_overview.select(self._active_tab_id)
             self._ovw_timer.start()
         self._render_chat_tabs()
 
