@@ -748,14 +748,14 @@ you keep coming back to never sinks under a thousand passing chats.
 the active tab is doing as it does it. A dial: every tool the tab has used
 is a slot around the arc with its count, the model's own rounds the first
 slot, and the needle swings to whatever is running now, with its arguments
-and its clock under the dial. A belt: every call is a box that arrives from
-the right and pushes the older ones left, grows while it runs, settles into
-the lower lane when it ends, turns red when it fails, and wears the
-sub-agent's name when a sub-agent made it; a box is never narrower than its
-name, and finished calls of one tool that follow each other fold into one box
-with their count, so a loop of forty reads as one box. A call lands once,
-repeats fold into their slot's count, and when nothing runs nothing moves and
-no frame is painted. Its width and whether it is shown are remembered.
+and its clock under the dial; every slot's name is painted whole, smaller
+when the pane is narrow, never cut. A belt: every call is a box, in the order
+the calls came, left to right in rows, never narrower than its name; it grows
+while it runs, turns red when it fails, and takes the sub-agent's colour when
+a sub-agent made it; the belt takes the rows it needs up to near half the
+pane, and the oldest rows past that are told as a count. A call lands once,
+repeats count in their slot, and when nothing runs nothing moves and no
+frame is painted. Its width and whether it is shown are remembered.
 
 ## The CODE tab — a real repo, not a chat about files
 
