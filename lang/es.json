@@ -2312,6 +2312,8 @@
   "ovw.stop_job_tip": "Terminar este trabajo en segundo plano",
   "canvas.toggle_tip": "El lienzo junto al transcript: la página propia de esta pestaña, dibujada por sus turnos",
   "canvas.new_in_tab": "Novedad en el lienzo de esta pestaña. Ábrelo cuando puedas.",
+  "canvas.full_tip": "El lienzo a toda la página",
+  "canvas.panel_tip": "El lienzo de vuelta junto al transcript",
   "wbc.all_periods": "Todo",
   "wbc.back_key": "Atrás (Alt ←)",
   "wbc.forward_key": "Adelante (Alt →)",

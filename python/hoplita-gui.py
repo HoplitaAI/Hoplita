@@ -2761,7 +2761,8 @@ class ChatAssistantWindow(QMainWindow):
         if tab == self._active_tab_id and (
                 rec["open"] or not origin or self._may_take_view(tab)):
             if not origin:
-                self.tabs.setCurrentIndex(0)
+                self.tabs.setCurrentIndex(
+                    self.tabs.indexOf(self.dashboard) if self._canvas_full else 0)
             self._canvas_open(tab)
             return
         rec["unseen"] = True
@@ -2779,6 +2780,9 @@ class ChatAssistantWindow(QMainWindow):
     def _toggle_canvas(self):
         if self.dashboard is None:
             return
+        if self._canvas_full:
+            self._canvas_set_full(False)
+            return
         rec = self._canvas(self._active_tab_id)
         if rec["open"]:
             rec["open"] = False
@@ -2793,6 +2797,10 @@ class ChatAssistantWindow(QMainWindow):
         tab = self._active_tab_id
         rec = self._canvas(tab)
         before = (rec["open"], rec["unseen"])
+        if self._canvas_full:
+            rec["open"], rec["unseen"] = True, False
+            self.dashboard.show_tab(tab)
+            return (rec["open"], rec["unseen"]) != before
         if rec["unseen"] and not rec["open"] and self._may_take_view(tab):
             rec["open"] = True
         if rec["open"]:
@@ -2800,6 +2808,41 @@ class ChatAssistantWindow(QMainWindow):
         self.dashboard.show_tab(tab)
         self.dashboard.setVisible(rec["open"])
         return (rec["open"], rec["unseen"]) != before
+
+    def _canvas_full_toggle(self):
+        self._canvas_set_full(not self._canvas_full)
+
+    def _canvas_set_full(self, on):
+        if self.dashboard is None or on == self._canvas_full:
+            return
+        self._canvas_full = on
+        rec = self._canvas(self._active_tab_id)
+        rec["open"], rec["unseen"] = True, False
+        self.dashboard.show_tab(self._active_tab_id)
+        if on:
+            _i = self._chat_split.indexOf(self.dashboard)
+            _sizes = self._chat_split.sizes()
+            if 0 <= _i < len(_sizes) and _sizes[_i] > 0:
+                self._canvas_w = _sizes[_i]
+            _idx = self.tabs.insertTab(1, self.dashboard, t("tabs.dashboard"))
+            self.tabs.setTabIcon(_idx, self._svg_icon("tab_canvas", "#94a3b8", 18))
+            self.dashboard.setVisible(True)
+            self.tabs.setCurrentIndex(_idx)
+            self._canvas_full_btn.setText("⤡")
+            self._canvas_full_btn.setToolTip(t("canvas.panel_tip"))
+        else:
+            _idx = self.tabs.indexOf(self.dashboard)
+            if _idx >= 0:
+                self.tabs.removeTab(_idx)
+            _sizes = self._chat_split.sizes()
+            self._chat_split.insertWidget(1, self.dashboard)
+            _cw = int(getattr(self, "_canvas_w", 560) or 560)
+            self._chat_split.setSizes([max(300, _sizes[0] - _cw), _cw] + _sizes[1:])
+            self.dashboard.setVisible(True)
+            self.tabs.setCurrentIndex(0)
+            self._canvas_full_btn.setText("⤢")
+            self._canvas_full_btn.setToolTip(t("canvas.full_tip"))
+        self._render_chat_tabs()
 
     def _canvas_drop(self, tab_id):
         self._canvases.pop(tab_id, None)
@@ -4726,6 +4769,7 @@ enabled = true
         self._setup_header(chat_layout)
         self.dashboard = None
         self._canvases = {}
+        self._canvas_full = False
         try:
             from dashboard_widget import DashboardWidget
             self.dashboard = DashboardWidget()
@@ -4735,6 +4779,8 @@ enabled = true
                     (t("canvas.open_btn"), t("canvas.open_tip"), self._open_canvases_dialog),
                     (t("canvas.export_btn"), t("canvas.export_tip"), self._export_canvas)):
                 self.dashboard.add_action(_label, _tip, _slot)
+            self._canvas_full_btn = self.dashboard.add_action(
+                "⤢", t("canvas.full_tip"), self._canvas_full_toggle)
             self.dashboard.setVisible(False)
         except Exception as e:
             import traceback
@@ -6198,6 +6244,7 @@ enabled = true
         except Exception:
             self._machine_on, _mw, _cw = False, 380, 560
         self.machine_view.setVisible(self._machine_on)
+        self._canvas_w = _cw
         _sizes = [max(300, 1600 - _mw - _cw)]
         if self.dashboard is not None:
             _sizes.append(_cw)
@@ -6418,10 +6465,10 @@ enabled = true
             _fl.setSpacing(0)
             _spin = self._SPIN[getattr(self, "_spin_i", 0) % len(self._SPIN)] + " "
             _eye = "👁 " if getattr(self._chat_ctxs.get(tab["id"]), "bg_live", 0) else ""
-            _label = (("⏸ " if waiting else _spin if working else _eye)
-                      + tab["title"] + _mark)
-            _shown_label = _fm.elidedText(_label, Qt.TextElideMode.ElideRight,
-                                          int(_title_w))
+            _pre = "⏸ " if waiting else _spin if working else _eye
+            _room = int(_title_w) - _fm.horizontalAdvance(_pre + _mark)
+            _shown_label = _pre + _fm.elidedText(
+                tab["title"], Qt.TextElideMode.ElideRight, max(24, _room)) + _mark
             btn = QPushButton(_shown_label)
             btn.setObjectName("tabTitle")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -6981,6 +7028,8 @@ enabled = true
                 i = self._chat_split.indexOf(w)
                 if 0 <= i < len(sizes) and sizes[i] > 0:
                     q.setValue(key, int(sizes[i]))
+                    if key == "canvas/width":
+                        self._canvas_w = int(sizes[i])
         except Exception:
             pass
 

@@ -2312,6 +2312,8 @@
   "ovw.stop_job_tip": "End this background job",
   "canvas.toggle_tip": "The canvas beside the transcript: this tab's own page, drawn by its turns",
   "canvas.new_in_tab": "Something new on this tab's canvas. Open it when you can.",
+  "canvas.full_tip": "The canvas over the whole page",
+  "canvas.panel_tip": "The canvas back beside the transcript",
   "wbc.all_periods": "All",
   "wbc.back_key": "Back (Alt ←)",
   "wbc.forward_key": "Forward (Alt →)",
