@@ -75,7 +75,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QTabBar
 )
 from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
+    Qt, QThread, pyqtSignal, QObject, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QSettings
 )
 
 _SESS_CARD_CSS = (
@@ -531,6 +531,39 @@ class ChatView(QTextEdit):
         from PyQt6.QtCore import QSize
         from PyQt6.QtGui import QResizeEvent
         super().resizeEvent(QResizeEvent(self.size(), QSize(-1, self.height())))
+
+
+class CurtainGrip(QWidget):
+
+    def __init__(self, curtain, on_resize, on_done):
+        super().__init__(curtain)
+        self._curtain = curtain
+        self._on_resize = on_resize
+        self._on_done = on_done
+        self.setCursor(Qt.CursorShape.SplitHCursor)
+        self.setFixedWidth(6)
+        self._x0 = None
+        self._w0 = 0
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self._x0 = ev.globalPosition().x()
+            self._w0 = self._curtain.width()
+
+    def mouseMoveEvent(self, ev):
+        if self._x0 is not None:
+            self._on_resize(int(self._w0 - (ev.globalPosition().x() - self._x0)))
+
+    def mouseReleaseEvent(self, ev):
+        if self._x0 is not None:
+            self._x0 = None
+            self._on_done()
+
+    def paintEvent(self, ev):
+        from PyQt6.QtGui import QPainter, QColor
+        p = QPainter(self)
+        p.fillRect(0, 0, 1, self.height(), QColor("#334155"))
+        p.end()
 
 
 class ChatInput(QTextEdit):
@@ -2817,7 +2850,7 @@ class ChatAssistantWindow(QMainWindow):
         rec["unseen"] = False
         if tab_id == self._active_tab_id and self.dashboard is not None:
             self.dashboard.show_tab(tab_id)
-            self.dashboard.setVisible(True)
+            self._curtain_set(self.dashboard, True)
         self._render_chat_tabs()
 
     def _toggle_canvas(self):
@@ -2829,7 +2862,7 @@ class ChatAssistantWindow(QMainWindow):
         rec = self._canvas(self._active_tab_id)
         if rec["open"]:
             rec["open"] = False
-            self.dashboard.setVisible(False)
+            self._curtain_set(self.dashboard, False)
             self._render_chat_tabs()
         else:
             self._canvas_open(self._active_tab_id)
@@ -2849,7 +2882,7 @@ class ChatAssistantWindow(QMainWindow):
         if rec["open"]:
             rec["unseen"] = False
         self.dashboard.show_tab(tab)
-        self.dashboard.setVisible(rec["open"])
+        self._curtain_set(self.dashboard, rec["open"])
         return (rec["open"], rec["unseen"]) != before
 
     def _canvas_full_toggle(self):
@@ -2862,11 +2895,14 @@ class ChatAssistantWindow(QMainWindow):
         rec = self._canvas(self._active_tab_id)
         rec["open"], rec["unseen"] = True, False
         self.dashboard.show_tab(self._active_tab_id)
+        _crec = self._curtains.get(self.dashboard)
         if on:
-            _i = self._chat_split.indexOf(self.dashboard)
-            _sizes = self._chat_split.sizes()
-            if 0 <= _i < len(_sizes) and _sizes[_i] > 0:
-                self._canvas_w = _sizes[_i]
+            if _crec is not None:
+                if _crec["anim"] is not None:
+                    _crec["anim"].stop()
+                    _crec["anim"] = None
+                _crec["open"] = False
+                _crec["grip"].hide()
             _idx = self.tabs.insertTab(1, self.dashboard, t("tabs.dashboard"))
             self.tabs.setTabIcon(_idx, self._svg_icon("tab_canvas", "#94a3b8", 18))
             self.dashboard.setVisible(True)
@@ -2877,12 +2913,11 @@ class ChatAssistantWindow(QMainWindow):
             _idx = self.tabs.indexOf(self.dashboard)
             if _idx >= 0:
                 self.tabs.removeTab(_idx)
-            _sizes = self._chat_split.sizes()
-            self._chat_split.insertWidget(1, self.dashboard)
-            _cw = int(getattr(self, "_canvas_w", 560) or 560)
-            self._chat_split.setSizes([max(300, _sizes[0] - _cw), _cw] + _sizes[1:])
-            self.dashboard.setVisible(True)
+            self.dashboard.setParent(self._curtain_host)
+            if _crec is not None:
+                _crec["grip"].show()
             self.tabs.setCurrentIndex(0)
+            self._curtain_set(self.dashboard, True)
             self._canvas_full_btn.setText("⤢")
             self._canvas_full_btn.setToolTip(t("canvas.full_tip"))
         self._render_chat_tabs()
@@ -6259,28 +6294,21 @@ enabled = true
         self._chat_split.setHandleWidth(6)
         self._chat_split.setStyleSheet("QSplitter::handle { background:#0b1220; }")
         self._chat_split.addWidget(self._chat_views)
-        if self.dashboard is not None:
-            self._chat_split.addWidget(self.dashboard)
-        self._chat_split.addWidget(self.machine_view)
-        self._chat_split.setStretchFactor(0, 1)
-        self._chat_split.setStretchFactor(1, 0)
-        self._chat_split.setStretchFactor(2, 0)
-        try:
-            _mq = QSettings("hoplita", "hoplita")
-            self._machine_on = str(_mq.value("machine/visible", "0")) == "1"
-            _mw = int(_mq.value("machine/width", 380) or 380)
-            _cw = int(_mq.value("canvas/width", 560) or 560)
-        except Exception:
-            self._machine_on, _mw, _cw = False, 380, 560
-        self.machine_view.setVisible(self._machine_on)
-        self._canvas_w = _cw
-        _sizes = [max(300, 1600 - _mw - _cw)]
-        if self.dashboard is not None:
-            _sizes.append(_cw)
-        _sizes.append(_mw)
-        self._chat_split.setSizes(_sizes)
-        self._chat_split.splitterMoved.connect(self._split_resized)
         _cp.addWidget(self._chat_split, 1)
+        self._curtain_host = _chat_page
+        self._curtains = {}
+        try:
+            self._machine_on = str(QSettings("hoplita", "hoplita").value("machine/visible", "0")) == "1"
+        except Exception:
+            self._machine_on = False
+        self._curtain_add(self.machine_view, "machine/width", 380)
+        if self.dashboard is not None:
+            self._curtain_add(self.dashboard, "canvas/width", 560)
+            self._canvas_w = self._curtains[self.dashboard]["w"]
+        if self._machine_on:
+            self._curtains[self.machine_view]["open"] = True
+            self.machine_view.show()
+        self._chat_views.installEventFilter(self)
         self._chat_stack.addWidget(_chat_page)
         self._session_cards = {}
         try:
@@ -7036,9 +7064,9 @@ enabled = true
 
     def _toggle_machine(self):
         self._machine_on = not getattr(self, "_machine_on", False)
-        self.machine_view.setVisible(self._machine_on)
         if self._machine_on:
             self.machine_view.set_machine(self._machine(self._active_tab_id))
+        self._curtain_set(self.machine_view, self._machine_on)
         try:
             QSettings("hoplita", "hoplita").setValue("machine/visible",
                                                     "1" if self._machine_on else "0")
@@ -7046,21 +7074,99 @@ enabled = true
             pass
         self._render_chat_tabs()
 
-    def _split_resized(self, *_):
+    def _curtain_add(self, widget, key, default_w):
         try:
-            q = QSettings("hoplita", "hoplita")
-            sizes = self._chat_split.sizes()
-            for w, key in ((getattr(self, "dashboard", None), "canvas/width"),
-                           (self.machine_view, "machine/width")):
-                if w is None or not w.isVisible():
-                    continue
-                i = self._chat_split.indexOf(w)
-                if 0 <= i < len(sizes) and sizes[i] > 0:
-                    q.setValue(key, int(sizes[i]))
-                    if key == "canvas/width":
-                        self._canvas_w = int(sizes[i])
+            w = int(QSettings("hoplita", "hoplita").value(key, default_w) or default_w)
+        except Exception:
+            w = default_w
+        widget.setParent(self._curtain_host)
+        widget.hide()
+        grip = CurtainGrip(widget, lambda nw, wd=widget: self._curtain_resize(wd, nw),
+                           lambda wd=widget: self._curtain_save(wd))
+        self._curtains[widget] = {"w": max(240, w), "key": key, "grip": grip,
+                                  "anim": None, "open": False}
+
+    def _curtains_place(self):
+        host = getattr(self, "_curtain_host", None)
+        views = getattr(self, "_chat_views", None)
+        if host is None or views is None:
+            return
+        top = views.mapTo(host, QPoint(0, 0))
+        x = top.x() + views.width()
+        h = views.height()
+        for wd in (self.machine_view, getattr(self, "dashboard", None)):
+            rec = self._curtains.get(wd) if wd is not None else None
+            if rec is None or not rec["open"]:
+                continue
+            x -= rec["w"]
+            if rec["anim"] is not None:
+                wd.resize(rec["w"], h)
+            else:
+                wd.setGeometry(x, top.y(), rec["w"], h)
+            rec["grip"].setGeometry(0, 0, 6, h)
+            rec["grip"].raise_()
+            wd.raise_()
+
+    def _curtain_set(self, widget, on):
+        rec = self._curtains.get(widget)
+        if rec is None:
+            widget.setVisible(bool(on))
+            return
+        on = bool(on)
+        if rec["open"] == on and widget.isVisible() == on and rec["anim"] is None:
+            return
+        rec["open"] = on
+        if rec["anim"] is not None:
+            rec["anim"].stop()
+            rec["anim"] = None
+        self._curtains_place()
+        g = widget.geometry()
+        out = QPoint(g.x() + g.width(), g.y())
+        home = QPoint(g.x(), g.y())
+        anim = QPropertyAnimation(widget, b"pos", self)
+        anim.setDuration(220)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        if on:
+            widget.move(out)
+            widget.show()
+            widget.raise_()
+            anim.setStartValue(out)
+            anim.setEndValue(home)
+        else:
+            anim.setStartValue(home)
+            anim.setEndValue(out)
+        anim.finished.connect(lambda wd=widget: self._curtain_done(wd))
+        rec["anim"] = anim
+        anim.start()
+
+    def _curtain_done(self, widget):
+        rec = self._curtains.get(widget)
+        if rec is None:
+            return
+        rec["anim"] = None
+        if not rec["open"]:
+            widget.hide()
+        self._curtains_place()
+
+    def _curtain_resize(self, widget, new_w):
+        rec = self._curtains.get(widget)
+        if rec is None:
+            return
+        room = max(300, self._curtain_host.width() - 300)
+        least = max(240, widget.minimumSizeHint().width())
+        rec["w"] = max(least, min(int(new_w), room))
+        self._curtains_place()
+
+    def _curtain_save(self, widget):
+        rec = self._curtains.get(widget)
+        if rec is None:
+            return
+        try:
+            QSettings("hoplita", "hoplita").setValue(rec["key"], int(rec["w"]))
         except Exception:
             pass
+        if widget is getattr(self, "dashboard", None):
+            self._canvas_w = rec["w"]
 
     def _toggle_overview(self):
         idx = getattr(self, "_overview_page_idx", None)
@@ -8855,7 +8961,6 @@ enabled = true
         self._restore_draft(tab_id)
         if self._canvas_sync():
             self._render_chat_tabs()
-        self._chat_split.refresh()
         self._show_chat_view(tab_id)
 
     def _new_chat_view(self):
@@ -14105,6 +14210,10 @@ enabled = true
 
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent, Qt as _Qt
+        if obj is getattr(self, "_chat_views", None):
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Move):
+                self._curtains_place()
+            return False
         if (event.type() == QEvent.Type.Wheel
                 and event.modifiers() & _Qt.KeyboardModifier.ControlModifier):
             for _w, _b, _d in getattr(self, "_zoom_targets", []):

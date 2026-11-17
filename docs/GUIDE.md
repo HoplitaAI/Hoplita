@@ -618,7 +618,7 @@ The main window's tabs:
 | **CRON** | Scheduled tasks (`fixed`/`interval`/`daily`/`weekly`/`startup`). Agentic execution with its own log. `startup` («When HOPLITA starts») runs once each time the app opens — for a machine that is not on all day |
 | **Tools** | The firewall: enable/disable tools globally |
 | **Memory** | Sub-tabs **Facts**, **Lessons**, **Experience**, **Conversations** and **Proposals**. Facts shows **Live** and **Archive** apart, each with its count; the archive with its size and **Empty archive…**. Proposals lists what the memory pass did on its own, each with **↩ Undo**, and **🔎 Curate memory** runs the pass over the whole store. It refreshes when you click the tab |
-| **Canvas** | The agent's free visual surface, one per chat tab, as a panel beside its transcript (▣ shows or hides it; ⤢ on its bar puts it over the whole page): charts, pages, generated pictures (as figures; **Save as…** writes them to files); `canvas_eval`/`canvas_see` let the model check what it drew |
+| **Canvas** | The agent's free visual surface, one per chat tab, as a curtain that slides over its transcript from the right (▣ shows or hides it; ⤢ on its bar puts it over the whole page): charts, pages, generated pictures (as figures; **Save as…** writes them to files); `canvas_eval`/`canvas_see` let the model check what it drew |
 | **Terminal** | An embedded terminal (Linux/macOS) |
 | **Contacts** | Federation: identity, contacts, presence, permissions |
 
@@ -742,9 +742,10 @@ a card keeps that conversation at the top of the list whatever its date, on
 every machine of yours, and the prune leaves it alone: the one with the rules
 you keep coming back to never sinks under a thousand passing chats.
 
-## ◎ The machine beside the transcript
+## ◎ The machine over the transcript
 
-◎ in the tab strip opens an instrument beside the transcript that shows what
+◎ in the tab strip slides an instrument over the transcript, from its right
+edge, that shows what
 the active tab is doing as it does it. A dial: every tool the tab has used
 is a slot around the arc with its count, the model's own rounds the first
 slot, and the needle swings to whatever is running now, with its arguments
@@ -934,12 +935,15 @@ the conversation, not to the turn, and report when they land. `[CHAT]
 max_threads` caps how many may be alive at once.
 
 Work in one tab never takes the screen from you. Every chat tab has a canvas
-of its own: a panel beside its transcript (▣ in the tab strip shows or hides
-it; its width is kept) that holds the page its turns drew, with whatever the
-model built in it by `canvas_eval` still running when you come back. ⤢ on the
-panel's bar puts the canvas over the whole page, as a tab of the window, with
-its page as it stands; ⤡ brings it back beside the transcript at the width it
-had. It comes up only for a canvas you open, or for what the tab you are in draws while
+of its own: a curtain that slides over its transcript from the right edge (▣
+in the tab strip shows or hides it; drag its left edge for its width, which is
+kept) and holds the page its turns drew, with whatever the model built in it
+by `canvas_eval` still running when you come back. The curtain covers and takes
+no width: the transcript is never laid out again for it, however long the
+conversation, so it opens and closes in a frame; the machine (◎) is a curtain
+too, at the edge, with the canvas left of it. ⤢ on the canvas's bar puts it
+over the whole page, as a tab of the window, with its page as it stands; ⤡
+slides it back at the width it had. It comes up only for a canvas you open, or for what the tab you are in draws while
 nothing is half-typed in its box; anything else (another tab drawing, a
 remote session's canvas) leaves you where you are and marks that tab with ▣
 until its canvas is on screen. Closing a tab drops its canvas. All the tabs'
