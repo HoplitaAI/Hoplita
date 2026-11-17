@@ -223,6 +223,8 @@ A conversation can leave work running and go on, or end its turn and be woken. E
 
 ## 🎨 Canvas
 
+Every chat tab has a canvas of its own, a panel beside its transcript: a call paints the page of the tab whose turn runs it (a sub-agent's, the tab of the turn that spawned it), `canvas_eval` grows that page and `canvas_undo` steps that page back, and nothing of one tab's canvas reaches another's. The page keeps running while its tab is not on screen.
+
 | Tool | Args | What it does |
 |---|---|---|
 | `render_html` | `html` `append?` | Paints HTML/CSS/JS/SVG on the GUI's Chromium canvas: charts, diagrams, mockups, whole pages. `append=true` builds a large document across several calls so the output limit does not truncate it. To explain code, the whiteboard is the place. |

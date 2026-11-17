@@ -8,7 +8,7 @@ import threading
 import time
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
-from PyQt6.QtCore import Qt, pyqtSignal, QEventLoop, QTimer, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, QEventLoop, QTimer, QThread, QUrl
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import (QWebEnginePage, QWebEngineProfile,
                                    QWebEngineUrlRequestJob, QWebEngineUrlScheme,
@@ -148,11 +148,25 @@ _PLACEHOLDER = _WRAPPER_HEAD + """
 """ + _WRAPPER_TAIL
 
 
+CANVAS_BASE_URL = "http://canvas.localhost/"
+
+LIVE_PAGES = 8
+
+
 class _CanvasPage(QWebEnginePage):
 
-    def __init__(self, *a, **kw):
-        super().__init__(*a, **kw)
+    def __init__(self, key="", parent=None):
+        super().__init__(parent)
+        self.key = key
         self.console = []
+        self.html = ""
+        self.touched = time.time()
+        self.rebuilt = False
+        try:
+            from PyQt6.QtGui import QColor as _QColor
+            self.setBackgroundColor(_QColor("#0f172a"))
+        except Exception:
+            pass
 
     def javaScriptConsoleMessage(self, level, message, line, source):
         _name = getattr(level, "name", None) or str(level)
@@ -167,54 +181,146 @@ class _CanvasPage(QWebEnginePage):
 
 class DashboardWidget(QWidget):
 
-    _render_requested = pyqtSignal(str)
+    _render_requested = pyqtSignal(str, str)
     _bridge_requested = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
-        self._current_html = ""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        bar = QHBoxLayout()
-        bar.setContentsMargins(12, 8, 12, 8)
-        self.status_label = QLabel("Dashboard ready")
-        self.status_label.setStyleSheet("color: #e6edf7; font-size: 12px;")
-        bar.addWidget(self.status_label)
-        bar.addStretch()
-        clear_btn = QPushButton("🗑 Clear")
-        clear_btn.setMaximumWidth(110)
-        clear_btn.clicked.connect(self.clear)
-        bar.addWidget(clear_btn)
-        reload_btn = QPushButton("🔄 Reload")
-        reload_btn.setMaximumWidth(110)
-        reload_btn.clicked.connect(self._reload)
-        bar.addWidget(reload_btn)
-        layout.addLayout(bar)
+        bar = QWidget()
+        self._bar = QHBoxLayout(bar)
+        self._bar.setContentsMargins(12, 6, 8, 6)
+        self._bar.setSpacing(6)
+        self.title_label = QLabel("Canvas")
+        self.title_label.setStyleSheet(
+            "color:#e6edf7; font-size:12px; font-weight:600; letter-spacing:0.5px;")
+        self._bar.addWidget(self.title_label)
+        self._bar.addStretch()
+        layout.addWidget(bar)
+        self.add_action("↻", "Reload this page", self._reload)
 
         self.view = QWebEngineView()
         _install_media_handler()
-        self._page = _CanvasPage(self.view)
-        self.view.setPage(self._page)
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        try:
-            from PyQt6.QtGui import QColor as _QColor
-            self.view.page().setBackgroundColor(_QColor("#0f172a"))
-        except Exception:
-            pass
         self.view.setStyleSheet("background:#0f172a;")
         layout.addWidget(self.view, 1)
 
+        self._pages = {}
+        self._frozen = {}
+        self._shown = None
+        self._req_gen = {}
+        self._render_gen = {}
+        self._loaded_gen = {}
+        self._blank = _CanvasPage("", self.view)
+        self._blank.setHtml(_PLACEHOLDER, QUrl(CANVAS_BASE_URL))
+        self.view.setPage(self._blank)
         self._render_requested.connect(self._do_render)
         self._bridge_requested.connect(self._do_bridge)
-        self._req_gen = 0
-        self._render_gen = 0
-        self._loaded_gen = 0
-        self.view.loadFinished.connect(self._on_load_finished)
-        self.view.setHtml(_PLACEHOLDER)
 
-    def render_html(self, html, wrap=True):
+    def add_action(self, label, tip, slot):
+        b = QPushButton(label)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setToolTip(tip)
+        b.setStyleSheet(
+            "QPushButton { background:transparent; color:#cbd5e1; border:1px solid #334155; "
+            "border-radius:6px; padding:3px 10px; font-size:12px; } "
+            "QPushButton:hover { background:#1e293b; color:#e6edf7; }")
+        b.clicked.connect(slot)
+        self._bar.addWidget(b)
+        return b
+
+    def _key(self, key):
+        if key is None:
+            return self._shown if self._shown is not None else ""
+        return str(key)
+
+    def _page(self, key, thaw=True):
+        pg = self._pages.get(key)
+        if pg is not None:
+            pg.touched = time.time()
+            return pg
+        pg = _CanvasPage(key, self.view)
+        pg.loadFinished.connect(lambda _ok=True, k=key: self._on_load_finished(k))
+        pg.renderProcessTerminated.connect(
+            lambda *_a, k=key: QTimer.singleShot(0, lambda: self._rebuild(k)))
+        self._pages[key] = pg
+        html = self._frozen.pop(key, "")
+        if thaw and html:
+            pg.html = html
+            pg.rebuilt = True
+            pg.setHtml(html, QUrl(CANVAS_BASE_URL))
+        self._enforce_cap()
+        return pg
+
+    def _enforce_cap(self):
+        while len(self._pages) > LIVE_PAGES:
+            idle = [p for k, p in self._pages.items() if k != self._shown]
+            if not idle:
+                return
+            old = min(idle, key=lambda p: p.touched)
+            self._freeze(old.key)
+
+    def _freeze(self, key):
+        pg = self._pages.pop(key, None)
+        if pg is None:
+            return
+        if pg.html:
+            self._frozen[key] = pg.html
+        if self.view.page() is pg:
+            self.view.setPage(self._blank)
+        pg.deleteLater()
+
+    def _rebuild(self, key):
+        pg = self._pages.get(key)
+        if pg is None or not pg.html:
+            return
+        pg.rebuilt = True
+        pg.setHtml(pg.html, QUrl(CANVAS_BASE_URL))
+
+    def show_tab(self, key):
+        key = self._key(key)
+        self._shown = key
+        pg = self._pages.get(key)
+        if pg is None and key in self._frozen:
+            pg = self._page(key)
+        if pg is None:
+            if self.view.page() is not self._blank:
+                self.view.setPage(self._blank)
+            return
+        pg.touched = time.time()
+        if self.view.page() is not pg:
+            self.view.setPage(pg)
+
+    def shown(self):
+        return self._shown
+
+    def has(self, key):
+        key = self._key(key)
+        return key in self._pages or key in self._frozen
+
+    def html(self, key=None):
+        key = self._key(key)
+        pg = self._pages.get(key)
+        return pg.html if pg is not None else self._frozen.get(key, "")
+
+    def drop(self, key):
+        key = self._key(key)
+        pg = self._pages.pop(key, None)
+        if pg is not None:
+            if self.view.page() is pg:
+                self.view.setPage(self._blank)
+            pg.deleteLater()
+        self._frozen.pop(key, None)
+        for d in (self._req_gen, self._render_gen, self._loaded_gen):
+            d.pop(key, None)
+
+    def live_pages(self):
+        return len(self._pages)
+
+    def render_html(self, html, wrap=True, key=None):
         if wrap:
             low = html.lower()
             if "<!doctype" in low or "<html" in low:
@@ -223,95 +329,110 @@ class DashboardWidget(QWidget):
                 full = _WRAPPER_HEAD + html + _WRAPPER_TAIL
         else:
             full = html
-        self._req_gen += 1
-        self._render_requested.emit(full)
+        key = self._key(key)
+        self._req_gen[key] = self._req_gen.get(key, 0) + 1
+        self._render_requested.emit(key, full)
 
     _LOAD_CAP_MS = 10000
 
-    def _on_load_finished(self, _ok=True):
-        self._loaded_gen = self._render_gen
+    def _on_load_finished(self, key):
+        self._loaded_gen[key] = self._render_gen.get(key, 0)
 
-    def _loaded(self):
-        return self._loaded_gen >= self._req_gen
+    def _loaded(self, key):
+        return self._loaded_gen.get(key, 0) >= self._req_gen.get(key, 0)
 
-    def _wait_loaded(self):
-        if self._loaded():
+    def _wait_loaded(self, key):
+        if self._loaded(key):
             return
         deadline = time.time() + self._LOAD_CAP_MS / 1000.0
         if QThread.currentThread() is self.thread():
-            while not self._loaded() and time.time() < deadline:
+            while not self._loaded(key) and time.time() < deadline:
                 _loop = QEventLoop()
                 QTimer.singleShot(50, _loop.quit)
                 _loop.exec()
         else:
-            while not self._loaded() and time.time() < deadline:
+            while not self._loaded(key) and time.time() < deadline:
                 time.sleep(0.05)
 
-    def _do_render(self, full_html):
-        self._render_gen = self._req_gen
-        self._current_html = full_html
-        try:
-            self._page.console.clear()
-        except Exception:
-            pass
-        self.view.setHtml(full_html)
-        self.status_label.setText("Canvas updated")
+    def _do_render(self, key, full_html):
+        pg = self._page(key, thaw=False)
+        self._render_gen[key] = self._req_gen.get(key, 0)
+        pg.html = full_html
+        pg.rebuilt = False
+        pg.console.clear()
+        pg.setHtml(full_html, QUrl(CANVAS_BASE_URL))
+        if self._shown is None:
+            self._shown = key
+        if key == self._shown and self.view.page() is not pg:
+            self.view.setPage(pg)
 
     def _do_bridge(self, req):
         try:
             if req.get("op") == "eval":
-                req["out"] = self._eval_js_gui(req["js"], req["wait_ms"])
+                req["out"] = self._eval_js_gui(req["key"], req["js"], req["wait_ms"])
             elif req.get("op") == "shot":
-                req["out"] = self._screenshot_gui(req["max_w"])
+                req["out"] = self._screenshot_gui(req["key"], req["max_w"])
         except Exception as e:
             req["out"] = {"error": str(e)[:200]}
         finally:
             req["event"].set()
 
-    def _bridge(self, op, timeout_s=8.0, **kw):
+    def _bridge(self, op, key, timeout_s=8.0, **kw):
         if QThread.currentThread() is self.thread():
             if op == "eval":
-                return self._eval_js_gui(kw["js"], kw["wait_ms"])
-            return self._screenshot_gui(kw["max_w"])
-        req = dict(kw, op=op, event=threading.Event(), out=None)
+                return self._eval_js_gui(key, kw["js"], kw["wait_ms"])
+            return self._screenshot_gui(key, kw["max_w"])
+        req = dict(kw, op=op, key=key, event=threading.Event(), out=None)
         self._bridge_requested.emit(req)
         if not req["event"].wait(timeout_s):
             return {"error": "the GUI thread did not answer in time"}
         return req["out"]
 
-    def console_report(self, wait_ms=900):
-        self._wait_loaded()
+    def console_report(self, wait_ms=900, key=None):
+        key = self._key(key)
+        self._wait_loaded(key)
         if QThread.currentThread() is self.thread():
             _loop = QEventLoop()
             QTimer.singleShot(max(0, int(wait_ms)), _loop.quit)
             _loop.exec()
         else:
             time.sleep(max(0, int(wait_ms)) / 1000.0)
+        pg = self._pages.get(key)
         try:
-            return list(self._page.console)
+            return list(pg.console) if pg is not None else []
         except Exception:
             return []
 
-    def screenshot_png(self, max_w=1024):
-        r = self._bridge("shot", max_w=max_w)
+    def screenshot_png(self, max_w=1024, key=None):
+        r = self._bridge("shot", self._key(key), max_w=max_w)
         return r if isinstance(r, (bytes, bytearray)) else b""
 
-    def showEvent(self, ev):
-        self._composited_once = True
-        super().showEvent(ev)
-
-    def _screenshot_gui(self, max_w):
-        if not getattr(self, "_composited_once", False) \
-                and not self.isVisible():
+    def _screenshot_gui(self, key, max_w):
+        pg = self._pages.get(key)
+        if pg is None and key in self._frozen:
+            pg = self._page(key)
+        if pg is None:
             return b""
+        pg.touched = time.time()
         try:
-            _d = self._canvas_dataurl(max_w)
+            _d = self._canvas_dataurl(key, max_w)
             if _d:
                 return _d
         except Exception:
             pass
+        if not self.view.isVisible():
+            return b""
         from PyQt6.QtCore import QBuffer, QIODevice
+        before = self.view.page()
+        swapped = before is not pg
+        if swapped:
+            self.view.setPage(pg)
+        _loop = QEventLoop()
+        QTimer.singleShot(90 if swapped else 30, _loop.quit)
+        _loop.exec()
         pix = self.view.grab()
+        if swapped:
+            self.view.setPage(before)
         if pix.isNull() or pix.width() == 0:
             return b""
         if pix.width() > max_w:
@@ -325,7 +446,7 @@ class DashboardWidget(QWidget):
         buf.close()
         return data
 
-    def _canvas_dataurl(self, max_w):
+    def _canvas_dataurl(self, key, max_w):
         js = ("(function(){try{"
               "var cs=document.getElementsByTagName('canvas');"
               "if(!cs.length)return '';"
@@ -335,7 +456,7 @@ class DashboardWidget(QWidget):
               "if(!b.width||!b.height)return '';"
               "return b.toDataURL('image/png');"
               "}catch(e){return '';}})()")
-        url = self._bridge("eval", js=js, wait_ms=2500, timeout_s=6.0)
+        url = self._eval_js_gui(key, js, 2500).get("value")
         if not isinstance(url, str) or not url.startswith("data:image/png;base64,"):
             return b""
         import base64
@@ -354,14 +475,18 @@ class DashboardWidget(QWidget):
                 buf.close()
         return raw
 
-    def eval_js(self, script, wait_ms=2500):
-        return self._bridge("eval", js=script, wait_ms=wait_ms,
+    def eval_js(self, script, wait_ms=2500, key=None):
+        return self._bridge("eval", self._key(key), js=script, wait_ms=wait_ms,
                             timeout_s=max(4.0, int(wait_ms) / 1000.0 + 2)
                             + self._LOAD_CAP_MS / 1000.0)
 
-    def _eval_js_gui(self, script, wait_ms):
+    def _eval_js_gui(self, key, script, wait_ms):
         out = {"done": False, "value": None}
-        self._wait_loaded()
+        pg = self._page(key)
+        if pg.rebuilt:
+            out["rebuilt"] = True
+            pg.rebuilt = False
+        self._wait_loaded(key)
         _loop = QEventLoop()
 
         def _cb(v):
@@ -369,19 +494,21 @@ class DashboardWidget(QWidget):
             out["done"] = True
             _loop.quit()
 
-        self.view.page().runJavaScript(script, _cb)
+        pg.runJavaScript(script, _cb)
         QTimer.singleShot(max(50, int(wait_ms)), _loop.quit)
         _loop.exec()
         return out
 
     def _reload(self):
-        if self._current_html:
-            self.view.setHtml(self._current_html)
+        pg = self._pages.get(self._key(None))
+        if pg is not None and pg.html:
+            pg.console.clear()
+            pg.setHtml(pg.html, QUrl(CANVAS_BASE_URL))
 
-    def clear(self):
-        self._current_html = ""
-        self.view.setHtml(_PLACEHOLDER)
-        self.status_label.setText("Canvas cleared")
+    def clear(self, key=None):
+        self.drop(self._key(key))
+        if self._key(None) == self._key(key):
+            self.view.setPage(self._blank)
 
 
 if __name__ == "__main__":

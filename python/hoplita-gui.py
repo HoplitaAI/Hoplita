@@ -2582,8 +2582,8 @@ class ChatAssistantWindow(QMainWindow):
                     "#94a3b8", agent_label))
             elif et == "canvas":
                 _canvas_html = ev.get("html", "")
-                if ev.get("append") and getattr(self, "_last_canvas_html", ""):
-                    _canvas_html = self._last_canvas_html + _canvas_html
+                if ev.get("append") and self._canvas(tid)["html"]:
+                    _canvas_html = self._canvas(tid)["html"] + _canvas_html
                 self._render_canvas_html(_canvas_html, origin=tid)
                 self._append_html_to_tab(tid, self._chat_frag(
                     t("fed.session_canvas_rendered"), "#94a3b8", agent_label))
@@ -2617,7 +2617,7 @@ class ChatAssistantWindow(QMainWindow):
                f'<img src="{_h.escape(src)}" style="max-width:100%;border-radius:6px;display:block;">'
                f'<figcaption style="color:#94a3b8;font:12px sans-serif;margin-top:6px;">{cap}</figcaption>'
                f'</figure>')
-        prev = getattr(self, "_last_canvas_html", "") or ""
+        prev = self._canvas(self._emitting_tab())["html"]
         self._render_canvas_html((prev if "<figure" in prev else "") + fig)
 
     def _picture_result_to_canvas(self, result):
@@ -2689,7 +2689,7 @@ class ChatAssistantWindow(QMainWindow):
         return [dest]
 
     def _export_canvas(self):
-        html = getattr(self, "_last_canvas_html", "") or ""
+        html = self._canvas(self._active_tab_id)["html"]
         if not html.strip():
             self.add_message(t("canvas.nothing"), "system")
             return
@@ -2715,25 +2715,31 @@ class ChatAssistantWindow(QMainWindow):
             return
         self.add_message(t("canvas.exported", n=len(saved), path=saved[-1]), "system")
 
+    def _canvas(self, tab_id):
+        rec = self._canvases.get(tab_id)
+        if rec is None:
+            rec = self._canvases[tab_id] = {"html": "", "prev": "", "uuid": None,
+                                            "open": False, "unseen": False}
+        return rec
+
     def _render_canvas_html(self, html, origin=None):
         if self.dashboard is None or not (html or "").strip():
             return
-        _prev = getattr(self, "_last_canvas_html", "")
+        if origin is None:
+            origin = getattr(self._tls, "tab_id", None) or ""
+        tab = origin or self._active_tab_id
+        rec = self._canvas(tab)
+        _prev = rec["html"]
         if _prev and _prev != html:
-            self._canvas_prev = _prev
-        self._last_canvas_html = html
+            rec["prev"] = _prev
+        rec["html"] = html
         try:
             from dashboard_widget import serve_local_images
             html = serve_local_images(html)
         except Exception:
             pass
-        self.dashboard.render_html(html)
-        if origin is None:
-            origin = getattr(self._tls, "tab_id", None) or ""
+        self.dashboard.render_html(html, key=tab)
         self.signals.canvas_painted.emit(origin)
-
-    def _canvas_tab_index(self):
-        return self.tabs.indexOf(getattr(self, "_dashboard_tab", None) or self.dashboard)
 
     def _emitting_tab(self):
         return getattr(self._tls, "tab_id", None) or self._active_tab_id
@@ -2741,7 +2747,7 @@ class ChatAssistantWindow(QMainWindow):
     def _may_take_view(self, tab_id):
         if not tab_id or tab_id != self._active_tab_id:
             return False
-        if self.tabs.currentIndex() not in (0, self._canvas_tab_index()):
+        if self.tabs.currentIndex() != 0:
             return False
         entry = getattr(self, "entry", None)
         try:
@@ -2750,58 +2756,55 @@ class ChatAssistantWindow(QMainWindow):
             return True
 
     def _on_canvas_painted(self, origin):
-        idx = self._canvas_tab_index()
-        if idx < 0 or self.tabs.currentIndex() == idx:
+        tab = origin or self._active_tab_id
+        rec = self._canvas(tab)
+        if tab == self._active_tab_id and (
+                rec["open"] or not origin or self._may_take_view(tab)):
+            if not origin:
+                self.tabs.setCurrentIndex(0)
+            self._canvas_open(tab)
             return
-        if not origin or self._may_take_view(origin):
-            self.tabs.setCurrentIndex(idx)
+        rec["unseen"] = True
+        self._render_chat_tabs()
+
+    def _canvas_open(self, tab_id):
+        rec = self._canvas(tab_id)
+        rec["open"] = True
+        rec["unseen"] = False
+        if tab_id == self._active_tab_id and self.dashboard is not None:
+            self.dashboard.show_tab(tab_id)
+            self.dashboard.setVisible(True)
+        self._render_chat_tabs()
+
+    def _toggle_canvas(self):
+        if self.dashboard is None:
             return
-        tab = self._tab_by_id(origin) or {}
-        self.tabs.setTabToolTip(idx, t("canvas.new_from",
-                                       tab=tab.get("title") or origin))
-        self._canvas_glow_on = True
-        tmr = getattr(self, "_canvas_glow_timer", None)
-        if tmr is None:
-            tmr = QTimer(self)
-            tmr.setInterval(90)
-            tmr.timeout.connect(self._canvas_glow_tick)
-            self._canvas_glow_timer = tmr
-        if not tmr.isActive():
-            tmr.start()
+        rec = self._canvas(self._active_tab_id)
+        if rec["open"]:
+            rec["open"] = False
+            self.dashboard.setVisible(False)
+            self._render_chat_tabs()
+        else:
+            self._canvas_open(self._active_tab_id)
 
-    _CANVAS_GLOW_FRAMES = 12
-    _CANVAS_GLOW_S = 1.6
+    def _canvas_sync(self):
+        if self.dashboard is None:
+            return False
+        tab = self._active_tab_id
+        rec = self._canvas(tab)
+        before = (rec["open"], rec["unseen"])
+        if rec["unseen"] and not rec["open"] and self._may_take_view(tab):
+            rec["open"] = True
+        if rec["open"]:
+            rec["unseen"] = False
+        self.dashboard.show_tab(tab)
+        self.dashboard.setVisible(rec["open"])
+        return (rec["open"], rec["unseen"]) != before
 
-    def _canvas_glow_tick(self):
-        import math
-        idx = self._canvas_tab_index()
-        if idx < 0 or not getattr(self, "_canvas_glow_on", False):
-            self._canvas_glow_stop()
-            return
-        icons = getattr(self, "_canvas_glow_icons", None)
-        if icons is None:
-            n = self._CANVAS_GLOW_FRAMES
-            a, b = QColor("#94a3b8"), QColor("#f5b800")
-            icons = []
-            for i in range(n):
-                f = i / float(n - 1)
-                c = QColor(round(a.red() + (b.red() - a.red()) * f),
-                           round(a.green() + (b.green() - a.green()) * f),
-                           round(a.blue() + (b.blue() - a.blue()) * f))
-                icons.append(self._svg_icon("tab_canvas", c.name(), 18))
-            self._canvas_glow_icons = icons
-        w = 0.5 - 0.5 * math.cos(2 * math.pi * time.time() / self._CANVAS_GLOW_S)
-        self.tabs.setTabIcon(idx, icons[round(w * (len(icons) - 1))])
-
-    def _canvas_glow_stop(self):
-        self._canvas_glow_on = False
-        tmr = getattr(self, "_canvas_glow_timer", None)
-        if tmr is not None:
-            tmr.stop()
-        idx = self._canvas_tab_index()
-        if idx >= 0:
-            self.tabs.setTabIcon(idx, self._svg_icon("tab_canvas", "#94a3b8", 18))
-            self.tabs.setTabToolTip(idx, "")
+    def _canvas_drop(self, tab_id):
+        self._canvases.pop(tab_id, None)
+        if self.dashboard is not None:
+            self.dashboard.drop(tab_id)
 
     def _is_local_child(self, peer):
         cache = getattr(self, "_fed_cache", {}) or {}
@@ -4721,6 +4724,23 @@ enabled = true
         chat_layout.setContentsMargins(0, 0, 0, 0)
         chat_layout.setSpacing(0)
         self._setup_header(chat_layout)
+        self.dashboard = None
+        self._canvases = {}
+        try:
+            from dashboard_widget import DashboardWidget
+            self.dashboard = DashboardWidget()
+            self.dashboard.title_label.setText(t("tabs.dashboard"))
+            for _label, _tip, _slot in (
+                    (t("canvas.save_btn"), t("canvas.save_tip"), self._save_current_canvas),
+                    (t("canvas.open_btn"), t("canvas.open_tip"), self._open_canvases_dialog),
+                    (t("canvas.export_btn"), t("canvas.export_tip"), self._export_canvas)):
+                self.dashboard.add_action(_label, _tip, _slot)
+            self.dashboard.setVisible(False)
+        except Exception as e:
+            import traceback
+            self._dashboard_err = (e, traceback.format_exc())
+            print(t("init.dashboard_fail", e=e), file=sys.stderr)
+
         self._setup_chat_area(chat_layout)
         self._setup_input_area(chat_layout)
         _i = self.tabs.addTab(chat_widget, t("tabs.chat")); self.tabs.setTabIcon(_i, self._svg_icon("tab_chat", "#94a3b8", 18))
@@ -4809,43 +4829,16 @@ enabled = true
                 print(t("init.terminal_fail", e=e), file=sys.stderr)
                 print(tb, file=sys.stderr)
 
-        self.dashboard = None
-        self._dashboard_tab = None
-        try:
-            from dashboard_widget import DashboardWidget
-            self.dashboard = DashboardWidget()
-            _dwrap = QWidget()
-            _dv = QVBoxLayout(_dwrap); _dv.setContentsMargins(0, 0, 0, 0); _dv.setSpacing(0)
-            _bar = QWidget(); _bl = QHBoxLayout(_bar)
-            _bl.setContentsMargins(8, 6, 8, 6); _bl.setSpacing(6)
-            _bl.addStretch()
-            for _label, _tip, _slot in (
-                    (t("ui.save"), t("canvas.save_tip"), self._save_current_canvas),
-                    ("📂 " + t("canvas.open_btn"), t("canvas.open_tip"), self._open_canvases_dialog),
-                    ("⤓ " + t("canvas.export_btn"), t("canvas.export_tip"), self._export_canvas)):
-                _b = QPushButton(_label)
-                _b.setCursor(Qt.CursorShape.PointingHandCursor); _b.setToolTip(_tip)
-                _b.setStyleSheet(
-                    "QPushButton { background:#1e293b; color:#cbd5e1; border:1px solid #334155; "
-                    "border-radius:8px; padding:5px 14px; font-size:12px; font-weight:600; } "
-                    "QPushButton:hover { background:#334155; color:#e2e8f0; }")
-                _b.clicked.connect(_slot); _bl.addWidget(_b)
-            _dv.addWidget(_bar)
-            _dv.addWidget(self.dashboard, 1)
-            self._dashboard_tab = _dwrap
-            _i = self.tabs.addTab(_dwrap, t("tabs.dashboard")); self.tabs.setTabIcon(_i, self._svg_icon("tab_canvas", "#94a3b8", 18))
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
+        if self.dashboard is None and getattr(self, "_dashboard_err", None):
+            _e, _tb = self._dashboard_err
             err_label = QLabel(
-                t("init.dashboard_fail_label", e=e) + f"\n\n{tb}")
+                t("init.dashboard_fail_label", e=_e) + f"\n\n{_tb}")
             err_label.setWordWrap(True)
             err_label.setStyleSheet(
                 "QLabel { color: #cd3131; background: #1e1e1e; padding: 20px; "
                 "font-family: monospace; font-size: 12px; }")
             err_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.tabs.addTab(err_label, t("tabs.dashboard_err"))
-            print(t("init.dashboard_fail", e=e), file=sys.stderr)
 
         try:
             self._setup_memory_tab()
@@ -5312,9 +5305,6 @@ enabled = true
 
     def _on_tab_changed(self, index):
         self._maybe_refresh_memory(index)
-        if index >= 0 and index == self._canvas_tab_index() \
-                and getattr(self, "_canvas_glow_on", False):
-            self._canvas_glow_stop()
 
     def _on_tab_clicked(self, index):
         self._maybe_refresh_memory(index)
@@ -6194,18 +6184,26 @@ enabled = true
         self._chat_split.setHandleWidth(6)
         self._chat_split.setStyleSheet("QSplitter::handle { background:#0b1220; }")
         self._chat_split.addWidget(self.chat_display)
+        if self.dashboard is not None:
+            self._chat_split.addWidget(self.dashboard)
         self._chat_split.addWidget(self.machine_view)
         self._chat_split.setStretchFactor(0, 1)
         self._chat_split.setStretchFactor(1, 0)
+        self._chat_split.setStretchFactor(2, 0)
         try:
             _mq = QSettings("hoplita", "hoplita")
             self._machine_on = str(_mq.value("machine/visible", "0")) == "1"
             _mw = int(_mq.value("machine/width", 380) or 380)
+            _cw = int(_mq.value("canvas/width", 560) or 560)
         except Exception:
-            self._machine_on, _mw = False, 380
+            self._machine_on, _mw, _cw = False, 380, 560
         self.machine_view.setVisible(self._machine_on)
-        self._chat_split.setSizes([max(300, 1200 - _mw), _mw])
-        self._chat_split.splitterMoved.connect(self._machine_resized)
+        _sizes = [max(300, 1600 - _mw - _cw)]
+        if self.dashboard is not None:
+            _sizes.append(_cw)
+        _sizes.append(_mw)
+        self._chat_split.setSizes(_sizes)
+        self._chat_split.splitterMoved.connect(self._split_resized)
         _cp.addWidget(self._chat_split, 1)
         self._chat_stack.addWidget(_chat_page)
         self._session_cards = {}
@@ -6407,6 +6405,10 @@ enabled = true
             _job = getattr(_c, "job_name", "") if _c is not None else ""
             if _job:
                 _mark = " ⏰" + _mark
+            _news = bool(getattr(self, "_canvases", None)
+                         and self._canvas(tab["id"])["unseen"])
+            if _news:
+                _mark = " ▣" + _mark
             working = (not waiting and not _ended
                        and self._tab_working(tab["id"]))
             frame = QFrame()
@@ -6437,6 +6439,8 @@ enabled = true
                 _tips.append(t("fwtab.tip", n=_nfw))
             if _job:
                 _tips.append(t("job.tab_tip", name=_job))
+            if _news:
+                _tips.append(t("canvas.new_in_tab"))
             _bgn = getattr(self._chat_ctxs.get(tab["id"]), "bg_live", 0)
             if _bgn:
                 _tips.append(t("bg.tab_tip", n=_bgn, names=", ".join(
@@ -6522,6 +6526,21 @@ enabled = true
                  f"QPushButton:hover {{ background:#334155; }}"))
             ob.clicked.connect(self._toggle_overview)
             lay.addWidget(ob)
+        if getattr(self, "dashboard", None) is not None:
+            _crec = self._canvas(self._active_tab_id)
+            vcol = "#f5b800" if _crec["unseen"] and not _crec["open"] else "#93c5fd"
+            vb = QPushButton("▣")
+            vb.setCursor(Qt.CursorShape.PointingHandCursor)
+            vb.setToolTip(t("canvas.toggle_tip"))
+            vb.setStyleSheet(
+                (f"QPushButton {{ background:{self._hex_rgba(vcol, 0.18)}; color:{vcol}; "
+                 f"border:1px solid {vcol}; border-radius:8px; padding:5px 12px; "
+                 f"font-weight:700; }}") if _crec["open"] else
+                (f"QPushButton {{ background:#1e293b; color:{vcol}; border:1px solid {vcol}; "
+                 f"border-radius:8px; padding:5px 12px; }} "
+                 f"QPushButton:hover {{ background:#334155; }}"))
+            vb.clicked.connect(self._toggle_canvas)
+            lay.addWidget(vb)
         if getattr(self, "machine_view", None) is not None:
             mcol = "#93c5fd"
             mon = bool(getattr(self, "_machine_on", False))
@@ -6951,11 +6970,17 @@ enabled = true
             pass
         self._render_chat_tabs()
 
-    def _machine_resized(self, *_):
+    def _split_resized(self, *_):
         try:
+            q = QSettings("hoplita", "hoplita")
             sizes = self._chat_split.sizes()
-            if len(sizes) > 1 and sizes[1] > 0:
-                QSettings("hoplita", "hoplita").setValue("machine/width", int(sizes[1]))
+            for w, key in ((getattr(self, "dashboard", None), "canvas/width"),
+                           (self.machine_view, "machine/width")):
+                if w is None or not w.isVisible():
+                    continue
+                i = self._chat_split.indexOf(w)
+                if 0 <= i < len(sizes) and sizes[i] > 0:
+                    q.setValue(key, int(sizes[i]))
         except Exception:
             pass
 
@@ -8505,7 +8530,8 @@ enabled = true
         return "Canvas"
 
     def _save_current_canvas(self):
-        html = getattr(self, "_last_canvas_html", "") or ""
+        _tab = self._active_tab_id
+        html = self._canvas(_tab)["html"]
         if not html.strip():
             self.add_message(t("canvas.nothing"), "system")
             return
@@ -8516,7 +8542,7 @@ enabled = true
         if not ok:
             return
         name = (name or "").strip() or default
-        canvas = {"uuid": getattr(self, "_canvas_uuid", None),
+        canvas = {"uuid": self._canvas(_tab)["uuid"],
                   "title": name, "html": html}
 
         def work():
@@ -8524,7 +8550,7 @@ enabled = true
 
         def done(res):
             if isinstance(res, dict) and res.get("ok"):
-                self._canvas_uuid = res.get("uuid")
+                self._canvas(_tab)["uuid"] = res.get("uuid")
                 self.add_message(t("canvas.saved", title=name), "system")
             else:
                 err = res if isinstance(res, str) else (res or {}).get("error", "?")
@@ -8583,7 +8609,7 @@ enabled = true
             if not c or not (c.get("html") or "").strip():
                 self.add_message(t("canvas.load_fail"), "error")
                 return
-            self._canvas_uuid = c.get("uuid")
+            self._canvas(self._active_tab_id)["uuid"] = c.get("uuid")
             self._render_canvas_html(c["html"], origin="")
             self.add_message(t("canvas.restored", title=c.get("title", "")), "system")
 
@@ -8765,6 +8791,8 @@ enabled = true
         self._render_chat_tabs()
         self._refresh_chat_meta()
         self._restore_draft(tab_id)
+        if self._canvas_sync():
+            self._render_chat_tabs()
 
     def _chat_place_view(self, pos):
         sb = self.chat_display.verticalScrollBar()
@@ -8869,8 +8897,10 @@ enabled = true
             self._chat_ctxs["local"] = ChatCtx("local", t("chat.tab_local"))
             tab["title"] = t("chat.tab_local")
             tab["html"] = ""
+            self._canvas_drop("local")
             if self._active_tab_id == "local":
                 self.chat_display.clear()
+                self._canvas_sync()
                 if hasattr(self, "_code_project"):
                     self._code_close_project(silent=True)
                     self._code_view_placeholder(False)
@@ -8884,6 +8914,7 @@ enabled = true
                 loc = self._tab_by_id("local")
                 self.chat_display.setHtml(loc.get("html", "") if loc else "")
                 self._refresh_chat_meta()
+                self._canvas_sync()
             self._render_chat_tabs()
             return
         peer = tab.get("peer")
@@ -8906,11 +8937,13 @@ enabled = true
         self._chat_tabs = [x for x in self._chat_tabs if x["id"] != tab_id]
         self._chat_ctxs.pop(tab_id, None)
         getattr(self, "_machines", {}).pop(tab_id, None)
+        self._canvas_drop(tab_id)
         if self._active_tab_id == tab_id:
             self._active_tab_id = "local"
             loc = self._tab_by_id("local")
             self.chat_display.setHtml(loc.get("html", "") if loc else "")
             self._refresh_chat_meta()
+            self._canvas_sync()
         self._render_chat_tabs()
         self._set_enchanting(self._busy_now())
         self._update_queue_label()
@@ -17557,12 +17590,14 @@ enabled = true
             html = arguments.get("html", "")
             if not html.strip():
                 return json.dumps({"error": t("err.html_empty")}, ensure_ascii=False)
-            if arguments.get("append") and getattr(self, "_last_canvas_html", ""):
-                html = self._last_canvas_html + html
+            _tab = self._emitting_tab()
+            _rec = self._canvas(_tab)
+            if arguments.get("append") and _rec["html"]:
+                html = _rec["html"] + html
             self._render_canvas_html(html)
             self.thread_msg(t("msg.canvas_rendered", n=len(html)), "system")
             _out = {"rendered": True, "chars": len(html)}
-            _back = getattr(self, "_canvas_prev", "")
+            _back = _rec["prev"]
             if _back:
                 _out["previous_kept"] = len(_back)
                 _out["undo"] = ("The page this replaced is kept: "
@@ -17570,7 +17605,7 @@ enabled = true
                                 "just rendered is worse than what was there, "
                                 "go back instead of rebuilding it.")
             try:
-                _msgs = self.dashboard.console_report()
+                _msgs = self.dashboard.console_report(key=_tab)
                 _errs = [m for m in _msgs if m.get("level") == "error"]
                 if _errs:
                     _out["js_errors"] = _errs[:8]
@@ -17586,21 +17621,23 @@ enabled = true
                 _out["console_unavailable"] = str(_e)[:120]
             return json.dumps(_out, ensure_ascii=False)
         if tool_name == "canvas_undo" and self.dashboard is not None:
-            _back = getattr(self, "_canvas_prev", "")
+            _rec = self._canvas(self._emitting_tab())
+            _back = _rec["prev"]
             if not _back:
                 return json.dumps({"error": "nothing to go back to: only one "
                                             "page has been rendered"},
                                   ensure_ascii=False)
-            _now = getattr(self, "_last_canvas_html", "")
+            _now = _rec["html"]
             self._render_canvas_html(_back)
-            self._canvas_prev = _now
+            _rec["prev"] = _now
             self.thread_msg(t("msg.canvas_undone", n=len(_back)), "system")
             return json.dumps({"restored": True, "chars": len(_back)},
                               ensure_ascii=False)
         if tool_name == "canvas_see" and self.dashboard is not None:
             _out = {}
+            _tab = self._emitting_tab()
             try:
-                _msgs2 = self.dashboard.console_report(300)
+                _msgs2 = self.dashboard.console_report(300, key=_tab)
                 _errs2 = [m for m in _msgs2 if m.get("level") == "error"]
                 if _errs2:
                     _out["js_errors"] = _errs2[:8]
@@ -17610,7 +17647,7 @@ enabled = true
                 _out["error"] = t("err.canvas_no_vision")
                 return json.dumps(_out, ensure_ascii=False)
             _png = self.dashboard.screenshot_png(
-                max_w=int(arguments.get("max_width") or 1024))
+                max_w=int(arguments.get("max_width") or 1024), key=_tab)
             if not _png:
                 _out["error"] = t("err.canvas_shot_failed")
                 return json.dumps(_out, ensure_ascii=False)
@@ -17625,14 +17662,21 @@ enabled = true
             if not str(_script).strip():
                 return json.dumps({"error": t("err.js_empty")},
                                   ensure_ascii=False)
-            _r = self.dashboard.eval_js(str(_script))
+            _tab = self._emitting_tab()
+            _r = self.dashboard.eval_js(str(_script), key=_tab)
             _res = {"value": _r.get("value")}
+            if _r.get("rebuilt"):
+                _res["rebuilt"] = True
+                _res["note"] = ("the page was built again from its last "
+                                "render: what earlier canvas_eval calls had "
+                                "added since is gone. Add it again if you "
+                                "need it.")
             if not _r.get("done"):
                 _res["timeout"] = True
                 _res["hint"] = ("no answer in time. If your JS is async, set a "
                                 "global and read it in a second call.")
             try:
-                _e2 = [m for m in self.dashboard.console_report(120)
+                _e2 = [m for m in self.dashboard.console_report(120, key=_tab)
                        if m.get("level") == "error"]
                 if _e2:
                     _res["js_errors"] = _e2[:6]
@@ -20545,6 +20589,8 @@ def main():
             _extra.append("--no-sandbox")
     except Exception:
         pass
+    if "process-per-site" not in os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", ""):
+        _extra.append("--process-per-site")
     if os.environ.get("HOPLITA_FORCE_SOFTWARE") == "1":
         print("🎨 HOPLITA_FORCE_SOFTWARE=1 → WebEngine software rendering")
         _cf_now = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")

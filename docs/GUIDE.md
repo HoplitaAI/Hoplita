@@ -618,7 +618,7 @@ The main window's tabs:
 | **CRON** | Scheduled tasks (`fixed`/`interval`/`daily`/`weekly`/`startup`). Agentic execution with its own log. `startup` («When HOPLITA starts») runs once each time the app opens — for a machine that is not on all day |
 | **Tools** | The firewall: enable/disable tools globally |
 | **Memory** | Sub-tabs **Facts**, **Lessons**, **Experience**, **Conversations** and **Proposals**. Facts shows **Live** and **Archive** apart, each with its count; the archive with its size and **Empty archive…**. Proposals lists what the memory pass did on its own, each with **↩ Undo**, and **🔎 Curate memory** runs the pass over the whole store. It refreshes when you click the tab |
-| **Canvas** | The agent's free visual surface: charts, pages, generated pictures (as figures; **Save as…** writes them to files); `canvas_eval`/`canvas_see` let the model check what it drew |
+| **Canvas** | The agent's free visual surface, one per chat tab, as a panel beside its transcript (▣ shows or hides it): charts, pages, generated pictures (as figures; **Save as…** writes them to files); `canvas_eval`/`canvas_see` let the model check what it drew |
 | **Terminal** | An embedded terminal (Linux/macOS) |
 | **Contacts** | Federation: identity, contacts, presence, permissions |
 
@@ -646,7 +646,7 @@ parts, and each one does one thing:
 | `journal` | what happened, dated — decisions, traps, what changed, and every finished whiteboard | the agent; a whiteboard writes its own line | Notes; its tail rides every code turn |
 | whiteboard | **seeing and weighing a change**: what, why, the design as one diagram, the old and new call path, each claim anchored to the code at pinned commits | the agent (`wb_*`), or one in the background from the page | CODE → 🧭; «Whiteboard of these changes» in CODE |
 | scratchpad | sketching how existing code works, when there is no change | the agent | CODE → 🧭 |
-| canvas | free visuals that are not about code: charts, pictures, pages | the agent | Canvas tab |
+| canvas | free visuals that are not about code: charts, pictures, pages | the agent | the tab's canvas panel (▣) |
 
 `add_note` refuses any other note in a project folder and `add_task` any eighth
 open task. The parts talk to each other one way only: a whiteboard **reads**
@@ -932,12 +932,17 @@ mid-turn or not. Stopping the turn (■) does not end its jobs: they belong to
 the conversation, not to the turn, and report when they land. `[CHAT]
 max_threads` caps how many may be alive at once.
 
-Work in one tab never takes the screen from you. The canvas comes to the
-front only for a canvas you open, or for what the tab you are in draws while
+Work in one tab never takes the screen from you. Every chat tab has a canvas
+of its own: a panel beside its transcript (▣ in the tab strip shows or hides
+it; its width is kept) that holds the page its turns drew, with whatever the
+model built in it by `canvas_eval` still running when you come back. It comes
+up only for a canvas you open, or for what the tab you are in draws while
 nothing is half-typed in its box; anything else (another tab drawing, a
-remote session's canvas) leaves you where you are and makes the Canvas tab's
-icon glow amber, its tooltip naming the tab that drew, until you open it.
-A task finishing in another tab does not move your view either.
+remote session's canvas) leaves you where you are and marks that tab with ▣
+until its canvas is on screen. Closing a tab drops its canvas. All the tabs'
+pages live in one renderer process of the embedded Chromium, so a tab that
+painted costs a few megabytes and switching between them is immediate. A
+task finishing in another tab does not move your view either.
 
 ## Timeout doctrine — no total clocks
 
