@@ -1558,6 +1558,68 @@ class _GlowFrame(QWidget):
         p.end()
 
 
+class _SweepLine(QWidget):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pos = 0.0
+        self.setFixedHeight(4)
+
+    def set_pos(self, pos):
+        self._pos = max(0.0, min(1.0, float(pos)))
+        self.update()
+
+    def paintEvent(self, _event):
+        from PyQt6.QtCore import QRectF, Qt
+        from PyQt6.QtGui import QColor, QLinearGradient, QPainter
+        dim, mid, hot = QColor(120, 20, 20, 89), QColor(220, 40, 40, 191), QColor(255, 60, 60, 250)
+        pos = self._pos
+        g = QLinearGradient(0, 0, self.width(), 0)
+        for at, col in ((0.0, dim), (pos - 0.20, dim), (pos - 0.06, mid), (pos, hot),
+                        (pos + 0.06, mid), (pos + 0.20, dim), (1.0, dim)):
+            g.setColorAt(max(0.0, min(1.0, at)), col)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(g)
+        p.drawRoundedRect(QRectF(self.rect()), 2, 2)
+
+
+class _TabFrame(QFrame):
+
+    def __init__(self):
+        super().__init__()
+        self._beat = None
+
+    def set_beat(self, colour, alpha):
+        beat = (str(colour), float(alpha)) if alpha > 0 else None
+        if beat != self._beat:
+            self._beat = beat
+            self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._beat:
+            return
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QColor, QPainter, QPainterPath
+        col = QColor(self._beat[0])
+        col.setAlphaF(self._beat[1])
+        r = QRectF(self.rect())
+        rad = 6.0
+        path = QPainterPath()
+        path.moveTo(r.left(), r.bottom())
+        path.lineTo(r.left(), r.top() + rad)
+        path.arcTo(r.left(), r.top(), 2 * rad, 2 * rad, 180, -90)
+        path.lineTo(r.right() - rad, r.top())
+        path.arcTo(r.right() - 2 * rad, r.top(), 2 * rad, 2 * rad, 90, -90)
+        path.lineTo(r.right(), r.bottom())
+        path.closeSubpath()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.fillPath(path, col)
+
+
 class _LineNumbers(QWidget):
 
     def __init__(self, editor):
@@ -6388,14 +6450,11 @@ enabled = true
     def _pin_pulse_tick(self):
         self._pin_phase = not getattr(self, "_pin_phase", False)
         vivo = self._pin_phase
-        for btn in list(getattr(self, "_pin_buttons", []) or []):
+        for frame in list(getattr(self, "_pin_buttons", []) or []):
             try:
-                col = btn.property("_pin_col") or "#38bdf8"
-                act = bool(btn.property("_pin_active"))
-                bg = (self._hex_rgba(col, 0.22 if vivo else 0.10) if act
-                      else (self._hex_rgba(col, 0.12) if vivo
-                            else "transparent"))
-                btn.setStyleSheet(self._chat_tab_css(col, act, bg))
+                col = frame.property("_pin_col") or "#38bdf8"
+                act = bool(frame.property("_pin_active"))
+                frame.set_beat(col, (0.10 if act else 0.12) if vivo else 0.0)
             except RuntimeError:
                 pass
 
@@ -6531,7 +6590,7 @@ enabled = true
                 _mark = " ▣" + _mark
             working = (not waiting and not _ended
                        and self._tab_working(tab["id"]))
-            frame = QFrame()
+            frame = _TabFrame()
             frame.setObjectName("chatTab")
             _fl = QHBoxLayout(frame)
             _fl.setContentsMargins(0, 0, 4, 0)
@@ -9257,9 +9316,8 @@ enabled = true
         self._enchant_text = QLabel(t("chat.enchanting"))
         self._enchant_text.setObjectName("enchant_text")
         h.addWidget(self._enchant_text)
-        self._enchant_sweep = QLabel()
+        self._enchant_sweep = _SweepLine()
         self._enchant_sweep.setObjectName("enchant_sweep")
-        self._enchant_sweep.setFixedHeight(4)
         h.addWidget(self._enchant_sweep, 1)
         self._enchant_bar.setVisible(False)
         parent_layout.addWidget(self._enchant_bar)
@@ -9274,18 +9332,22 @@ enabled = true
         dots = "." * (1 + (ph // 3) % 3)
         t0 = self._enchant_t0.get(self._active_tab_id, 0.0)
         secs = int(time.time() - t0) if t0 else 0
+        self._enchant_fit(len(str(secs)))
         self._enchant_text.setText(f"{t('chat.enchanting')}{dots}   {secs}s")
         tri = (ph % 48) / 24.0
-        pos = tri if tri <= 1.0 else 2.0 - tri
-        a, b = max(0.0, pos - 0.20), min(1.0, pos + 0.20)
-        dim, hot = "rgba(120,20,20,0.35)", "rgba(255,60,60,0.98)"
-        mid = "rgba(220,40,40,0.75)"
-        self._enchant_sweep.setStyleSheet(
-            "QLabel#enchant_sweep { border-radius:2px; background:"
-            f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {dim}, "
-            f"stop:{a:.2f} {dim}, stop:{max(0.0, pos-0.06):.2f} {mid}, "
-            f"stop:{pos:.2f} {hot}, stop:{min(1.0, pos+0.06):.2f} {mid}, "
-            f"stop:{b:.2f} {dim}, stop:1 {dim}); }}")
+        self._enchant_sweep.set_pos(tri if tri <= 1.0 else 2.0 - tri)
+
+    def _enchant_fit(self, digits):
+        lb = self._enchant_text
+        key = (digits, lb.font().key())
+        if getattr(self, "_enchant_fit_key", None) == key:
+            return
+        self._enchant_fit_key = key
+        lb.ensurePolished()
+        fm = lb.fontMetrics()
+        widest = f"{t('chat.enchanting')}...   {'9' * digits}s"
+        lb.setFixedSize(fm.horizontalAdvance(widest) + 2 * lb.margin() + 4,
+                        max(lb.sizeHint().height(), fm.height()))
 
     def _busy_now(self):
         return bool(self._task_running or
