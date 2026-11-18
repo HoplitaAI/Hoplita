@@ -1620,6 +1620,31 @@ class _TabFrame(QFrame):
         p.fillPath(path, col)
 
 
+class _ShrinkStack(QStackedWidget):
+
+    def minimumSizeHint(self):
+        from PyQt6.QtCore import QSize
+        cur = self.currentWidget()
+        if cur is None:
+            return QSize(0, 0)
+        return cur.minimumSizeHint().expandedTo(cur.minimumSize())
+
+
+class _ShrinkTabs(QTabWidget):
+
+    def minimumSizeHint(self):
+        from PyQt6.QtCore import QSize
+        base = super().minimumSizeHint()
+        stack = self.findChild(QStackedWidget, "qt_tabwidget_stackedwidget")
+        cur = self.currentWidget()
+        if stack is None or cur is None:
+            return base
+        whole = stack.minimumSizeHint()
+        mine = cur.minimumSizeHint().expandedTo(cur.minimumSize())
+        return QSize(base.width() - max(0, whole.width() - mine.width()),
+                     base.height() - whole.height() + mine.height())
+
+
 class _LineNumbers(QWidget):
 
     def __init__(self, editor):
@@ -4880,6 +4905,8 @@ enabled = true
         central.setObjectName("root_glow")
         central.setStyleSheet("#root_glow { background: transparent; }")
         self.setCentralWidget(central)
+        from PyQt6.QtWidgets import QLayout
+        self.layout().setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self._outer_layout = QVBoxLayout(central)
         m = self._GLOW_MARGIN
         self._outer_layout.setContentsMargins(m, m, m, m)
@@ -4895,7 +4922,7 @@ enabled = true
         self.title_bar = CustomTitleBar(self, t("app.title") + "  " + HOPLITA_LABEL)
         main_layout.addWidget(self.title_bar)
 
-        self.tabs = QTabWidget()
+        self.tabs = _ShrinkTabs()
         self.tabs.setUsesScrollButtons(True)
         self.tabs.tabBar().setExpanding(False)
         _brand = QWidget()
@@ -6314,7 +6341,7 @@ enabled = true
 
 
         from PyQt6.QtWidgets import QStackedWidget
-        self._chat_views = QStackedWidget()
+        self._chat_views = _ShrinkStack()
         self._chat_view_by_tab = {}
         self._chat_font_base = self.config.getint("CHAT", "font_size",
                                                   fallback=13)
@@ -6328,7 +6355,7 @@ enabled = true
         self.chat_display = self._show_chat_view(
             getattr(self, "_active_tab_id", None) or "local")
         from PyQt6.QtWidgets import QStackedWidget
-        self._chat_stack = QStackedWidget()
+        self._chat_stack = _ShrinkStack()
         _chat_page = QWidget()
         _cp = QVBoxLayout(_chat_page)
         _cp.setContentsMargins(0, 0, 0, 0)
@@ -9410,9 +9437,20 @@ enabled = true
         self.queue_label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self.queue_label.linkActivated.connect(self._queue_link)
         self.queue_label.setStyleSheet(
-            "#queue_label { background:#1e293b; color:#fbbf24; "
-            "border:1px solid #f59e0b; border-radius:8px; padding:6px 10px; }")
-        parent_layout.addWidget(self.queue_label)
+            "#queue_label { background:transparent; color:#fbbf24; "
+            "border:none; padding:6px 10px; }")
+        self.queue_box = QScrollArea()
+        self.queue_box.setObjectName("queue_box")
+        self.queue_box.setFrameShape(QFrame.Shape.NoFrame)
+        self.queue_box.setStyleSheet(
+            "#queue_box { background:#1e293b; border:1px solid #f59e0b; border-radius:8px; } "
+            "#queue_box > QWidget > QWidget { background:transparent; }")
+        self.queue_box.setWidgetResizable(True)
+        self.queue_box.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.queue_box.setMaximumHeight(170)
+        self.queue_box.setWidget(self.queue_label)
+        self.queue_box.setVisible(False)
+        parent_layout.addWidget(self.queue_box)
         parent_layout.addWidget(input_widget)
 
 
@@ -9521,7 +9559,7 @@ enabled = true
             self._proj_sub_btns.append(b)
         sub_bar.addStretch()
         rh.addLayout(sub_bar)
-        self._proj_stack = QStackedWidget()
+        self._proj_stack = _ShrinkStack()
         self._proj_stack.addWidget(task_widget)
         try:
             from projects_widget import ProjectsBoardWidget
@@ -9535,7 +9573,7 @@ enabled = true
         rh.addWidget(self._proj_stack, 1)
         self._proj_sub_btns[0].setChecked(True)
         self._proj_view = "list"
-        self._todo_right = QStackedWidget()
+        self._todo_right = _ShrinkStack()
         self._todo_right.addWidget(right_holder)
         self._cal_active = False
         self._cal_last_apts = []
@@ -9623,7 +9661,7 @@ enabled = true
         al.addStretch()
         body.addWidget(act)
 
-        self._code_main = QStackedWidget()
+        self._code_main = _ShrinkStack()
         _work = QWidget()
         work = QHBoxLayout(_work)
         work.setContentsMargins(0, 0, 0, 0)
@@ -9645,7 +9683,7 @@ enabled = true
             lambda p: self._code_project_menu(
                 self.code_side_head.mapToGlobal(p)))
         sv.addWidget(self.code_side_head)
-        self.code_left_stack = QStackedWidget()
+        self.code_left_stack = _ShrinkStack()
         sv.addWidget(self.code_left_stack, 1)
 
         _FIELD = ("QLineEdit { background:#0f172a; color:#e6edf7; border:1px "
@@ -9811,7 +9849,7 @@ enabled = true
             "border-top:2px solid #3b82f6; }")
         rv.addWidget(self.code_tabs)
 
-        self.code_right_stack = QStackedWidget()
+        self.code_right_stack = _ShrinkStack()
         self.code_diff = QTextEdit()
         self.code_diff.setReadOnly(True)
         self.code_diff.viewport().setMouseTracking(True)
@@ -13041,7 +13079,7 @@ enabled = true
         self.note_raw_text.setStyleSheet(
             "QTextEdit { font-family: 'Consolas', 'JetBrains Mono', "
             "monospace; font-size: 13px; }")
-        self.note_editor_stack = QStackedWidget()
+        self.note_editor_stack = _ShrinkStack()
         self.note_editor_stack.addWidget(self.note_content_text)
         self.note_editor_stack.addWidget(self.note_raw_text)
         editor_layout.addWidget(self.note_editor_stack, 1)
@@ -16392,6 +16430,7 @@ enabled = true
 
     def _update_queue_label(self):
         lbl = getattr(self, "queue_label", None)
+        box = getattr(self, "queue_box", None)
         if lbl is None:
             return
         _sq = self._session_queue.get(self._active_tab_id)
@@ -16401,7 +16440,10 @@ enabled = true
         sent = list(getattr(_c, "injected_pending", None) or [])
         _compact = bool(getattr(_c, "compact_pending", False))
         if not q and not sent and not _compact:
-            lbl.clear(); lbl.setVisible(False); return
+            lbl.clear(); lbl.setVisible(False)
+            if box is not None:
+                box.setVisible(False)
+            return
 
         import html as _html
 
@@ -16423,8 +16465,14 @@ enabled = true
                       for i, (m, _p) in enumerate(q, 1)]
         if _compact:
             lines.append(_x("compact") + _link("compact", _html.escape(t("queue.box_compact"))))
-        lbl.setText("<br>".join(lines))
         lbl.setVisible(True)
+        if box is not None:
+            box.setVisible(True)
+        lbl.setText("<br>".join(lines))
+        lbl.updateGeometry()
+        if box is not None:
+            width = box.viewport().width() or box.width() or self.width()
+            box.setFixedHeight(min(170, lbl.heightForWidth(max(200, width)) + 4))
 
     def _queue_link(self, href):
         if href == "compact":
