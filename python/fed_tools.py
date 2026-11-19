@@ -1201,9 +1201,9 @@ def _open_contact_att(st, handle, attestation):
     payload = crypto.verify_attestation(pub, attestation)
     if not isinstance(payload, dict):
         return None
-    if payload.get("typ") != "contact" or payload.get("peer") != handle:
+    if payload.get("typ") != "contact" or _h(payload.get("peer")) != _h(handle):
         return None
-    if payload.get("me") != st.data.get("handle"):
+    if _h(payload.get("me")) != _h(st.data.get("handle")):
         return None
     return payload
 
@@ -3308,7 +3308,7 @@ def _granted_peers(st, server_url, token, name, kind):
                         ok = bool(isinstance(pl, dict)
                                   and pl.get("typ") == "publish"
                                   and pl.get("folder_id") == fid
-                                  and pl.get("owner") == my_handle)
+                                  and _h(pl.get("owner")) == _h(my_handle))
                         break
                     pub_ok[fid] = ok
                 if not ok:
