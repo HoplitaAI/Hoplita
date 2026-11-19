@@ -6416,6 +6416,11 @@ enabled = true
         except Exception:
             self._machine_on = False
         self._curtain_add(self.machine_view, "machine/width", 380)
+        from turn_view import TurnView
+        self.turn_view = TurnView()
+        self.turn_view.closed.connect(self._tu_close)
+        self._curtain_add(self.turn_view, "turn/width", 520)
+        self._tu_shown = 0
         if self.dashboard is not None:
             self._curtain_add(self.dashboard, "canvas/width", 560)
             self._canvas_w = self._curtains[self.dashboard]["w"]
@@ -7197,7 +7202,8 @@ enabled = true
         top = views.mapTo(host, QPoint(0, 0))
         x = top.x() + views.width()
         h = views.height()
-        for wd in (self.machine_view, getattr(self, "dashboard", None)):
+        for wd in (self.machine_view, getattr(self, "dashboard", None),
+                   getattr(self, "turn_view", None)):
             rec = self._curtains.get(wd) if wd is not None else None
             if rec is None or not rec["open"]:
                 continue
@@ -9043,6 +9049,9 @@ enabled = true
             return
         if getattr(self, "machine_view", None) is not None:
             self.machine_view.set_machine(self._machine(tab_id))
+        shown = getattr(self, "_tu_shown", 0)
+        if shown and (self._tu_store().get(shown) or {}).get("tab") != tab_id:
+            self._collapse_tool_usage(shown)
         self._stash_draft(self._active_tab_id)
         if getattr(self, "code_editor", None) is not None:
             try:
@@ -14067,15 +14076,14 @@ enabled = true
             sb = self.chat_display.verticalScrollBar()
             keep, at_bottom = sb.value(), sb.value() >= sb.maximum() - 2
             hit = self._tu_find(rid) if painted else None
-            if hit is not None and hit[0] == "tu-hide":
-                self._tu_repaint_box(rid, hit[1:])
-                return
             if hit is not None:
                 cur = QTextCursor(self.chat_display.document())
                 cur.setPosition(hit[1])
                 cur.setPosition(hit[2], QTextCursor.MoveMode.KeepAnchor)
-                cur.insertHtml(self._tu_link_html(rid))
+                cur.insertHtml(self._tu_link_html(rid, hide=(hit[0] == "tu-hide")))
                 sb.setValue(sb.maximum() if at_bottom else keep)
+                if getattr(self, "_tu_shown", 0) == rid:
+                    self.turn_view.follow(rec, self._tu_heading(rec))
                 return
         else:
             view = self._chat_view(tab_id)
@@ -14093,31 +14101,31 @@ enabled = true
             f'<span style="color:#22d3ee;font-weight:bold">{t("label.system")}:</span> '
             + self._tu_link_html(rid) + "<br>"))
 
-    def _tu_repaint_box(self, rid, hide=None):
-        if hide is None:
-            hide = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
-        if hide is None:
-            return False
-        sb = self.chat_display.verticalScrollBar()
-        keep, at_bottom = sb.value(), sb.value() >= sb.maximum() - 2
-        end = self._tu_box_end(hide)
-        cur = QTextCursor(self.chat_display.document())
-        cur.setPosition(hide[0])
-        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-        cur.insertHtml(self._tu_link_html(rid, hide=True) + self._tu_box_html(rid))
-        sb.setValue(sb.maximum() if at_bottom else keep)
-        return True
+    def _tu_heading(self, rec):
+        when = datetime.fromtimestamp(rec.get("t0") or time.time()).strftime("%H:%M:%S")
+        return f"{when}  \u00b7  {self._tu_summary(rec)}"
 
-    def _tu_toggle_thought(self, rid, i):
+    def _tu_flip(self, rid, hide):
         rec = self._tu_store().get(rid)
         if rec is None:
             return
-        opened = rec.setdefault("open", set())
-        if i in opened:
-            opened.discard(i)
+        tab = rec.get("tab") or ""
+        if tab == self._active_tab_id:
+            view = self.chat_display
+        elif self._tab_by_id(tab) is not None:
+            view = self._chat_view(tab)
         else:
-            opened.add(i)
-        self._tu_repaint_box(rid)
+            return
+        hit = self._tu_find(rid, view)
+        if hit is None:
+            return
+        sb = view.verticalScrollBar()
+        keep = sb.value()
+        cur = QTextCursor(view.document())
+        cur.setPosition(hit[1])
+        cur.setPosition(hit[2], QTextCursor.MoveMode.KeepAnchor)
+        cur.insertHtml(self._tu_link_html(rid, hide=hide))
+        sb.setValue(keep)
 
     @staticmethod
     def _tu_for_save(rec):
@@ -14125,62 +14133,6 @@ enabled = true
         out["lines"] = [(ts, kind, "" if str(kind).startswith("thought") else text)
                         for ts, kind, text in (rec.get("lines") or [])]
         return out
-
-    def _tu_box_html(self, rid):
-        import html as _h
-        rec = self._tu_store().get(rid) or {}
-        ink, label_c, card_bg, inset_bg, line = "#e6edf7", "#8296b1", "#111a2e", "#0b1220", "#1f2a44"
-        opened = rec.get("open") or set()
-        rows = []
-        for i, (ts, kind, text) in enumerate(list(rec.get("lines") or [])):
-            stamp = f'<span style="color:#64748b">[{_h.escape(str(ts))}]</span> '
-            if str(kind).startswith("thought"):
-                try:
-                    n = int(str(kind).split("/", 1)[1])
-                except (IndexError, ValueError):
-                    n = len(str(text))
-                lab = _h.escape(t("tu.think", n=n))
-                if not text:
-                    rows.append(f'{stamp}<span style="color:{label_c}">{lab}'
-                                f'{_h.escape(t("tu.think_gone"))}</span>')
-                    continue
-                verb = t("tu.hide") if i in opened else t("tu.view")
-                row = (f'{stamp}<a href="hoplita:tu-think:{int(rid)}:{i}" style="color:{self.TU_COLOR};'
-                       f'text-decoration:none;">{lab}&nbsp;&nbsp;·&nbsp;&nbsp;{_h.escape(verb)}</a>')
-                if i in opened:
-                    row += f'\n<span style="color:{ink}">{_h.escape(str(text))}</span>'
-                rows.append(row)
-                continue
-            col = "#f87171" if kind == "error" else ink
-            rows.append(f'{stamp}<span style="color:{col}">{_h.escape(str(text))}</span>')
-        return (f'<table width="100%" cellspacing="0" cellpadding="0" style="margin:6px 0 10px 0;">'
-                f'<tr><td width="3" bgcolor="{self.TU_COLOR}"></td>'
-                f'<td bgcolor="{card_bg}" style="padding:10px 14px;border:1px solid {line};'
-                f'border-left:none;">'
-                f'<p style="margin:0 0 6px 0;color:{label_c};font-size:12px;font-weight:600;">'
-                f'{_h.escape(t("tu.card_title", n=len(rows)).upper())}</p>'
-                f'<table width="100%" cellspacing="0" cellpadding="10"><tr><td bgcolor="{inset_bg}" '
-                f'style="border:1px solid {line};"><pre style="white-space:pre-wrap;margin:0;'
-                f'font-family:monospace;">' + "\n\n".join(rows) + '</pre></td></tr></table>'
-                '</td></tr></table>')
-
-    def _tu_box_end(self, span):
-        doc = self.chat_display.document()
-        cur = QTextCursor(doc)
-        cur.setPosition(span[1])
-        table = None
-        for _ in range(4):
-            if not cur.movePosition(QTextCursor.MoveOperation.NextBlock):
-                break
-            table = cur.currentTable()
-            if table is not None:
-                break
-        if table is None:
-            return span[1]
-        from PyQt6.QtGui import QTextTable
-        while isinstance(table.parentFrame(), QTextTable):
-            table = table.parentFrame()
-        return min(table.lastPosition() + 1, doc.characterCount() - 1)
 
     def _expand_tool_usage(self, rid, event=None):
         from PyQt6.QtWidgets import QToolTip
@@ -14190,31 +14142,24 @@ enabled = true
                 QToolTip.showText(event.globalPosition().toPoint(),
                                   t("tu.gone"), self.chat_display)
             return
-        span = self._tu_anchor_span(f"hoplita:tu:{rid}")
-        if span is None:
-            return
-        sb = self.chat_display.verticalScrollBar()
-        keep = sb.value()
-        cur = QTextCursor(self.chat_display.document())
-        cur.setPosition(span[0])
-        cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
-        cur.insertHtml(self._tu_link_html(rid, hide=True) + self._tu_box_html(rid))
-        sb.setValue(keep)
+        shown = getattr(self, "_tu_shown", 0)
+        if shown and shown != rid:
+            self._tu_flip(shown, hide=False)
+        self._tu_shown = rid
+        self._tu_flip(rid, hide=True)
+        self.turn_view.show_turn(rid, rec, self._tu_heading(rec))
+        self._curtain_set(self.turn_view, True)
 
     def _collapse_tool_usage(self, rid):
-        span = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
-        if span is None:
-            return
-        end = self._tu_box_end(span)
-        if end == span[1]:
-            return
-        sb = self.chat_display.verticalScrollBar()
-        keep = sb.value()
-        cur = QTextCursor(self.chat_display.document())
-        cur.setPosition(span[0])
-        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-        cur.insertHtml(self._tu_link_html(rid))
-        sb.setValue(keep)
+        if getattr(self, "_tu_shown", 0) == rid:
+            self._tu_shown = 0
+            self._curtain_set(self.turn_view, False)
+        self._tu_flip(rid, hide=False)
+
+    def _tu_close(self):
+        shown = getattr(self, "_tu_shown", 0)
+        if shown:
+            self._collapse_tool_usage(shown)
 
     def _tu_restore(self, sess, tab_id):
         store = self._tu_store()
@@ -14246,16 +14191,9 @@ enabled = true
                 if href.startswith(("hoplita:copy:", "hoplita:rate:",
                                     "hoplita:canvas:", "hoplita:qa:",
                                     "hoplita:qa-hide:", "hoplita:tu:",
-                                    "hoplita:tu-hide:", "hoplita:tu-think:"))
+                                    "hoplita:tu-hide:"))
                 else _Qt.CursorShape.IBeamCursor)
             return False
-        if href.startswith("hoplita:tu-think:"):
-            try:
-                _, rid_s, i_s = href.rsplit(":", 2)
-                self._tu_toggle_thought(int(rid_s), int(i_s))
-            except ValueError:
-                return False
-            return True
         if href.startswith("hoplita:tu-hide:"):
             try:
                 self._collapse_tool_usage(int(href.rsplit(":", 1)[1]))
