@@ -65,6 +65,7 @@ class _Pane(QWidget):
 class TurnView(QWidget):
 
     closed = pyqtSignal()
+    full_toggled = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,16 +86,20 @@ class TurnView(QWidget):
         self.heading = QLabel("")
         self.heading.setTextFormat(Qt.TextFormat.PlainText)
         self.heading.setStyleSheet(f"color:{INK}; font-size:13px; font-weight:600;")
+        self.full_button = QToolButton()
         self.close_button = QToolButton()
-        self.close_button.setText("✕")
-        self.close_button.setAutoRaise(True)
-        self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.close_button.setToolTip(t("tu.hide"))
-        self.close_button.setStyleSheet(
-            f"QToolButton {{ color:{LABEL}; border:none; font-size:13px; padding:2px 6px; }} "
-            f"QToolButton:hover {{ color:{INK}; }}")
-        self.close_button.clicked.connect(self.closed.emit)
+        for btn, glyph, tip, sig in ((self.full_button, "⤢", t("tu.full_tip"), self.full_toggled),
+                                     (self.close_button, "✕", t("tu.hide"), self.closed)):
+            btn.setText(glyph)
+            btn.setAutoRaise(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(tip)
+            btn.setStyleSheet(
+                f"QToolButton {{ color:{LABEL}; border:none; font-size:13px; padding:2px 6px; }} "
+                f"QToolButton:hover {{ color:{INK}; }}")
+            btn.clicked.connect(sig.emit)
         head.addWidget(self.heading, 1)
+        head.addWidget(self.full_button)
         head.addWidget(self.close_button)
         lay.addLayout(head)
         self.split = QSplitter(Qt.Orientation.Vertical)
@@ -114,6 +119,10 @@ class TurnView(QWidget):
 
     def rid(self):
         return self._rid
+
+    def set_full(self, on):
+        self.full_button.setText("⤡" if on else "⤢")
+        self.full_button.setToolTip(t("tu.panel_tip") if on else t("tu.full_tip"))
 
     def lines_shown(self):
         return self._shown

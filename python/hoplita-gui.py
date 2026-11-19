@@ -6419,8 +6419,10 @@ enabled = true
         from turn_view import TurnView
         self.turn_view = TurnView()
         self.turn_view.closed.connect(self._tu_close)
+        self.turn_view.full_toggled.connect(self._tu_full_toggle)
         self._curtain_add(self.turn_view, "turn/width", 520)
         self._tu_shown = 0
+        self._tu_full = False
         if self.dashboard is not None:
             self._curtain_add(self.dashboard, "canvas/width", 560)
             self._canvas_w = self._curtains[self.dashboard]["w"]
@@ -14148,18 +14150,57 @@ enabled = true
         self._tu_shown = rid
         self._tu_flip(rid, hide=True)
         self.turn_view.show_turn(rid, rec, self._tu_heading(rec))
-        self._curtain_set(self.turn_view, True)
+        if getattr(self, "_tu_full", False):
+            self.tabs.setCurrentIndex(self.tabs.indexOf(self.turn_view))
+        else:
+            self._curtain_set(self.turn_view, True)
 
     def _collapse_tool_usage(self, rid):
         if getattr(self, "_tu_shown", 0) == rid:
             self._tu_shown = 0
-            self._curtain_set(self.turn_view, False)
+            if getattr(self, "_tu_full", False):
+                self._tu_set_full(False, reopen=False)
+            else:
+                self._curtain_set(self.turn_view, False)
         self._tu_flip(rid, hide=False)
 
     def _tu_close(self):
         shown = getattr(self, "_tu_shown", 0)
         if shown:
             self._collapse_tool_usage(shown)
+
+    def _tu_full_toggle(self):
+        self._tu_set_full(not getattr(self, "_tu_full", False))
+
+    def _tu_set_full(self, on, reopen=True):
+        if on == getattr(self, "_tu_full", False):
+            return
+        self._tu_full = on
+        crec = self._curtains.get(self.turn_view)
+        if on:
+            if crec is not None:
+                if crec["anim"] is not None:
+                    crec["anim"].stop()
+                    crec["anim"] = None
+                crec["open"] = False
+                crec["grip"].hide()
+            idx = self.tabs.insertTab(1, self.turn_view, t("tu.tab"))
+            self.tabs.setTabIcon(idx, self._svg_icon("tab_tools", "#94a3b8", 18))
+            self.turn_view.setVisible(True)
+            self.tabs.setCurrentIndex(idx)
+        else:
+            idx = self.tabs.indexOf(self.turn_view)
+            if idx >= 0:
+                self.tabs.removeTab(idx)
+            self.turn_view.setParent(self._curtain_host)
+            if crec is not None:
+                crec["grip"].show()
+            self.tabs.setCurrentIndex(0)
+            if reopen:
+                self._curtain_set(self.turn_view, True)
+            else:
+                self.turn_view.hide()
+        self.turn_view.set_full(on)
 
     def _tu_restore(self, sess, tab_id):
         store = self._tu_store()
@@ -15975,7 +16016,7 @@ enabled = true
             _c = self._turn_ctx()
             _summary = self._compact_by_turn(hist, keep_recent)
             payload = {"summary": _summary,
-                       "messages": [m for m in self._flatten_pictures(hist)
+                       "messages": [m for m in self._flatten_pictures(hist, every_list=True)
                                     if isinstance(m.get("content"), str)],
                        "keep_recent": keep_recent,
                        "conv": [i for i in (
@@ -17269,15 +17310,16 @@ enabled = true
                 if isinstance(m, dict) and m.get("role")]
 
     @staticmethod
-    def _flatten_pictures(history):
+    def _flatten_pictures(history, every_list=False):
         out = []
         for m in (history or []):
             c = m.get("content") if isinstance(m, dict) else None
             if isinstance(c, list):
-                txt = " ".join(str(p_.get("text", "")) for p_ in c
-                               if isinstance(p_, dict) and p_.get("type") == "text").strip()
                 n = sum(1 for p_ in c if isinstance(p_, dict) and "image" in str(p_.get("type", "")))
-                m = {**m, "content": (txt + (f"\n[{n} picture(s) shown to the model]" if n else "")).strip()}
+                if n or every_list:
+                    txt = " ".join(str(p_.get("text", "")) for p_ in c
+                                   if isinstance(p_, dict) and p_.get("type") == "text").strip()
+                    m = {**m, "content": (txt + (f"\n[{n} picture(s) shown to the model]" if n else "")).strip()}
             out.append(m)
         return out
 
