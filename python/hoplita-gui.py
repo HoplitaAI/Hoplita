@@ -13991,7 +13991,7 @@ enabled = true
         self._tu_seq = max(getattr(self, "_tu_seq", 0), int(time.time() * 1000)) + 1
         rid = self._tu_seq
         store[rid] = {"tab": tab_id, "t0": time.time(), "lines": [], "tools": 0,
-                      "errors": 0, "done": False, "secs": 0.0}
+                      "errors": 0, "done": False, "secs": 0.0, "painted": False}
         for old in sorted(store)[:-300]:
             store.pop(old, None)
         self._tls.tu_rid = rid
@@ -14032,58 +14032,70 @@ enabled = true
                 f'&nbsp;&nbsp;·&nbsp;&nbsp;{_h.escape(t(key))}</a>')
 
     def _tu_anchor_span(self, href, view=None):
-        start = end = None
-        blk = (view or self.chat_display).document().begin()
+        hit = self._tu_find_run({href: href}, view)
+        return None if hit is None else (hit[1], hit[2])
+
+    def _tu_find(self, rid, view=None):
+        return self._tu_find_run({f"hoplita:tu:{int(rid)}": "tu",
+                                  f"hoplita:tu-hide:{int(rid)}": "tu-hide"}, view)
+
+    def _tu_find_run(self, hrefs, view=None):
+        blk = (view or self.chat_display).document().lastBlock()
         while blk.isValid():
             it = blk.begin()
-            s0 = e0 = None
+            s0 = e0 = val = None
             while not it.atEnd():
                 frag = it.fragment()
-                if frag.isValid() and frag.charFormat().anchorHref() == href:
-                    if s0 is None:
-                        s0 = frag.position()
-                    e0 = frag.position() + frag.length()
+                if frag.isValid():
+                    v = hrefs.get(frag.charFormat().anchorHref())
+                    if v is not None:
+                        if s0 is None:
+                            s0, val = frag.position(), v
+                        e0 = frag.position() + frag.length()
                 it += 1
             if s0 is not None:
-                start, end = s0, e0
-            blk = blk.next()
-        return None if start is None else (start, end)
+                return (val, s0, e0)
+            blk = blk.previous()
+        return None
 
     def _paint_tool_usage(self, rid, tab_id):
         rec = self._tu_store().get(rid)
         if rec is None:
             return
+        painted = rec.get("painted", True)
         if tab_id == self._active_tab_id:
             sb = self.chat_display.verticalScrollBar()
             keep, at_bottom = sb.value(), sb.value() >= sb.maximum() - 2
-            if self._tu_repaint_box(rid):
+            hit = self._tu_find(rid) if painted else None
+            if hit is not None and hit[0] == "tu-hide":
+                self._tu_repaint_box(rid, hit[1:])
                 return
-            span = self._tu_anchor_span(f"hoplita:tu:{rid}")
-            if span is not None:
+            if hit is not None:
                 cur = QTextCursor(self.chat_display.document())
-                cur.setPosition(span[0])
-                cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
+                cur.setPosition(hit[1])
+                cur.setPosition(hit[2], QTextCursor.MoveMode.KeepAnchor)
                 cur.insertHtml(self._tu_link_html(rid))
                 sb.setValue(sb.maximum() if at_bottom else keep)
                 return
         else:
             view = self._chat_view(tab_id)
-            for verb in ("tu-hide", "tu"):
-                span = self._tu_anchor_span(f"hoplita:{verb}:{rid}", view)
-                if span is not None:
-                    cur = QTextCursor(view.document())
-                    cur.setPosition(span[0])
-                    cur.setPosition(span[1], QTextCursor.MoveMode.KeepAnchor)
-                    cur.insertHtml(self._tu_link_html(rid, hide=(verb == "tu-hide")))
-                    return
+            hit = self._tu_find(rid, view) if painted else None
+            if hit is not None:
+                cur = QTextCursor(view.document())
+                cur.setPosition(hit[1])
+                cur.setPosition(hit[2], QTextCursor.MoveMode.KeepAnchor)
+                cur.insertHtml(self._tu_link_html(rid, hide=(hit[0] == "tu-hide")))
+                return
+        rec["painted"] = True
         ts = datetime.now().strftime("%H:%M:%S")
         self._append_html_to_tab(tab_id, (
             f'<span style="color:#64748b">[{ts}]</span> '
             f'<span style="color:#22d3ee;font-weight:bold">{t("label.system")}:</span> '
             + self._tu_link_html(rid) + "<br>"))
 
-    def _tu_repaint_box(self, rid):
-        hide = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
+    def _tu_repaint_box(self, rid, hide=None):
+        if hide is None:
+            hide = self._tu_anchor_span(f"hoplita:tu-hide:{rid}")
         if hide is None:
             return False
         sb = self.chat_display.verticalScrollBar()
