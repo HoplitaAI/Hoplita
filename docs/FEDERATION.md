@@ -61,7 +61,7 @@ the chat…*
 2. Register. Chat: «register me in the federation as `alice`, email
    `alice@example.com`, server `https://hoplita.net`, invitation code
    `ABC123`» (`fed_register`). Leave the code out if the server is open.
-   - Your handle is a plain lowercase name, for example `alice`.
+   - Your handle is a plain lowercase name, for example `alice`. Typed with capitals, it is used in lower case: that is the one name the server and your contacts know.
    - Two key pairs are generated on this machine. Only the public keys go to
      the server.
    - There is no password: you log in by proving you hold the private key.

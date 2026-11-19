@@ -1216,14 +1216,15 @@ def _open_grant(owner_sign_pub, grant, folder_id, peer=None, owner=None):
         return None
     if payload.get("typ") != "share" or payload.get("folder_id") != folder_id:
         return None
-    if peer is not None and payload.get("peer") != peer:
+    if peer is not None and _h(payload.get("peer")) != _h(peer):
         return None
-    if owner is not None and payload.get("owner") != owner:
+    if owner is not None and _h(payload.get("owner")) != _h(owner):
         return None
     return payload
 
 
 def _pin_contact(st, handle, pub, attestation=""):
+    handle = _h(handle)
     try:
         fp = crypto.fingerprint(pub)
     except Exception:
@@ -1254,6 +1255,7 @@ def _attest_contact_now(st, server_url, token, handle, pub, sign_pub_hint=""):
 
 
 def _peer_sign_pub(st, server_url, token, handle):
+    handle = _h(handle)
     entry = (st.data.get("pinned_keys") or {}).get(handle) or {}
     payload = _open_contact_att(st, handle, entry.get("att") or "")
     if payload and payload.get("peer_sign_pub"):
@@ -1266,6 +1268,7 @@ def _peer_sign_pub(st, server_url, token, handle):
 
 
 def _trusted_pub(server_url, token, handle):
+    handle = _h(handle)
     try:
         kr = fed.server_get_key(server_url, token, handle)
     except fed.FedServerError as e:
@@ -1698,6 +1701,7 @@ def _with_relogin(fn):
 
 
 def tool_fed_add_contact(handle, trust_level="accept"):
+    handle = _h(handle)
     try:
         st, server_url, token = _require_session()
     except Exception as e:
@@ -1728,6 +1732,7 @@ def tool_fed_add_contact(handle, trust_level="accept"):
 
 
 def tool_fed_accept_contact(handle, trust_level=None):
+    handle = _h(handle)
     try:
         st, server_url, token = _require_session()
     except Exception as e:
@@ -2655,6 +2660,7 @@ def tool_fed_ask_agent(handle, message, max_iterations=None, device="", tab="",
 
 
 def tool_fed_remove_contact(handle):
+    handle = _h(handle)
     try:
         st, server_url, token = _require_session()
     except Exception as e:
@@ -2755,13 +2761,31 @@ def tool_fed_leave(force_local=False):
 import hashlib as _hashlib
 
 
+def _h(handle):
+    return (handle or "").strip().lower()
+
+
 def _folder_id_for(handle, folder_name):
-    raw = f"{handle}:{folder_name}".encode()
+    raw = f"{_h(handle)}:{folder_name}".encode()
+    return _hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _legacy_id(kind, row, owner, name, st):
+    if row.get("role") == "owner":
+        typed = st.data.get("handle_typed") or ""
+    else:
+        try:
+            typed = ((_json.loads(row.get("grant") or "{}") or {}).get("payload") or {}).get("owner") or ""
+        except Exception:
+            typed = ""
+    if not typed or typed == owner:
+        return None
+    raw = (f"{typed}:{name}" if kind == "folder" else f"{typed}:project:{name}").encode()
     return _hashlib.sha256(raw).hexdigest()[:16]
 
 
 def _project_id_for(handle, project_name):
-    raw = f"{handle}:project:{project_name}".encode()
+    raw = f"{_h(handle)}:project:{project_name}".encode()
     return _hashlib.sha256(raw).hexdigest()[:16]
 
 def tool_fed_list_incoming_projects():
@@ -2813,6 +2837,7 @@ def tool_fed_list_shared_projects():
 
 
 def tool_fed_accept_project(project_name=None, handle=None):
+    handle = _h(handle) or None
     todo = _todo()
     if todo is None:
         return {"error": "TODO/projects not available in this session."}
@@ -2879,6 +2904,7 @@ def _forget_pushed(kind, name, peer=None):
 
 
 def tool_fed_share_project(project_name, handle):
+    handle = _h(handle)
     if _is_local_only(project_name):
         return _local_only_refusal(project_name)
     _forget_pushed("project", project_name, handle)
@@ -2940,6 +2966,7 @@ def tool_fed_share_project(project_name, handle):
 
 
 def tool_fed_share_folder(handle, folder_name):
+    handle = _h(handle)
     if _is_local_only(folder_name):
         return _local_only_refusal(folder_name)
     _forget_pushed("folder", folder_name, handle)
@@ -3016,6 +3043,7 @@ def _name_taken(kind, name, owner):
 
 
 def tool_fed_accept_folder(handle, folder_name=None, folder_id=None):
+    handle = _h(handle)
     try:
         _, server_url, token = _require_session()
     except Exception as e:
@@ -3244,9 +3272,11 @@ def _granted_peers(st, server_url, token, name, kind):
             if f.get("folder_name") == name
             and f.get("kind", "folder") == kind
             and ((f.get("role") == "owner"
-                  and f.get("folder_id") == id_for(my_handle, name))
+                  and f.get("folder_id") in (id_for(my_handle, name),
+                                             _legacy_id(kind, f, my_handle, name, st)))
                  or (f.get("role") != "owner" and f.get("status") == "accepted"
-                     and f.get("folder_id") == id_for(f.get("with"), name)))]
+                     and f.get("folder_id") in (id_for(f.get("with"), name),
+                                                _legacy_id(kind, f, f.get("with"), name, st))))]
     if not rows:
         return None, [], []
     folder_id = rows[0].get("folder_id")
@@ -3326,7 +3356,7 @@ def _share_links(st, server_url, token, kind):
         if row.get("kind", "folder") != kind or not (name and ph and fid):
             continue
         owner = my_handle if row.get("role") == "owner" else ph
-        if fid != id_for(owner, name):
+        if fid != id_for(owner, name) and fid != _legacy_id(kind, row, owner, name, st):
             continue
         link = out.setdefault(fid, {"name": name, "owner": owner,
                                     "senders": set(), "pending": False})
@@ -4065,10 +4095,12 @@ def _unshare(kind, name, peer=None):
 
 
 def tool_fed_unshare_folder(folder_name, peer=None):
+    peer = _h(peer) or None
     return _unshare("folder", folder_name, peer=peer)
 
 
 def tool_fed_unshare_project(project_name, peer=None):
+    peer = _h(peer) or None
     return _unshare("project", project_name, peer=peer)
 
 

@@ -37,10 +37,26 @@ def build_identity_store(base_storage_cls):
         def has_identity(self):
             return bool(self.data.get("private_key_b64"))
 
+        def load_data(self):
+            super().load_data()
+            self._canon_handle()
+
+        def _canon_handle(self):
+            h = self.data.get("handle")
+            if isinstance(h, str) and h != h.strip().lower():
+                self.data["handle_typed"] = h
+                self.data["handle"] = h.strip().lower()
+            pins = self.data.get("pinned_keys")
+            if isinstance(pins, dict) and any(k != (k or "").strip().lower() for k in pins):
+                low = {}
+                for k, v in pins.items():
+                    low.setdefault((k or "").strip().lower(), v)
+                self.data["pinned_keys"] = low
+
         def set_identity(self, priv_b64, pub_b64, handle, server_url):
             self.data["private_key_b64"] = priv_b64
             self.data["public_key_b64"] = pub_b64
-            self.data["handle"] = handle
+            self.data["handle"] = (handle or "").strip().lower()
             self.data["fingerprint"] = crypto.fingerprint(pub_b64)
             self.data["server_url"] = server_url
             self.save_data()
