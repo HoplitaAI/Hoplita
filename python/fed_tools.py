@@ -2871,9 +2871,10 @@ def tool_fed_accept_project(project_name=None, handle=None):
     }
 
 
-def _forget_pushed(kind, name, peer):
+def _forget_pushed(kind, name, peer=None):
     with _PUSHED_LOCK:
-        for k in [k for k in _PUSHED if k[:3] == (kind, name, peer)]:
+        for k in [k for k in _PUSHED
+                  if k[:2] == (kind, name) and (peer is None or k[2] == peer)]:
             _PUSHED.pop(k, None)
 
 
@@ -3387,6 +3388,29 @@ def _shared_item_rule(kind):
     return check
 
 
+def _shared_item_why(kind, o):
+    p = o.payload if isinstance(o.payload, dict) else {}
+    try:
+        links = _links_now(kind, fresh=True)
+    except Exception as e:
+        return f"the links could not be read: {e}"
+    link = links.get(o.rid)
+    name = p.get("name") or ""
+    if link is None:
+        return (f"no link here for the {kind} it names ('{name}', id {o.rid}): "
+                f"not shared with me, withdrawn, or shared under another name")
+    if name != link["name"]:
+        return (f"it names '{name}' but the link with that id is '{link['name']}'")
+    if link["pending"]:
+        return (f"'{name}' is an offer not accepted yet and the sender "
+                f"'{o.sender}' is not its owner ('{link['owner']}')")
+    members = ", ".join(sorted(link["senders"])) or "nobody"
+    return (f"'{o.sender}' may not send for '{name}': not its owner nor a "
+            f"member whose grant I can verify (accepted senders: {members}); "
+            f"a grant that does not open with the key I hold for them, or "
+            f"bound to another key of mine, leaves a link without senders")
+
+
 def _shared_dissolve_rule(kind):
     def check(o):
         p = o.payload if isinstance(o.payload, dict) else {}
@@ -3631,7 +3655,23 @@ def _fed_pull(kind, name, store):
     for _rn in ([name] if name else list(accepted)):
         if _rn and _rn in accepted:
             _fed_ensure_container(kind, _rn, store)
-    taken, acked, _waiting = inbound.open_batch(resp.get("envelopes", []), types)
+    refused = []
+    taken, acked, _waiting = inbound.open_batch(resp.get("envelopes", []), types,
+                                                refused=refused)
+    turned = []
+    for o, why in refused:
+        p = o.payload if isinstance(getattr(o, "payload", None), dict) else {}
+        if str(why).startswith("rule said") and getattr(o, "type", "") == cfg["etype"]:
+            why = _shared_item_why(kind, o)
+        turned.append({"from": getattr(o, "sender", ""), "name": p.get("name", ""),
+                       "why": why})
+        print(f"[FED] {kind} item from {getattr(o, 'sender', '')!r} for "
+              f"{p.get('name', '')!r} refused: {why}", file=_sys.stderr)
+    if turned:
+        with _REFUSED_LOCK:
+            for entry in turned:
+                _REFUSED_RECENT.append(dict(entry, kind=kind, when=_time.time()))
+            del _REFUSED_RECENT[:-50]
     deleted = 0
 
     for o in [o for o in taken if o.type == del_type]:
@@ -3680,14 +3720,22 @@ def _fed_pull(kind, name, store):
             pass
     if applied or deleted:
         _push_wake("content", {})
-    return {"ok": True, "applied": applied, "deleted": deleted,
-            "message": f"{applied} item(s) applied"
-                       + (f", {deleted} resource(s) deleted" if deleted else "") + "."}
+    res = {"ok": True, "applied": applied, "deleted": deleted,
+           "message": f"{applied} item(s) applied"
+                      + (f", {deleted} resource(s) deleted" if deleted else "")
+                      + (f"; {len(turned)} refused (see refused)." if turned else ".")}
+    if turned:
+        res["refused"] = turned
+    if _waiting:
+        res["waiting"] = _waiting
+    return res
 
-def tool_fed_folder_push(folder_name):
+def tool_fed_folder_push(folder_name, resend=False):
     notes = _notes()
     if notes is None:
         return {"error": "Notes not available in this session."}
+    if resend:
+        _forget_pushed("folder", folder_name)
     return _fed_push("folder", folder_name, notes)
 
 
@@ -4051,10 +4099,13 @@ def _boards_along(res, fn):
     return res
 
 
-def tool_fed_project_push(project_name):
+def tool_fed_project_push(project_name, resend=False):
     todo = _todo()
     if todo is None:
         return {"error": "TODO/projects not available in this session."}
+    if resend:
+        _forget_pushed("project", project_name)
+        _forget_pushed("whiteboard", project_name)
     return _boards_along(_fed_push("project", project_name, todo),
                          lambda st: _fed_push("whiteboard", project_name, st))
 
@@ -4072,6 +4123,8 @@ _sync_thread = None
 _sync_stop = None
 _sync_interval = 15
 _sync_last_status = {"running": False, "last_run": None, "folders": 0, "errors": []}
+_REFUSED_RECENT = []
+_REFUSED_LOCK = _threading.Lock()
 _SYNC_PARACHUTE_S = 300
 _SYNC_DOWN_S = 60
 _sync_wake = _threading.Event()
@@ -5212,6 +5265,8 @@ def tool_fed_sync_status():
     s["thread_alive"] = bool(_sync_thread and _sync_thread.is_alive())
     if s.get("last_run"):
         s["seconds_since_last_run"] = round(_time.time() - s["last_run"], 1)
+    with _REFUSED_LOCK:
+        s["refused_recent"] = list(_REFUSED_RECENT)
     return s
 
 
@@ -5816,7 +5871,7 @@ FED_TOOLS = {
                 "encrypted. Use it when you want the other party to receive your "
                 "notes from that folder. The folder must already be shared and "
                 "accepted.",
-        "fn": lambda a: tool_fed_folder_push(a["folder_name"])},
+        "fn": lambda a: tool_fed_folder_push(a["folder_name"], bool(a.get("resend", False)))},
     "fed_folder_pull": {
         "desc": "Sync INWARD: collect the notes shared with you in folders and "
                 "save them into your categories. If an arriving note collides "
@@ -5826,7 +5881,7 @@ FED_TOOLS = {
                 "to collect only that folder.",
         "fn": lambda a: tool_fed_folder_pull(a.get("folder_name"))},
     "fed_sync_status": {
-        "desc": "Show the status of the automatic folder synchronization engine "
+        "desc": "Show the status of the automatic folder synchronization engine  It also lists refused_recent: the envelopes the pulls turned away lately, with sender, folder and reason."
                 "(which runs in the background keeping your shared folders "
                 "alive): whether it's active, when the last pass was, and how "
                 "many folders it syncs. The sync is automatic, no need to launch "
@@ -5838,7 +5893,7 @@ FED_TOOLS = {
                 "Appointments are NOT sent (the calendar is personal, goes "
                 "separately). The project must be shared and accepted. Normally "
                 "the automatic sync already does it.",
-        "fn": lambda a: tool_fed_project_push(a["project_name"])},
+        "fn": lambda a: tool_fed_project_push(a["project_name"], bool(a.get("resend", False)))},
     "fed_project_pull": {
         "desc": "Sync INWARD the TASKS shared with you in projects, saving them "
                 "in your task list with their progress. If an arriving task "
@@ -6227,6 +6282,9 @@ FED_TOOL_PARAMS = {
         "properties": {
             "folder_name": {"type": "string", "description": "The name of the "
                             "folder (category) whose notes you want to send."},
+            "resend": {"type": "boolean", "description": "true sends every note "
+                       "again, forgetting what the members were recorded as "
+                       "having: for a note the other side never got."},
         },
         "required": ["folder_name"]},
     "fed_folder_pull": {
@@ -6240,6 +6298,9 @@ FED_TOOL_PARAMS = {
         "properties": {
             "project_name": {"type": "string", "description": "The name of the "
                              "project whose tasks you want to send."},
+            "resend": {"type": "boolean", "description": "true sends every task "
+                       "and board again, forgetting what the members were "
+                       "recorded as having."},
         },
         "required": ["project_name"]},
     "fed_project_pull": {

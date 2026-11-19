@@ -392,14 +392,14 @@ Local children run in **parallel**: three tasks to three children are three turn
 | `fed_list_appointment_bounces` | — | "No permission" bounces for appointments you sent. GUI internal use (consumed on read). |
 | `fed_list_folders` | — | Shared note folders you take part in, with status and with whom. |
 | `fed_folder_info` | `folder_name` | A folder's sharing card: the members if you own it, the owner if you are a member. |
-| `fed_folder_push` | `folder_name` | Syncs outward the notes of a shared folder. |
-| `fed_folder_pull` | `folder_name?` | Syncs inward the notes shared with you; a colliding note you modified is kept as `<title> (local)`. |
+| `fed_folder_push` | `folder_name` `resend?` | Syncs outward the notes of a shared folder: to each member, what it has not received yet. `resend: true` sends every note again, forgetting what the members were recorded as having, for a note the other side never got. |
+| `fed_folder_pull` | `folder_name?` | Syncs inward the notes shared with you; a colliding note you modified is kept as `<title> (local)`. What the door turned away is listed under `refused`, each with its sender, folder and reason; `waiting` counts what stays in the mailbox for a folder not accepted yet. |
 | `fed_unshare_folder` | `folder_name` `peer?` | Unlinks a shared folder (from either side); your local copy stays and stops syncing. |
 | `fed_delete_shared_folder` | `folder_name` | Owner only: deletes the shared folder for all members. |
 | `fed_is_shared_folder` | `folder_name` | Whether a note category is shared and accepted. GUI internal use. |
 | `fed_list_shared_projects` | — | Every shared project you take part in, yours and others'. |
 | `fed_project_info` | `project_name` | A project's sharing card: owner to members, or member to owner. |
-| `fed_project_push` | `project_name` | Syncs outward the tasks of a shared project, with their progress (appointments are not sent). |
+| `fed_project_push` | `project_name` `resend?` | Syncs outward the tasks of a shared project, with their progress (appointments are not sent). `resend: true` sends every task and board again. |
 | `fed_project_pull` | `project_name?` | Syncs inward the tasks shared with you; a colliding task you modified is kept as `(local)`. |
 | `fed_unshare_project` | `project_name` `peer?` | Unlinks a shared project; your local copy stays. |
 | `fed_delete_shared_project` | `project_name` | Owner only: deletes the shared project for all members. |
@@ -452,7 +452,7 @@ Co-working on code: `fed_share_code` sends the current branch as a sealed git bu
 | `fed_sync_push` | — | Uploads an encrypted snapshot of your data sealed to your own key (the server cannot read it). Answers `needs_pull` when the server has a newer one. |
 | `fed_sync_pull` | — | Downloads your snapshot and merges it into this device (newest wins, per item). |
 | `fed_sync_breakdown` | — | What your device snapshot weighs, store by store (rows and bytes, heaviest first, plus the 12 heaviest rows). |
-| `fed_sync_status` | — | Status of the background sync engine: active or not, last pass, how many folders. |
+| `fed_sync_status` | — | Status of the background sync engine: active or not, last pass, how many folders; and `refused_recent`, the envelopes its pulls turned away lately, each with sender, folder and reason. |
 
 The `*_guarded` tools are the way to write to **shared** folders and projects: without them you overwrite the other side's edit and a deletion never propagates.
 
