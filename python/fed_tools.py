@@ -2963,8 +2963,15 @@ def tool_fed_share_folder(handle, folder_name):
             try:
                 fed.server_grant_folder(server_url, token, folder_id, handle,
                                         grant)
-            except fed.FedServerError:
-                pass
+            except fed.FedServerError as e2:
+                return {"error": f"'{folder_name}' is already shared with "
+                                 f"'{handle}', but its grant could not be "
+                                 f"signed again: {e2}"}
+            return {"ok": True, "folder_name": folder_name, "folder_id": folder_id,
+                    "shared_with": handle, "already": True,
+                    "message": f"Folder '{folder_name}' was already shared "
+                               f"with '{handle}'; its grant has been signed "
+                               f"again."}
         return {"error": f"Could not share the folder: {e}"}
     _skills_flag = False
     try:
