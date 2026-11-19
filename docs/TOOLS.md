@@ -54,7 +54,7 @@ Reference for the **237 built-in tools** the LLM can call. The list is extracted
 | `code_definition` | `path` `symbol` `project_path?` | Where a symbol is **defined**, semantically; resolves aliased imports back to the original. Needs a language server and says so when there is none. |
 | `code_diagnostics` | `path` `content?` | What the language server reports as wrong in a file right now, including unsaved edits passed as `content`. Answers `available: false` with a reason when there is no server. Unlike `code_lint`, which reads from disk. |
 | `code_lint` | `path` | Real diagnostics from disk: type errors (pyright), unused imports (ruff), static analysis. |
-| `code_apply_patch` | `path` `changes` | Applies several edits atomically: if one fails, none is applied. Creates a file when `old` is empty. In a git repository it takes a checkpoint first. |
+| `code_apply_patch` | `path` `changes` | Applies several exact-match edits atomically: each `old` is replaced by `new`, and if one fails none is applied. An `old` must occur exactly once; for identical copies, `expected: N` replaces all N and refuses any other count. Creates a file when `old` is empty. In a git repository it takes a checkpoint first. |
 | `code_write_file` | `path` `content` | Writes a whole file, taking a checkpoint first so it can be undone. For surgical edits use `code_apply_patch`. |
 | `code_undo` | `path?` `steps?` | Undoes the last edit(s) made with `code_apply_patch` / `code_write_file` from the checkpoint taken before each; files the patch created are removed, changes the user made meanwhile are left alone. |
 | `code_checkpoints` | `path?` | Lists the undo points recorded in this session for a project, newest first. |

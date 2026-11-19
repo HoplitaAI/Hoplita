@@ -8762,10 +8762,17 @@ def _code_apply_patch(path, changes):
             content = f.read()
     except Exception as e:
         return {"error": f"Cannot read: {e}"}
+    counts = []
     for i, ch in enumerate(changes):
         old = ch.get("old", "")
         if not old:
             return {"error": f"Change {i}: empty 'old'"}
+        want = ch.get("expected")
+        if want is None:
+            want = 1
+        if isinstance(want, bool) or not isinstance(want, int) or want < 1:
+            return {"error": f"Change {i}: 'expected' must be a whole number "
+                             f"of 1 or more, got {want!r}. Nothing was applied."}
         c = content.count(old)
         if c == 0:
             return {"error": f"Change {i}: not found: '{old[:60]}'. 'old' must "
@@ -8773,14 +8780,22 @@ def _code_apply_patch(path, changes):
                              "and blank lines included). Read the exact lines "
                              "with code_read_range first and copy them. Nothing "
                              "was applied."}
-        if c > 1:
+        if c != want and want == 1:
             return {"error": f"Change {i}: ambiguous ({c} matches): 'old' "
                              f"appears {c} times in the file. Add the lines "
-                             "before or after it so it matches exactly once. "
+                             "before or after it so it matches exactly once, "
+                             f"or set expected: {c} to change every copy. "
                              "Nothing was applied."}
+        if c != want:
+            return {"error": f"Change {i}: 'old' appears {c} times in the "
+                             f"file, expected {want}. Read the file again and "
+                             "say the count it has. Nothing was applied."}
+        counts.append(c)
     original = content
-    for ch in changes:
-        content = content.replace(ch["old"], ch.get("new", ""), 1)
+    replaced = 0
+    for ch, c in zip(changes, counts):
+        content = content.replace(ch["old"], ch.get("new", ""), c)
+        replaced += c
     cp = _git_checkpoint(root, os.path.basename(p))
     try:
         with open(p, "w", encoding="utf-8") as f:
@@ -8793,7 +8808,7 @@ def _code_apply_patch(path, changes):
         _CODE_EDITED.setdefault(root, set()).add(os.path.relpath(p, root))
     if cp:
         _checkpoint_push(root, cp, [os.path.relpath(p, root)], [])
-    return {"applied": len(changes), "path": p,
+    return {"applied": len(changes), "replaced": replaced, "path": p,
             "checkpoint": (cp or "")[:8], "undo": bool(cp)}
 
 
@@ -10730,7 +10745,7 @@ def register_tools():
         "code_search":            {"desc": "Search a LITERAL text (case-insensitive substring, NOT a regex) across the project, whatever its size: hits_total and files_total are exact, by_dir says where the hits are, and the hits come in PAGES grouped by function: `functions` (how many hits, the line span, the exact code_read_range that reads it whole), `results` (five lines per function). `next` is the call for the following page (cursor): call it until it is null, or narrow with path, file_pattern or a longer text. Read the function, not N lines around a hit. When the function cannot be told, the hit says so; the line may still sit inside one.",
                                    "fn": lambda a: tool_code_search(a.get("path", ""), a["query"], a.get("file_pattern"),
                                                                     per_scope=a.get("per_scope", 5), cursor=a.get("cursor"))},
-        "code_apply_patch":       {"desc": "Apply multiple edits atomically. If one fails, none are applied. Also creates new files if 'old' is empty. In a git repo it takes a checkpoint first, so code_undo can put it back.",
+        "code_apply_patch":       {"desc": "Apply multiple edits atomically: each change finds 'old' in the file and puts 'new' in its place. If one fails, none are applied. Each 'old' must occur exactly once; for identical copies, expected: N replaces all N and refuses any other count. Creates a new file when 'old' is empty. In a git repo it takes a checkpoint first, so code_undo can put it back.",
                                    "fn": lambda a: tool_code_apply_patch(a["path"], a["changes"])},
         "code_write_file":        {"desc": "Write a whole file at once, taking a checkpoint first so it can be undone. Use code_apply_patch for surgical edits — it validates what it replaces; this one is for creating a file or replacing it entirely.",
                                    "fn": lambda a: tool_code_write_file(a["path"], a["content"])},
@@ -11255,7 +11270,7 @@ def register_tool_params():
         "code_read_smart":        {"properties": {"path": {"type": "string"}, "search": {"type": "string"}}, "required": ["path"]},
         "code_read_range":        {"properties": {"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, "required": ["path", "start_line", "end_line"]},
         "code_search":            {"properties": {"path": {"type": "string", "description": "Directory to search — there is no sensible default (the daemon's cwd is HOPLITA itself). In code mode: the open project's path."}, "query": {"type": "string", "description": "LITERAL text, matched case-insensitively as a substring. Not a regex: metacharacters are searched as plain characters."}, "file_pattern": {"type": "string"}, "cursor": {"type": "string", "description": "The cursor of a page's `next`, for the following page of the same search."}}, "required": ["query", "path"]},
-        "code_apply_patch":       {"properties": {"path": {"type": "string"}, "changes": {"type": "array", "items": {"type": "object"}}}, "required": ["path", "changes"]},
+        "code_apply_patch":       {"properties": {"path": {"type": "string"}, "changes": {"type": "array", "items": {"type": "object", "properties": {"old": {"type": "string", "description": "The text to find, copied from the file byte for byte: indentation, quotes and blank lines included. Empty only to create a new file."}, "new": {"type": "string", "description": "What takes its place."}, "expected": {"type": "integer", "description": "How many times 'old' occurs in the file; every occurrence is replaced. Default 1. A count the file does not have applies nothing."}}, "required": ["old", "new"]}, "description": "Exact-match edits applied in order. Each 'old' must occur exactly once unless 'expected' says how many identical copies there are: when it occurs more than once, add the line before or after it so it matches once, or set 'expected' to change every copy."}}, "required": ["path", "changes"]},
         "code_write_file":        {"properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
         "code_undo":              {"properties": {"path": {"type": "string", "description": "Any path inside the project. Defaults to the current directory."}, "steps": {"type": "integer", "description": "How many edits to undo, newest first. Default 1."}}},
         "code_propose_verify":    {"properties": {"path": {"type": "string", "description": "Any path inside the project."}}},
