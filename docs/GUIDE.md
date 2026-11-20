@@ -161,7 +161,9 @@ The installer creates one desktop shortcut, **HOPLITA** (`HOPLITA.desktop` on
 Linux, `HOPLITA.app` on macOS, `HOPLITA.lnk` on Windows). It runs
 `hoplita_launch.py` with no terminal, which starts the MCP (the vault password is
 asked in a dialog) and then the GUI; an MCP that already answers is used as it is,
-and only the GUI opens. On Linux the MCP's log is `mcp.log` in the install folder,
+and only the GUI opens. On Linux the same entry also goes to
+`~/.local/share/applications`, so desktops that draw no icons on the desktop (GNOME)
+list it in the activities search, the app grid and the run dialog. The MCP's log is `mcp.log` in the install folder,
 and an update replaces the two shortcuts an earlier install made (MCP and GUI). On macOS the app goes to
 `~/Applications` — Spotlight (⌘ Space → HOPLITA) and Launchpad find it — with a link on
 the desktop; drag it to the Dock to keep it there. An older install's `.command` files

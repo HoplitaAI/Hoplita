@@ -1983,7 +1983,7 @@ class ChatAssistantWindow(QMainWindow):
         self._active_stream_live = False
         self._deferred_messages = []
         self.EXTRACT_EVERY_N = 10
-        self._resize_margin = 6
+        self._resize_margin = 10
         self._resize_edge = None
         self._is_max = False
 
@@ -13788,6 +13788,13 @@ enabled = true
         right = x >= r.width() - m
         top = y <= m
         bottom = y >= r.height() - m
+        c = self._GLOW_MARGIN + self._CORNER_RADIUS
+        if left or right:
+            top = top or y <= c
+            bottom = bottom or y >= r.height() - c
+        if top or bottom:
+            left = left or x <= c
+            right = right or x >= r.width() - c
         edge = None
         if top and left:
             edge = _Qt.Edge.TopEdge | _Qt.Edge.LeftEdge
@@ -20943,6 +20950,7 @@ def main():
         _mac_menu_name("HOPLITA")
     app = QApplication(sys.argv)
     app.setApplicationName("HOPLITA Chat Assistant")
+    app.setDesktopFileName("HOPLITA")
     from PyQt6.QtGui import QPalette as _QPal, QColor as _QCol
     _pal = app.palette()
     _pal.setColor(_QPal.ColorRole.PlaceholderText, _QCol("#a9bdd6"))

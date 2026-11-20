@@ -86,7 +86,10 @@ python3 install.py
 
 The installer puts one launcher on the desktop, **HOPLITA**: it starts the
 server (it asks for the vault password in a small window) and then the window.
-If the server is already running, it opens only the window.
+If the server is already running, it opens only the window. The same launcher
+is in the applications menu (`~/.local/share/applications`): on GNOME, which
+shows no icons on the desktop, open HOPLITA from the activities search or the
+app grid.
 
 If the canvas stays blank or the tray icon does not show, the system is missing
 the libraries Qt's web engine uses. `python3 install.py --system-libs`

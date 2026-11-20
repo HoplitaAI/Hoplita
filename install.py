@@ -113,9 +113,13 @@ _LINUX_DESKTOP = "HOPLITA.desktop"
 _LINUX_OLD = ("HOPLITA-MCP.desktop", "HOPLITA-GUI.desktop")
 
 
+def _linux_apps_dir():
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(base, "applications")
+
+
 def _make_linux_desktop(desk, prefix, py, pyw, mcp, gui, icon):
     created = []
-    path = os.path.join(desk, _LINUX_DESKTOP)
     launcher = os.path.join(prefix, "hoplita_launch.py")
     content = (
         "[Desktop Entry]\n"
@@ -125,19 +129,21 @@ def _make_linux_desktop(desk, prefix, py, pyw, mcp, gui, icon):
         f"Icon={icon if os.path.exists(icon) else 'applications-chat'}\n"
         f"Path={prefix}\n"
         "Terminal=false\nCategories=Utility;\n")
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.chmod(path, 0o755)
+    for d in (desk, _linux_apps_dir()):
+        path = os.path.join(d, _LINUX_DESKTOP)
         try:
-            subprocess.run(["gio", "set", path, "metadata::trusted", "true"],
-                           capture_output=True, timeout=5)
-        except Exception:
-            pass
-        created.append(path)
-    except Exception as e:
-        warn(f"could not create {_LINUX_DESKTOP}: {e}")
-        return created
+            os.makedirs(d, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.chmod(path, 0o755)
+            try:
+                subprocess.run(["gio", "set", path, "metadata::trusted", "true"],
+                               capture_output=True, timeout=5)
+            except Exception:
+                pass
+            created.append(path)
+        except Exception as e:
+            warn(f"could not create {path}: {e}")
     for old in _LINUX_OLD:
         p = os.path.join(desk, old)
         if os.path.exists(p) and _shortcut_is_ours(p, prefix):
@@ -620,6 +626,8 @@ def _shortcut_paths():
     out = [os.path.join(desk, n) for n in names]
     if IS_MAC:
         out.append(os.path.join(os.path.expanduser("~/Applications"), _MAC_APP))
+    if IS_LINUX:
+        out.append(os.path.join(_linux_apps_dir(), _LINUX_DESKTOP))
     return out
 
 
