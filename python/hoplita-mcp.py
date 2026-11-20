@@ -3762,6 +3762,10 @@ def _background_run_tool(name, arguments):
     tools = _allowed_tools()
     if name not in tools:
         return {"error": f"'{name}' is not available here"}
+    import fed_agent as _fa
+    _shape = _fa.args_shape_complaint(name, arguments, TOOL_PARAMS.get(name))
+    if _shape:
+        return _shape
     try:
         res = tools[name]["fn"](arguments if isinstance(arguments, dict) else {})
     except KeyError as e:
@@ -13421,7 +13425,10 @@ def call_tool(req: ToolCallReq):
             with _orchestration_ctx(OrchestrationCtx(
                     cancel=_turn_cancel.is_set if _turn_cancel is not None else None,
                     turn_id=(getattr(req, "turn_id", "") or "").strip())):
-                result = TOOLS[req.tool]["fn"](req.arguments)
+                import fed_agent as _fa
+                result = (_fa.args_shape_complaint(req.tool, req.arguments,
+                                                   TOOL_PARAMS.get(req.tool))
+                          or TOOLS[req.tool]["fn"](req.arguments))
         finally:
             hoplita_background.CURRENT.job = ""
             for k, v in _prev.items():

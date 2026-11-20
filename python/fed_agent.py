@@ -927,6 +927,49 @@ def args_complaint(name, arguments, exc, spec):
                     f"'it_takes'"}
 
 
+_JSON_KIND = {"array": list, "object": dict}
+
+
+def _kind_of(v):
+    if isinstance(v, bool):
+        return "boolean"
+    return {str: "string", int: "integer", float: "number", list: "array",
+            dict: "object", type(None): "null"}.get(type(v), type(v).__name__)
+
+
+def args_shape_complaint(name, arguments, spec):
+    props = (spec or {}).get("properties") or {}
+    if not isinstance(arguments, dict):
+        return None
+    for key, val in arguments.items():
+        decl = props.get(key) or {}
+        want = decl.get("type")
+        items = decl.get("items") or {}
+        if val is None or not (want == "object"
+                               or (want == "array" and items.get("type") in _JSON_KIND)):
+            continue
+        what = f"'{key}' must be an {want}"
+        if want == "array":
+            fields = list((items.get("properties") or {}).keys())
+            what += f" of {items['type']}s" + (f" with {', '.join(fields)}" if fields else "")
+        bad = None
+        if not isinstance(val, _JSON_KIND[want]):
+            bad = f"it came as a {_kind_of(val)}"
+            if isinstance(val, str) and val.strip()[:1] in ("[", "{"):
+                bad += " holding JSON text: send the value itself, not encoded as a string"
+        elif want == "array":
+            for i, it in enumerate(val):
+                if not isinstance(it, _JSON_KIND[items["type"]]):
+                    bad = f"item {i} came as a {_kind_of(it)}"
+                    break
+        if bad:
+            return {"error": f"bad arguments for '{name}': {what}; {bad}. "
+                             "Nothing was done.",
+                    "it_takes": {k: (v or {}).get("type") for k, v in props.items()},
+                    "hint": f"re-call {name} with '{key}' as a JSON {want}"}
+    return None
+
+
 def _unseen_pictures(tool_trace):
     pending = []
     for step in tool_trace or []:
@@ -1068,6 +1111,12 @@ def _execute_tool(name, arguments, consented=False):
             refusal = {"error": f"the person's consent could not be asked: {e}"}
         if refusal:
             return json.dumps(refusal, ensure_ascii=False)
+    try:
+        _shape = args_shape_complaint(name, arguments, (_get_tool_params() or {}).get(name))
+    except Exception:
+        _shape = None
+    if _shape:
+        return json.dumps(_shape, ensure_ascii=False)
     try:
         result = tools[name]["fn"](arguments)
         if isinstance(result, str):
