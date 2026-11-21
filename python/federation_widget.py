@@ -148,15 +148,68 @@ class _PermissionsDialog(QDialog):
         gl.addWidget(hint)
         lay.addWidget(box)
 
+        tbox = QGroupBox(t("fed.session_tools"))
+        tbox.setStyleSheet(box.styleSheet())
+        tl = QVBoxLayout(tbox)
+        _listed = (perms.get("sesiones") or {}).get("tools")
+        self._tools_listed = [x for x in _listed if x] if isinstance(_listed, list) else None
+        self.only_tools = QCheckBox(t("fed.session_tools_only"))
+        self.only_tools.setStyleSheet("QCheckBox { color:#e6edf7; font-weight:normal; }")
+        self.only_tools.setChecked(self._tools_listed is not None)
+        tl.addWidget(self.only_tools)
+        th = QLabel(t("fed.session_tools_hint"))
+        th.setWordWrap(True)
+        th.setStyleSheet("QLabel { color:#e6edf7; font-weight:normal; font-size:12px; }")
+        tl.addWidget(th)
+        from tools_firewall import ToolPicker
+        self.tools = ToolPicker(compact=True)
+        tl.addWidget(self.tools)
+        lay.addWidget(tbox, 1)
+        self._load_tools()
+        self.tools.setVisible(self.only_tools.isChecked())
+        self.only_tools.toggled.connect(self.tools.setVisible)
+        if self.only_tools.isChecked():
+            self.resize(max(self.width(), 640), 720)
+        self.only_tools.toggled.connect(
+            lambda on: on and self.resize(max(self.width(), 640), max(self.height(), 720)))
+
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Save |
                               QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
 
+    def _load_tools(self):
+        import requests as _rq
+        try:
+            url = self.parent()._mcp_url
+        except Exception:
+            url = "http://127.0.0.1:9077"
+        try:
+            r = _rq.get(f"{url}/firewall", timeout=5)
+            fw = r.json() if r.status_code == 200 else {}
+        except Exception:
+            fw = {}
+        allt = fw.get("all_tools") or {}
+        if isinstance(allt, list):
+            allt = {n: "" for n in allt}
+        allt = {k: v for k, v in allt.items() if k not in set(fw.get("blocked") or ())}
+        if not allt:
+            self.tools.set_tools({}, set())
+            self.tools.count.setText(t("tools.mcp_unavailable"))
+            return
+        self.tools.set_tools(allt, set(self._tools_listed or ()) & set(allt))
+
     def get_perms(self):
-        return {rt: {"level": self.LEVELS[c.currentIndex()]}
-                for rt, c in self._combos.items()}
+        out = {rt: {"level": self.LEVELS[c.currentIndex()]}
+               for rt, c in self._combos.items()}
+        if not self.only_tools.isChecked():
+            out["sesiones"]["tools"] = None
+        elif self.tools.has_catalog():
+            out["sesiones"]["tools"] = sorted(self.tools.enabled())
+        else:
+            out["sesiones"]["tools"] = list(self._tools_listed or [])
+        return out
 
 
 class _ChildPackDialog(QDialog):

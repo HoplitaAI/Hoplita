@@ -54,13 +54,15 @@ def _orchestrating(**kw):
     return _orchestration_ctx(**kw)
 
 
-def _session_tools_for():
+def _session_tools_for(peer=""):
     if _session_tools is None:
         return None
     try:
-        return _session_tools()
-    except Exception:
-        return None
+        return _session_tools(peer)
+    except Exception as e:
+        print(f"[SESSION-IN] the tools for {peer!r} could not be read: {e}",
+              file=sys.stderr)
+        return set()
 
 
 def _session_system_for(message, peer=""):
@@ -931,7 +933,7 @@ def handle_incoming_turn(env, get_trust, approver=None, local_sink=None):
             result = _run_turn(
                 user_message=message, max_iterations=max_iter,
                 system=_session_system_for(message, sender),
-                allowed_tools=_session_tools_for(),
+                allowed_tools=_session_tools_for(sender),
                 on_event=on_event, cancel=cancel_flag.is_set,
                 turn_id=session_id,
                 qa=_incoming_qa_mode(),

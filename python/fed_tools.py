@@ -1799,6 +1799,8 @@ def tool_fed_list_contacts():
         except Exception:
             _p = None
         c["verified"] = bool(_p and _p.get("verified"))
+        if _p and isinstance(_p.get("trust"), dict):
+            c["permissions"] = _p["trust"].get("permissions") or {}
     _ws_note = ""
     try:
         _s = fed.ws_state()
@@ -2167,6 +2169,7 @@ def _consume_envelope(envelope_id):
 
 
 def tool_fed_set_permissions(handle, resource_type, perms):
+    handle = _h(handle)
     try:
         st, server_url, token = _require_session()
     except Exception as e:
@@ -2185,6 +2188,11 @@ def tool_fed_set_permissions(handle, resource_type, perms):
     trust = _copy.deepcopy(trust)
     merged = dict((trust.setdefault("permissions", {})).get(resource_type) or {})
     merged.update(perms)
+    if "tools" in perms and merged.get("tools") is not None:
+        if not isinstance(merged["tools"], list):
+            return {"error": "tools must be a list of tool names, or null for "
+                             "everything the firewall allows. Nothing was changed."}
+        merged["tools"] = sorted({str(x) for x in merged["tools"] if x})
     trust["permissions"][resource_type] = merged
     if not _resign_trust(st, server_url, token, handle, trust):
         return {"error": f"Could not SIGN the new permissions for '{handle}' "
@@ -4354,6 +4362,27 @@ def get_contact_trust(handle):
     return trust.get("level") or "accept"
 
 
+def get_contact_tools(handle):
+    handle = _h(handle)
+    try:
+        st, server_url, token = _require_session()
+    except Exception:
+        return []
+    if handle and handle in (_h(st.data.get("owner")), _h(st.data.get("handle"))):
+        return None
+    try:
+        resp = fed.server_list_contacts(server_url, token)
+        trust = _signed_trust_of(st, server_url, token, resp.get("contacts", [])).get(handle)
+    except Exception:
+        return []
+    if trust is None:
+        return []
+    tools = ((trust.get("permissions") or {}).get("sesiones") or {}).get("tools")
+    if tools is None:
+        return None
+    return [str(x) for x in tools if x] if isinstance(tools, list) else []
+
+
 _session_thread = None
 _session_stop = None
 _session_interval = 1.5
@@ -5651,8 +5680,10 @@ FED_TOOLS = {
                 "type. Typical example (calendar): give someone permission to add "
                 "you appointments but only see that you're busy, not the details: "
                 "resource_type='calendar', perms={'can_add': true, 'visibility': "
-                "'busy'}. visibility can be 'none', 'busy' or 'full'. The "
-                "permissions merge with the existing ones.",
+                "'busy'}. visibility can be 'none', 'busy' or 'full'. The tools a "
+                "contact's turns may use on this machine: resource_type='sesiones', "
+                "perms={'tools': [tool names]}, or {'tools': null} for everything the "
+                "firewall allows. The permissions merge with the existing ones.",
         "fn": lambda a: tool_fed_set_permissions(a["handle"], a["resource_type"], a["perms"])},
     "fed_share_note": {
         "desc": "Share a REAL NOTE from your HOPLITA notes with a contact. You give "

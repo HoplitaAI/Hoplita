@@ -296,6 +296,15 @@ has one row per resource. Each row is set to **auto-accept**, **review** or
 Appointments are refused until you set their row. When **Remote sessions** is
 not set, the contact's trust level decides.
 
+Below the rows, **Tools for their sessions** says what a turn of theirs may
+use on your machine. Unticked, it may use everything your firewall allows.
+Ticked, only the tools picked in the list under it: their agent is not offered
+the rest, and one of the rest asked for by name does not run. Your firewall
+still has the last word, and a list never lets their turn start a plan or a
+council here, as a child's own list does not. The same list can be set by the model with
+`fed_set_permissions` (`resource_type` `sesiones`, `perms` `{"tools": [...]}`,
+or `{"tools": null}` to go back to the firewall's set).
+
 The permissions and the trust level are signed by you together with the
 contact's keys, and that signature is what HOPLITA reads. The server keeps a
 copy for your other machines; a change made there does not change what your

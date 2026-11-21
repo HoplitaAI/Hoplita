@@ -3368,6 +3368,17 @@ def _session_pack_tools():
     return _pack_tool_names(pack, terminal=True, may_orchestrate=True)
 
 
+def _session_tools(peer=""):
+    names = _session_pack_tools()
+    listed = fed_tools.get_contact_tools(peer) if peer else None
+    if listed is None:
+        return names
+    allowed = set(_allowed_tools())
+    own = (set(listed) & allowed) - _SUBAGENT_BANNED_TOOLS
+    own |= _ALWAYS_IN_PROFILE & allowed
+    return own if names is None else set(names) & own
+
+
 def _build_session_system(message, own=False):
     try:
         parts = [_t("prompts.session_agent"),
@@ -18154,7 +18165,7 @@ if __name__ == "__main__":
                     json.dumps(TOOLS[name]["fn"](args), ensure_ascii=False)
                     if name in TOOLS else json.dumps({"error": f"tool '{name}' does not exist"})),
                 session_system_getter=_build_session_system,
-                session_tools_getter=_session_pack_tools,
+                session_tools_getter=_session_tools,
                 orchestration_ctx=lambda **kw: _orchestration_ctx(
                     OrchestrationCtx(remote=True, **kw)))
             fed_session.set_mirror_sink(

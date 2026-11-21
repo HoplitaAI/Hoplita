@@ -366,7 +366,7 @@ Local children run in **parallel**: three tasks to three children are three turn
 | `fed_accept_contact` | `handle` `trust_level?` | Accepts an incoming contact request. |
 | `fed_list_contacts` | — | Lists your contacts: status, trust level and whether they are online. |
 | `fed_remove_contact` | `handle` | Removes a contact on both sides; pending sends are dropped. Irreversible. |
-| `fed_set_permissions` | `handle` `resource_type` `perms` | Granular permissions for a contact over a resource type (e.g. calendar: may add appointments, sees only busy/free). |
+| `fed_set_permissions` | `handle` `resource_type` `perms` | Granular permissions for a contact over a resource type (e.g. calendar: may add appointments, sees only busy/free). For `sesiones`, `tools` is the list of tools that contact's turns may use on this machine, or null for everything the firewall allows. |
 
 
 ## 📤 Federation: sharing
