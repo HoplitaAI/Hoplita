@@ -3774,7 +3774,7 @@ def _background_run_tool(name, arguments):
     if name not in tools:
         return {"error": f"'{name}' is not available here"}
     import fed_agent as _fa
-    _shape = _fa.args_shape_complaint(name, arguments, TOOL_PARAMS.get(name))
+    _shape = _fa.args_contract_complaint(name, arguments, TOOL_PARAMS.get(name))
     if _shape:
         return _shape
     try:
@@ -9633,6 +9633,15 @@ def tool_call_api(url, method="GET", headers=None, body=None, auth_type=None,
                 return {"status": r.status_code, "data": resp_data}
             except ValueError:
                 pass
+        _ctl = ct.lower()
+        if (any(_ctl.startswith(x) for x in ("image/", "audio/", "video/", "font/",
+                                              "application/octet", "application/pdf",
+                                              "application/zip"))
+                or b"\x00" in r.content[:4096]):
+            return {"status": r.status_code, "content_type": ct,
+                    "size": len(r.content), "binary": True,
+                    "note": "binary body, not shown: pass save_response with a "
+                            "path to write it to a file"}
         return {"status": r.status_code, "body": r.text[:5000], "content_type": ct}
 
     except requests.exceptions.Timeout:
@@ -11084,7 +11093,7 @@ def register_tool_params():
         "run_command":            {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait. Raise it well above the default for installs, builds, migrations and test suites — 300 or more."}}, "required": ["command"]},
         "exec_command":           {"properties": {"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer", "description": "Seconds to wait (default 600). A cut returns exit_code -1 with the partial output and the file that holds it."}}, "required": ["command"]},
         "background_run":         {"properties": {"tool": {"type": "string", "description": "the tool's exact name (any tool you have, including the shelved ones)"}, "arguments": {"type": "object", "description": "its arguments", "additionalProperties": True}, "label": {"type": "string", "description": "a few words that say what this job is for; they come back with its result"}}, "required": ["tool"]},
-        "background_watch":       {"properties": {"label": {"type": "string", "description": "what this watch is for"}, "every_s": {"type": "integer", "description": "seconds between probes (minimum 5, default 30)"}, "file": {"type": "string", "description": "a path: fires when it appears, disappears or changes"}, "command": {"type": "string", "description": "a shell command: fires when its exit code or output changes"}, "tool": {"type": "string", "description": "a tool to call each round: fires when its result changes"}, "arguments": {"type": "object", "description": "the tool's arguments", "additionalProperties": True}, "wake": {"type": "string", "enum": ["change", "always"], "description": "change (default) = only when the probe's answer differs from the last round; always = every round"}, "until_s": {"type": "integer", "description": "life limit in seconds (0 = none)"}, "job_id": {"type": "string", "description": "an existing watch to re-pace or re-label instead of starting one"}}, "required": []},
+        "background_watch":       {"properties": {"label": {"type": "string", "description": "what this watch is for"}, "every_s": {"type": "integer", "description": "seconds between probes (minimum 5, default 30)"}, "file": {"type": "string", "description": "a path: fires when it appears, disappears or changes"}, "command": {"type": "string", "description": "a shell command: fires when its exit code or output changes"}, "cwd": {"type": "string", "description": "the directory the command runs in"}, "tool": {"type": "string", "description": "a tool to call each round: fires when its result changes"}, "arguments": {"type": "object", "description": "the tool's arguments", "additionalProperties": True}, "wake": {"type": "string", "enum": ["change", "always"], "description": "change (default) = only when the probe's answer differs from the last round; always = every round"}, "until_s": {"type": "integer", "description": "life limit in seconds (0 = none)"}, "job_id": {"type": "string", "description": "an existing watch to re-pace or re-label instead of starting one"}}, "required": []},
         "background_stop":        {"properties": {"job_id": {"type": "string", "description": "the job to end (from background_run, background_watch or background_list)"}}, "required": ["job_id"]},
         "background_list":        {"properties": {"all": {"type": "boolean", "description": "true = every conversation's jobs, not only this one's"}}, "required": []},
         "render_html":            {"properties": {"html": {"type": "string", "description": "HTML/CSS/JS/SVG to render. Chart.js 4 available; D3/Plotly/three.js via CDN. <body> fragment or complete document."}, "append": {"type": "boolean", "description": "true = ADD this chunk to what is already on the canvas. Use it to build a LARGE document in 2-4 calls: a single huge call gets truncated by the output token cap and the server rejects it."}}, "required": ["html"]},
@@ -11284,7 +11293,7 @@ def register_tool_params():
         "code_symbols":           {"properties": {"query": {"type": "string", "description": "The name to locate. Empty = the project's shape."}, "path": {"type": "string", "description": "Project root. Defaults to the open project."}, "limit": {"type": "integer"}}, "required": []},
         "code_read_smart":        {"properties": {"path": {"type": "string"}, "search": {"type": "string"}}, "required": ["path"]},
         "code_read_range":        {"properties": {"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, "required": ["path", "start_line", "end_line"]},
-        "code_search":            {"properties": {"path": {"type": "string", "description": "Directory to search — there is no sensible default (the daemon's cwd is HOPLITA itself). In code mode: the open project's path."}, "query": {"type": "string", "description": "LITERAL text, matched case-insensitively as a substring. Not a regex: metacharacters are searched as plain characters."}, "file_pattern": {"type": "string"}, "cursor": {"type": "string", "description": "The cursor of a page's `next`, for the following page of the same search."}}, "required": ["query", "path"]},
+        "code_search":            {"properties": {"path": {"type": "string", "description": "Directory to search — there is no sensible default (the daemon's cwd is HOPLITA itself). In code mode: the open project's path."}, "query": {"type": "string", "description": "LITERAL text, matched case-insensitively as a substring. Not a regex: metacharacters are searched as plain characters."}, "file_pattern": {"type": "string"}, "cursor": {"type": "string", "description": "The cursor of a page's `next`, for the following page of the same search."}, "per_scope": {"type": "integer", "description": "Lines kept per function in `results` (default 5; 0 = every line)."}}, "required": ["query", "path"]},
         "code_apply_patch":       {"properties": {"path": {"type": "string"}, "changes": {"type": "array", "items": {"type": "object", "properties": {"old": {"type": "string", "description": "The text to find, copied from the file byte for byte: indentation, quotes and blank lines included. Empty only to create a new file."}, "new": {"type": "string", "description": "What takes its place."}, "expected": {"type": "integer", "description": "How many times 'old' occurs in the file; every occurrence is replaced. Default 1. A count the file does not have applies nothing."}}, "required": ["old", "new"]}, "description": "Exact-match edits applied in order. Each 'old' must occur exactly once unless 'expected' says how many identical copies there are: when it occurs more than once, add the line before or after it so it matches once, or set 'expected' to change every copy."}}, "required": ["path", "changes"]},
         "code_write_file":        {"properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
         "code_undo":              {"properties": {"path": {"type": "string", "description": "Any path inside the project. Defaults to the current directory."}, "steps": {"type": "integer", "description": "How many edits to undo, newest first. Default 1."}}},
@@ -11394,7 +11403,7 @@ def register_tool_params():
         "chat_session_save":   {"properties": {"session": {"type": "object"}}, "required": ["session"]},
         "chat_session_list":   {"properties": {}},
         "chat_session_load":   {"properties": {"uuid": {"type": "string"}}, "required": ["uuid"]},
-        "chat_session_delete": {"properties": {"uuid": {"type": "string"}}, "required": ["uuid"]},
+        "chat_session_delete": {"properties": {"uuid": {"type": "string"}, "conv_ids": {"type": "array", "items": {"type": "string"}, "description": "other ids the same conversation is kept under, dropped with it"}}, "required": ["uuid"]},
         "chat_session_star":   {"properties": {"uuid": {"type": "string"}, "starred": {"type": "boolean", "description": "true to star (the default), false to unstar."}}, "required": ["uuid"]},
         "chat_session_prune":  {"properties": {"from": {"type": "string", "description": "YYYY-MM-DD, first day included; omit for since the first one."}, "to": {"type": "string", "description": "YYYY-MM-DD, last day included."}, "keep": {"type": "array", "items": {"type": "string"}, "description": "uuids to leave alone."}, "dry_run": {"type": "boolean"}}, "required": []},
         "working_memory_forget": {"properties": {
@@ -13437,7 +13446,7 @@ def call_tool(req: ToolCallReq):
                     cancel=_turn_cancel.is_set if _turn_cancel is not None else None,
                     turn_id=(getattr(req, "turn_id", "") or "").strip())):
                 import fed_agent as _fa
-                result = (_fa.args_shape_complaint(req.tool, req.arguments,
+                result = (_fa.args_contract_complaint(req.tool, req.arguments,
                                                    TOOL_PARAMS.get(req.tool))
                           or TOOLS[req.tool]["fn"](req.arguments))
         finally:

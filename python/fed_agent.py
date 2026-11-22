@@ -937,10 +937,23 @@ def _kind_of(v):
             dict: "object", type(None): "null"}.get(type(v), type(v).__name__)
 
 
-def args_shape_complaint(name, arguments, spec):
-    props = (spec or {}).get("properties") or {}
-    if not isinstance(arguments, dict):
+def args_contract_complaint(name, arguments, spec):
+    if not isinstance(arguments, dict) or not isinstance(spec, dict):
         return None
+    props = spec.get("properties")
+    if isinstance(props, dict) and props and spec.get("additionalProperties") is not True:
+        unknown = [k for k in arguments if k not in props]
+        if unknown:
+            req = [k for k in (spec.get("required") or []) if k in props]
+            out = args_complaint(
+                name, arguments,
+                ", ".join(f"'{k}'" for k in unknown)
+                + (" is not a parameter" if len(unknown) == 1 else " are not parameters")
+                + f" of {name}; its parameters are: " + ", ".join(props)
+                + (f" (required: {', '.join(req)})" if req else "")
+                + ". Nothing was done.", spec)
+            return out
+    props = props if isinstance(props, dict) else {}
     for key, val in arguments.items():
         decl = props.get(key) or {}
         want = decl.get("type")
@@ -1112,7 +1125,7 @@ def _execute_tool(name, arguments, consented=False):
         if refusal:
             return json.dumps(refusal, ensure_ascii=False)
     try:
-        _shape = args_shape_complaint(name, arguments, (_get_tool_params() or {}).get(name))
+        _shape = args_contract_complaint(name, arguments, (_get_tool_params() or {}).get(name))
     except Exception:
         _shape = None
     if _shape:
