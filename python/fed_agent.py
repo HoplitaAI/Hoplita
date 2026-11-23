@@ -32,8 +32,8 @@ _GATE_WORK_TOOLS = frozenset(("add_note", "update_note", "add_task", "task_depen
 
 def _did_gate_work(trace, since, nudge=""):
     work = _GATE_WORK_TOOLS
-    if JOURNAL_GATE_KEEP in (nudge or ""):
-        work = work | {"project_journal"}
+    if "project_journal(" in (nudge or ""):
+        work = frozenset(("project_journal", "project_write"))
     return any(isinstance(s, dict) and str(s.get("tool")) in work
                for s in (trace or [])[since:])
 
@@ -2274,6 +2274,15 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 if not reply.strip().startswith(GATE_KEEP_TOKENS) \
                         and not _did_gate_work(tool_trace, _plan_trace_len, _plan_nudge):
                     emit({"event": "plan_gate_ignored", "iteration": iteration})
+                _settle = getattr(plan_gate, "settle", None)
+                if callable(_settle):
+                    try:
+                        _sr = _settle(tool_trace, _orig_request)
+                    except Exception:
+                        _sr = None
+                    if isinstance(_sr, dict) and _sr.get("ok"):
+                        emit({"event": "journal_unexplained",
+                              "iteration": iteration})
                 reply = _plan_original
                 _plan_original = None
             elif plan_gate is not None and not _plan_gated \

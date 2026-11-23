@@ -8678,6 +8678,116 @@ def tool_project_journal(path, entry, title=""):
             "entries": len(re.findall(r"^## ", text, re.M))}
 
 
+def _journal_entries(cat):
+    try:
+        for n_ in notes_mgr.get_notes(cat) or []:
+            if (n_.get("title", "") or "").strip().lower() == "journal":
+                text = n_.get("content") or ""
+                break
+        else:
+            return []
+    except Exception:
+        return []
+    parts = re.split(r"(?m)^(?=## )", text)
+    return [p.strip() for p in parts if p.strip().startswith("## ")]
+
+
+def _journal_terms_match(entry, terms):
+    low = entry.lower()
+    for t in terms:
+        t = t.lower()
+        alts = {t}
+        if "/" in t or "\\" in t:
+            alts.add(re.split(r"[\\/]", t.rstrip("/\\"))[-1])
+        if not any(a and a in low for a in alts):
+            return False
+    return True
+
+
+_JOURNAL_SEARCH_MAX = 10
+_JOURNAL_SEARCH_CHARS = 12000
+
+
+def tool_project_journal_search(path, query):
+    cat = _project_resolve(path)
+    if not cat:
+        return {"error": f"'{path}' is neither an open project directory "
+                         f"nor a known project folder."}
+    terms = [t for t in (query or "").split() if t.strip()]
+    if not terms:
+        return {"error": "project_journal_search needs a query: a file path "
+                         "or name, or the words of a topic."}
+    entries = _journal_entries(cat)
+    hits = [e for e in entries if _journal_terms_match(e, terms)]
+    hits.reverse()
+    shown, size = [], 0
+    for e in hits[:_JOURNAL_SEARCH_MAX]:
+        if shown and size + len(e) > _JOURNAL_SEARCH_CHARS:
+            break
+        shown.append(e)
+        size += len(e)
+    out = {"query": query, "matches": len(hits), "entries": shown,
+           "journal_entries": len(entries)}
+    if len(hits) > len(shown):
+        out["more"] = (f"{len(hits) - len(shown)} older matching entries not "
+                       f"shown: narrow the query, or read_note(category="
+                       f"'{cat}', title='journal') for the whole journal.")
+    if not hits:
+        out["note"] = ("No entry mentions all of these. Nothing recorded is "
+                       "not the same as nothing happened: try the file name "
+                       "alone, or other words for the topic.")
+    return out
+
+
+_JOURNAL_ON_READ_MAX = 3
+_JOURNAL_ON_READ_CHARS = 1500
+_JOURNAL_SHOWN = {}
+
+
+def _journal_on_read(fn, scoped=True):
+    def run(a):
+        out = fn(a)
+        try:
+            root = _turn_project()
+            p = (a or {}).get("path") if isinstance(a, dict) else None
+            if not (root and p and isinstance(out, dict)) or out.get("error"):
+                return out
+            full = os.path.abspath(os.path.expanduser(
+                _project_path(p) if scoped else p))
+            rootp = os.path.abspath(root)
+            if not full.startswith(rootp + os.sep):
+                return out
+            rel = os.path.relpath(full, rootp)
+            tid = _turn_id_here() or "-"
+            seen = _JOURNAL_SHOWN.setdefault(tid, set())
+            if len(_JOURNAL_SHOWN) > 64:
+                for k in list(_JOURNAL_SHOWN)[:-64]:
+                    _JOURNAL_SHOWN.pop(k, None)
+            if rel in seen:
+                return out
+            seen.add(rel)
+            cat = _project_category(rootp)
+            hits = [e for e in _journal_entries(cat)
+                    if _journal_terms_match(e, [rel])]
+            if not hits:
+                return out
+            hits.reverse()
+            shown = []
+            for e in hits[:_JOURNAL_ON_READ_MAX]:
+                shown.append(e if len(e) <= _JOURNAL_ON_READ_CHARS
+                             else e[:_JOURNAL_ON_READ_CHARS] + " …(cut)")
+            out = dict(out)
+            out["journal_on_this_file"] = shown
+            if len(hits) > len(shown):
+                out["journal_more"] = (f"{len(hits)} entries name this file: "
+                                       f"project_journal_search(path='{rootp}', "
+                                       f"query='{rel}') shows them all.")
+        except Exception:
+            pass
+        return out
+    return run
+
+
     kept, size = [], 0
     for ln in chosen:
         if kept and size + len(ln) + 1 > budget and len(ln) <= budget:
@@ -10813,6 +10923,8 @@ def register_tools():
                                                                    a.get("files"), a.get("allow_main", False))},
         "project_journal":        {"desc": "Append a dated entry to the open project's journal: what HAPPENED (a decision, a trap, what changed and why). One of the four notes of the project's memory, read at the start of the conversation and when it changes; never rewritten, so the next session starts knowing it.",
                                    "fn": lambda a: tool_project_journal(a["path"], a["entry"], a.get("title", ""))},
+        "project_journal_search": {"desc": "Journal entries naming a file or topic, whole, newest first: what was already changed there and why. Look before a fix or a change.",
+                                   "fn": lambda a: tool_project_journal_search(a["path"], a["query"])},
         "project_write":          {"desc": "Write one of the open project's notes: 'spec' (a settled truth), 'future' (what is still PENDING, one line per item, never what was done) or 'journal' (a dated entry, never rewritten). replace=true rewrites 'spec' or 'future' whole. done=true with note='future' closes the pending line that says `text`: it moves to the journal, dated. add_note with one of these titles goes the same way; any other title in a project folder is refused.",
                                    "fn": lambda a: tool_project_write(a.get("path", ""), a.get("note", ""), a.get("text", ""), bool(a.get("replace", False)), bool(a.get("done", False)))},
         "search_working_memory":  {"desc": "Search INSIDE the full texts of the large results digested in this conversation (its working memory): the digest you got is an extract, the original is here whole. Words, a name, a figure — whatever you think of — and it returns the passages that mention it with the paragraphs around them and their lines; regex=true is grep. Use it before re-calling a tool for something an earlier result may already hold.",
@@ -10847,6 +10959,10 @@ def register_tools():
     for _n in ("read_file", "code_read_smart", "code_read_range", "code_read_file"):
         if _n in TOOLS:
             TOOLS[_n]["fn"] = _spill_aware(_n, TOOLS[_n]["fn"])
+    for _n in ("code_read_smart", "code_read_range", "read_file"):
+        if _n in TOOLS:
+            TOOLS[_n]["fn"] = _journal_on_read(TOOLS[_n]["fn"],
+                                               scoped=_n.startswith("code_"))
     import wb_tools as _wbt
     TOOLS.update(_wbt.tools())
     def _wb_journal(path, text, title=""):
@@ -11331,6 +11447,7 @@ def register_tool_params():
                                                   "entry": {"type": "string", "description": "What to record: a decision, a trap, state worth keeping across sessions."},
                                                   "title": {"type": "string", "description": "Short header for the entry; default is its first line."}},
                                    "required": ["path", "entry"]},
+        "project_journal_search": {"properties": {"path": {"type": "string"}, "query": {"type": "string", "description": "A file path or name, or topic words (all must appear)."}}, "required": ["path", "query"]},
         "project_write":          {"properties": {"path": {"type": "string", "description": "The open project's directory (or its folder name)."}, "note": {"type": "string", "enum": ["spec", "future", "journal"]}, "text": {"type": "string", "description": "spec: one short truth (≤600 chars). future: one pending line per item (done=true: the line to close). journal: the entry."}, "replace": {"type": "boolean", "description": "Rewrite 'spec' or 'future' whole (default false)."}, "done": {"type": "boolean", "description": "note='future' only: close the pending line that says `text`."}}, "required": ["path", "note", "text"]},
         "search_working_memory":  {"properties": {"query": {"type": "string", "description": "Words to look for (ranked by how many of the rarer ones a passage covers), or a pattern with regex=true."}, "title": {"type": "string", "description": "One stored text (its title, or part of it); empty searches all of this conversation's."}, "regex": {"type": "boolean"}, "context": {"type": "integer", "description": "Paragraphs before and after each hit (0-5, default 1)."}, "k": {"type": "integer", "description": "How many passages (default 5)."}}, "required": ["query"]},
         "search_conversation":    {"properties": {"query": {"type": "string", "description": "Words to look for (ranked by how many of the rarer ones a passage covers), or a pattern with regex=true."}, "regex": {"type": "boolean"}, "context": {"type": "integer", "description": "Paragraphs before and after each hit (0-5, default 1)."}, "k": {"type": "integer", "description": "How many passages (default 5)."}}, "required": ["query"]},
@@ -13063,7 +13180,8 @@ def _hot_tools_compute(n=None):
                                     "add_task", "task_depends",
                                     "update_task_progress",
                                     "add_note", "update_note", "read_note",
-                                    "project_journal", "project_write"))
+                                    "project_journal", "project_write",
+                                    "project_journal_search"))
                        and k not in _ALWAYS_HOT)
     ranked = sorted(((v, k) for k, v in _TOOL_USES.items()
                      if k in allowed and k not in _ALWAYS_HOT
@@ -13109,7 +13227,8 @@ _SHELF_KEEP_DESC = {
     "render_html", "canvas_eval", "canvas_see", "dashboard_render",
     "pdf", "pdf_info", "generate_pdf", "alert", "office", "office_info",
     "propose_memory_change", "working_memory_forget", "search_working_memory",
-    "project_journal", "project_write", "get_agentic_config",
+    "project_journal", "project_write", "project_journal_search",
+    "get_agentic_config",
     "cron_set_context", "set_cron_context", "fed_ask_agent", "fed_share",
     "fill_credentials", "get_otp", "exec_command", "background_list",
 }
@@ -14005,6 +14124,84 @@ _CODE_EDIT_TOOLS = frozenset(("code_apply_patch", "code_write_file",
 _LIST_LINE = re.compile(r"^\s*(?:[-*•]|\d+[.)]|#{1,6}\s)\s*\S")
 
 
+_TOUCH_SNAPSHOT_MAX = 3000
+_TOUCHED_LISTED_MAX = 40
+
+
+def _worktree_state(root):
+    import hashlib
+    top = _git_root(root)
+    if not top:
+        return None
+    ok, head = _git(["rev-parse", "HEAD"], top)
+    ok2, st = _git(["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                   top, raw=True)
+    if not ok2:
+        return None
+    files = {}
+    for rec in [r for r in st.split("\0") if r][:_TOUCH_SNAPSHOT_MAX]:
+        if len(rec) < 4 or rec[2] != " ":
+            continue
+        full = os.path.join(top, rec[3:])
+        rel = os.path.relpath(full, root)
+        if rel.startswith(".."):
+            continue
+        try:
+            st_ = os.stat(full)
+            if st_.st_size > 5_000_000:
+                files[rel] = f"{st_.st_size}:{st_.st_mtime_ns}"
+            else:
+                with open(full, "rb") as f:
+                    files[rel] = hashlib.sha1(f.read()).hexdigest()
+        except Exception:
+            files[rel] = None
+    return (head if ok else ""), files
+
+
+def _touched_since(root, before):
+    if before is None:
+        return set()
+    now = _worktree_state(root)
+    if now is None:
+        return set()
+    (h0, f0), (h1, f1) = before, now
+    out = {p for p in set(f0) | set(f1) if f0.get(p, "-") != f1.get(p, "-")}
+    if h0 and h1 and h0 != h1:
+        top = _git_root(root)
+        ok, names = _git(["diff", "--name-only", h0, h1], top)
+        for n_ in (names.splitlines() if ok else []):
+            rel = os.path.relpath(os.path.join(top, n_), root)
+            if not rel.startswith(".."):
+                out.add(rel)
+    return out
+
+
+def _trace_edit_paths(trace, root):
+    out = set()
+    for s in trace or []:
+        if not isinstance(s, dict) or str(s.get("tool")) not in _CODE_EDIT_TOOLS:
+            continue
+        a = s.get("args")
+        p = a.get("path") if isinstance(a, dict) else None
+        if p and isinstance(p, str):
+            full = os.path.abspath(os.path.join(root, os.path.expanduser(p))) \
+                if root else p
+            out.add(os.path.relpath(full, root) if root else p)
+    return out
+
+
+def _journal_written(trace):
+    for s in trace or []:
+        if not isinstance(s, dict):
+            continue
+        t = str(s.get("tool"))
+        a = s.get("args") if isinstance(s.get("args"), dict) else {}
+        if t == "project_journal" or (t == "project_write"
+                                      and str(a.get("note", "")) == "journal"):
+            return True
+    return False
+
+
 def _looks_like_steps(text):
     return sum(1 for l in (text or "").splitlines() if _LIST_LINE.match(l)) >= 3
 
@@ -14021,22 +14218,48 @@ def _fenced_share(text):
     return min(1.0, inside / max(1, total))
 
 
-def _plan_gate_for(cat):
+def _plan_gate_for(cat, root=None):
     if not cat:
         return None
     import fed_agent as _fa
+    try:
+        before = _worktree_state(root) if root else None
+    except Exception:
+        before = None
+    _need = {"files": None}
+
+    def _touched(trace):
+        out = set()
+        try:
+            out |= _touched_since(root, before) if root else set()
+        except Exception:
+            pass
+        out |= _trace_edit_paths(trace, root)
+        return sorted(out)
 
     def gate(reply, trace):
         names = {str(s.get("tool")) for s in (trace or []) if isinstance(s, dict)}
+        files = _touched(trace)
+        if files:
+            rows = ([] if names & {"update_task_progress", "delete_task", "add_task"}
+                    else _project_open_task_rows(cat, cap=8))
+            if not _journal_written(trace):
+                _need["files"] = files
+                listed = files[:_TOUCHED_LISTED_MAX]
+                more = len(files) - len(listed)
+                nudge = _tr("inject.journal_gate", cat=cat,
+                            files="\n".join(f"- {f}" for f in listed)
+                            + (f"\n- …and {more} more" if more > 0 else ""))
+                if rows:
+                    nudge += "\n\n" + _tr("inject.journal_gate_tasks",
+                                          tasks="\n".join(rows))
+                return nudge
+            if rows:
+                return _tr("inject.progress_gate", cat=cat,
+                           token=_fa.PROGRESS_GATE_KEEP, tasks="\n".join(rows))
+            return None
         if names & _MEMORY_WRITE_TOOLS:
             return None
-        if names & _CODE_EDIT_TOOLS:
-            rows = _project_open_task_rows(cat, cap=8)
-            if not rows:
-                return _tr("inject.journal_gate", cat=cat,
-                           token=_fa.JOURNAL_GATE_KEEP)
-            return _tr("inject.progress_gate", cat=cat,
-                       token=_fa.PROGRESS_GATE_KEEP, tasks="\n".join(rows))
         if names & _CODE_WRITE_TOOLS:
             return None
         if not _looks_like_steps(reply):
@@ -14046,6 +14269,24 @@ def _plan_gate_for(cat):
         if _fenced_share(reply) > 0.5:
             return None
         return _tr("inject.plan_gate", cat=cat, token=_fa.PLAN_GATE_KEEP)
+
+    def settle(trace, request=""):
+        files = _need["files"]
+        if not files or _journal_written(trace):
+            return None
+        listed = files[:_TOUCHED_LISTED_MAX]
+        more = len(files) - len(listed)
+        entry = ("Files changed with no explanation from the model: "
+                 + ", ".join(listed)
+                 + (f" and {more} more" if more > 0 else "")
+                 + ".\nRequest: " + " ".join((request or "").split())[:400])
+        try:
+            return tool_project_journal(root or cat, entry,
+                                        title="unexplained change")
+        except Exception:
+            return None
+
+    gate.settle = settle
     return gate
 
 
@@ -14161,7 +14402,9 @@ def _project_memory_block(root):
             jr = ("…(older entries trimmed — read_note for the past)\n"
                   + (cut[j + 1:] if j >= 0 else cut))
         parts.append("── 'journal' — what HAPPENED, dated, latest at the end; "
-                     "project_journal adds an entry, nothing here is rewritten ──\n"
+                     "project_journal adds an entry, nothing here is rewritten; "
+                     "what it says about a file or a topic, older entries "
+                     "included: project_journal_search ──\n"
                      + jr)
         stats["sections"]["journal"] = parts[-1]
     mine, room = [], _USER_NOTES_CAP
@@ -14258,9 +14501,13 @@ def _code_project_note(path):
             f"close it: project_write(note='future', text=<the line>, "
             f"done=true) — it leaves 'future' and lands in the journal. What "
             f"was done is NEVER written into 'future'.\n"
-            f"- 'journal': what HAPPENED — project_journal(entry=<a decision "
-            f"taken, a trap found, what changed and why>), dated by the tool, "
-            f"never rewritten. Only what the next session must know.\n"
+            f"- 'journal': what HAPPENED — project_journal(entry=<for each "
+            f"file touched, named by its path: what was wrong or missing, what "
+            f"changed, why>), dated by the tool, never rewritten. Every turn "
+            f"that changes files writes one. BEFORE proposing or making a fix, "
+            f"a change or a next step, look at what it says about those files "
+            f"and that topic: project_journal_search(path, query=<file or "
+            f"topic>) — what was already tried, fixed or decided there.\n"
             f"THE BOARD IS SMALL AND IMMEDIATE: at most {_OPEN_TASKS_CAP} open "
             f"tasks per project (add_task refuses beyond), only what is being "
             f"done in this session AND that the user asked for or approved in "
@@ -15863,7 +16110,8 @@ def _agent_turn_events(req):
                     delegate=_delegate if req.delegate else None,
                     delegate_names=tuple(req.delegate),
                     verify=_verify, qa=req.qa, qa_chat=qa_override,
-                    plan_gate=(_plan_gate_for(_project_category(req.code_project))
+                    plan_gate=(_plan_gate_for(_project_category(req.code_project),
+                                              req.code_project)
                                if req.code_project else None),
                     goal=req.goal, verify_goal=req.verify_goal,
                     escalate=_build_escalator(ep),
