@@ -529,7 +529,7 @@ Bundled media post-processor: when an external MCP returns `http(s)://` URLs wit
 
 ## Whiteboard — the agent explains code on a live, code-anchored page
 
-The whiteboard is a page of the **`</>` code view**: the 🧭 icon in its rail, beside Verify and Co-work. It works like a document program: one row of buttons on top, one for each thing, and below it the surface that shows the thing pressed.
+The whiteboard is a page of the **Code view**: the 🧭 icon in its rail, beside Verify and Co-work. It works like a document program: one row of buttons on top, one for each thing, and below it the surface that shows the thing pressed.
 
 - **How it works**: the project explained part by part, with its code.
 - **History**: the project's past told period by period, with a row to choose its span.
@@ -620,7 +620,7 @@ The main window's tabs:
 | **CRON** | Scheduled tasks (`fixed`/`interval`/`daily`/`weekly`/`startup`). Agentic execution with its own log. `startup` («When HOPLITA starts») runs once each time the app opens — for a machine that is not on all day |
 | **Tools** | The firewall: enable/disable tools globally |
 | **Memory** | Sub-tabs **Facts**, **Lessons**, **Experience**, **Conversations** and **Proposals**. Facts shows **Live** and **Archive** apart, each with its count; the archive with its size and **Empty archive…**. Proposals lists what the memory pass did on its own, each with **↩ Undo**, and **🔎 Curate memory** runs the pass over the whole store. It refreshes when you click the tab |
-| **Canvas** | The agent's free visual surface, one per chat tab, as a curtain that slides over its transcript from the right (▣ shows or hides it; ⤢ on its bar puts it over the whole page): charts, pages, generated pictures (as figures; **Save as…** writes them to files); `canvas_eval`/`canvas_see` let the model check what it drew |
+| **Canvas** | The agent's free visual surface, one per chat tab, as a curtain that slides over its transcript from the right (**Canvas** in the tab strip shows or hides it; ⤢ on its bar puts it over the whole page): charts, pages, generated pictures (as figures; **Save as…** writes them to files); `canvas_eval`/`canvas_see` let the model check what it drew |
 | **Terminal** | An embedded terminal (Linux/macOS) |
 | **Contacts** | Federation: identity, contacts, presence, permissions |
 
@@ -629,8 +629,8 @@ the active tab, and pressing one again returns to the conversation:
 
 | Page | What it holds |
 |------|---------------|
-| **🤖 Agents** | The multi-agent board: sub-task cards + dependency graph, with the model assigned to each. On top, the 🧭 band with the turn's intent list (metacognition), crossed out live |
-| **`</>` Code** | The code view of the active chat tab: project, changes, editor, symbols, history, search, the VERIFY and CO-WORK pages, and the 🧭 whiteboard page. Its own section below |
+| **Agents** | The multi-agent board: sub-task cards + dependency graph, with the model assigned to each. On top, the 🧭 band with the turn's intent list (metacognition), crossed out live |
+| **Code** | The code view of the active chat tab: project, changes, editor, symbols, history, search, the VERIFY and CO-WORK pages, and the 🧭 whiteboard page. Its own section below |
 | **🏛 Council** | Your models deliberating by turns on whatever you put to them. Its own section below |
 
 And one special chat tab, **⏰ CRON**: where the crons land — their output, and a supervisor scoped to your jobs. It is born when something happens, not at startup.
@@ -648,7 +648,7 @@ parts, and each one does one thing:
 | `journal` | what happened, dated — decisions, traps, what changed, every closed `future` line and every finished whiteboard; never rewritten | the agent; a whiteboard writes its own line | Notes; its tail rides every code turn |
 | whiteboard | **seeing and weighing a change**: what, why, the design as one diagram, the old and new call path, each claim anchored to the code at pinned commits | the agent (`wb_*`), or one in the background from the page | CODE → 🧭; «Whiteboard of these changes» in CODE |
 | scratchpad | sketching how existing code works, when there is no change | the agent | CODE → 🧭 |
-| canvas | free visuals that are not about code: charts, pictures, pages | the agent | the tab's canvas panel (▣) |
+| canvas | free visuals that are not about code: charts, pictures, pages | the agent | the tab's canvas panel (**Canvas**) |
 
 `add_note` refuses any other note in a project folder and `add_task` any eighth
 open task. The parts talk to each other one way only: a whiteboard **reads**
@@ -674,7 +674,7 @@ a singleton, and it only exists from the moment a cron fires or you open it.
 ## The 🏛 COUNCIL — several models, one matter, and a vote
 
 It is not a tab. It is a **page of the chat**, reached with 🏛 in the tab strip,
-next to 🤖 and `</>`, so it shares the chat's input, `/commands`, history and
+next to **Agents** and **Code**, so it shares the chat's input, `/commands`, history and
 loop. What you type with the page open does not go to the chat model: it goes
 to the bench.
 
@@ -746,9 +746,9 @@ a card keeps that conversation at the top of the list whatever its date, on
 every machine of yours, and the prune leaves it alone: the one with the rules
 you keep coming back to never sinks under a thousand passing chats.
 
-## ◎ The machine over the transcript
+## The machine over the transcript
 
-◎ in the tab strip slides an instrument over the transcript, from its right
+**Machine** in the tab strip slides an instrument over the transcript, from its right
 edge, that shows what
 the active tab is doing as it does it. A dial: every tool the tab has used
 is a slot around the arc with its count, the model's own rounds the first
@@ -905,14 +905,14 @@ minutes, in its own tab») and the job becomes a worker:
 
 Jobs run while HOPLITA's window is open: the scheduler lives in it.
 
-## Tabs that show they are working, and ▦ the overview
+## Tabs that show they are working, and the overview
 
 A tab with a turn running wears a small arc turning before its title, the
 same mark the overview page draws, so a tab you are not looking at still
 tells you it is busy; nothing else of the tab moves for it. ⏸ in amber is a
 tab waiting for your OK.
 
-**▦** at the right of the strip (it reads `▦ 2/5` when two of five tabs are
+**Tabs** at the right of the strip (it reads `Tabs 2/5` when two of five tabs are
 working) opens every tab on one page: down the left, one row per tab with
 its colour, whether it works, waits or rests and for how long, and its title;
 at the right, the tab you pick (the page opens on the one you are in): its
@@ -944,12 +944,12 @@ the conversation, not to the turn, and report when they land. `[CHAT]
 max_threads` caps how many may be alive at once.
 
 Work in one tab never takes the screen from you. Every chat tab has a canvas
-of its own: a curtain that slides over its transcript from the right edge (▣
+of its own: a curtain that slides over its transcript from the right edge (**Canvas**
 in the tab strip shows or hides it; drag its left edge for its width, which is
 kept) and holds the page its turns drew, with whatever the model built in it
 by `canvas_eval` still running when you come back. The curtain covers and takes
 no width: the transcript is never laid out again for it, however long the
-conversation, so it opens and closes in a frame; the machine (◎) is a curtain
+conversation, so it opens and closes in a frame; the machine (**Machine**) is a curtain
 too, at the edge, with the canvas left of it. ⤢ on the canvas's bar puts it
 over the whole page, as a tab of the window, with its page as it stands; ⤡
 slides it back at the width it had. It comes up only for a canvas you open, or for what the tab you are in draws while

@@ -6550,16 +6550,24 @@ enabled = true
                 f"#chatTab QPushButton#tabClose:hover {{ background:#3a1d24; color:#f87171; }} "
                 f"#chatTab QPushButton#tabReset:hover {{ background:#1b2744; color:#93c5fd; }}")
 
-    _TAB_RESERVED_W = 380
     _TAB_MIN_W = 124
     _TAB_MAX_W = 300
     _TAB_CHROME_W = 34
+
+    def _strip_controls_w(self):
+        got = getattr(self, "_strip_ctrl_w", 0)
+        if got:
+            return got + 40
+        fm = QFontMetrics(self.font())
+        keys = ("strip.history", "strip.save", "strip.tabs", "strip.canvas",
+                "strip.machine", "strip.agents", "strip.code", "strip.council")
+        return sum(fm.horizontalAdvance(t(k)) + 28 for k in keys) + 40
 
     def _chat_tabs_fit(self):
         tabs = list(self._chat_tabs)
         bar = getattr(self, "_chat_tab_bar", None)
         room = max(200, (bar.width() if bar is not None and bar.width() > 50
-                         else self.width()) - self._TAB_RESERVED_W)
+                         else self.width()) - self._strip_controls_w())
         per = room // max(1, len(tabs))
         if per >= self._TAB_MIN_W:
             return tabs, [], max(40, min(self._TAB_MAX_W, per) - self._TAB_CHROME_W)
@@ -6594,6 +6602,7 @@ enabled = true
                 w.hide()
                 w.deleteLater()
         _shown, _hidden, _title_w = self._chat_tabs_fit()
+        _shown_hidden_before = _hidden
         _fm = QFontMetrics(self.font())
         for tab in _shown:
             active = tab["id"] == self._active_tab_id
@@ -6710,17 +6719,17 @@ enabled = true
         lay.addSpacing(8)
         lay.addWidget(plus, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addStretch()
-        for glyph, tip, slot in (
-                ("💬", t("sess.history_tip"), self._open_sessions_dialog),
-                ("💾", t("sess.save_tip"), self._save_current_session)):
-            b = QPushButton(glyph)
-            b.setFixedSize(30, 30)
+        _right_from = lay.count()
+        for key, tip, slot in (
+                ("strip.history", t("sess.history_tip"), self._open_sessions_dialog),
+                ("strip.save", t("sess.save_tip"), self._save_current_session)):
+            b = QPushButton(t(key))
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setToolTip(tip)
             b.setStyleSheet(
-                "QPushButton { background:#1e293b; color:#94a3b8; border:1px solid #334155; "
-                "border-radius:8px; font-size:14px; padding:0; margin-left:4px; } "
-                "QPushButton:hover { background:#334155; color:#e2e8f0; }")
+                "QPushButton { background:#1e293b; color:#cbd5e1; border:1px solid #334155; "
+                "border-radius:8px; padding:5px 10px; margin-left:4px; } "
+                "QPushButton:hover { background:#334155; color:#e6edf7; }")
             b.clicked.connect(slot)
             lay.addWidget(b)
         if getattr(self, "_overview_page_idx", None) is not None:
@@ -6728,7 +6737,7 @@ enabled = true
             _n = len(self._chat_tabs)
             _b = len(getattr(self, "_working_seen", ()) or ())
             oon = self._chat_stack.currentIndex() == self._overview_page_idx
-            ob = QPushButton(f"▦ {_b}/{_n}" if _b else "▦")
+            ob = QPushButton(f"{t('strip.tabs')} {_b}/{_n}" if _b else t("strip.tabs"))
             ob.setCursor(Qt.CursorShape.PointingHandCursor)
             ob.setToolTip(t("ovw.toggle_tip"))
             ob.setStyleSheet(
@@ -6743,7 +6752,7 @@ enabled = true
         if getattr(self, "dashboard", None) is not None:
             _crec = self._canvas(self._active_tab_id)
             vcol = "#f5b800" if _crec["unseen"] and not _crec["open"] else "#93c5fd"
-            vb = QPushButton("▣")
+            vb = QPushButton(t("strip.canvas"))
             vb.setCursor(Qt.CursorShape.PointingHandCursor)
             vb.setToolTip(t("canvas.toggle_tip"))
             vb.setStyleSheet(
@@ -6758,7 +6767,7 @@ enabled = true
         if getattr(self, "machine_view", None) is not None:
             mcol = "#93c5fd"
             mon = bool(getattr(self, "_machine_on", False))
-            mb = QPushButton("◎")
+            mb = QPushButton(t("strip.machine"))
             mb.setCursor(Qt.CursorShape.PointingHandCursor)
             mb.setToolTip(t("machine.toggle_tip"))
             mb.setStyleSheet(
@@ -6775,7 +6784,7 @@ enabled = true
             showing = (getattr(self, "_chat_stack", None) is not None
                        and self._chat_stack.currentIndex() == 1)
             col = "#a855f7"
-            tgl = QPushButton(f"🤖 {n}" if n else "🤖")
+            tgl = QPushButton(f"{t('strip.agents')} {n}" if n else t("strip.agents"))
             tgl.setCursor(Qt.CursorShape.PointingHandCursor)
             tgl.setToolTip(t("agents.toggle_tip"))
             if showing:
@@ -6793,7 +6802,7 @@ enabled = true
         if getattr(self, "_code_page_idx", None) is not None:
             ccol = "#38bdf8"
             on = self._chat_stack.currentIndex() == self._code_page_idx
-            cb = QPushButton("</>")
+            cb = QPushButton(t("strip.code"))
             cb.setCursor(Qt.CursorShape.PointingHandCursor)
             cb.setToolTip(t("code.toggle_tip"))
             cb.setStyleSheet(
@@ -6818,8 +6827,7 @@ enabled = true
             if _waiting:
                 kcol = "#f5b800"
             kon = self._chat_stack.currentIndex() == self._council_page_idx
-            kb = QPushButton(f"{len(_seated)}" if _seated else "")
-            kb.setIcon(self._svg_icon("tab_council", kcol, 18))
+            kb = QPushButton(f"{t('strip.council')} {len(_seated)}" if _seated else t("strip.council"))
             kb.setCursor(Qt.CursorShape.PointingHandCursor)
             kb.setToolTip(t("council.ack_waiting_tip") if _waiting
                           else t("council.toggle_tip"))
@@ -6833,6 +6841,17 @@ enabled = true
                  f"QPushButton:hover {{ background:#334155; }}"))
             kb.clicked.connect(self._toggle_council_view)
             lay.addWidget(kb)
+        _cw = sum(lay.itemAt(i).widget().sizeHint().width() + lay.spacing()
+                  for i in range(_right_from, lay.count()) if lay.itemAt(i).widget())
+        _before = getattr(self, "_strip_ctrl_w", 0)
+        self._strip_ctrl_w = _cw
+        if _before != _cw and not getattr(self, "_strip_refit", False):
+            self._strip_refit = True
+            try:
+                if self._chat_tabs_fit()[1] != _shown_hidden_before:
+                    self._render_chat_tabs()
+            finally:
+                self._strip_refit = False
         self._start_pin_pulse()
         self._start_work_pulse()
 

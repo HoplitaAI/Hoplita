@@ -1547,7 +1547,7 @@
   "plan.ack_title": "Approve the plan",
   "plan.ack_unattended": "🤖 Local plan auto-approved (scheduled task, nobody watching).",
   "plan.ack_unattended_remote": "🛑 Plan cancelled: a scheduled task will not launch sub-agents on remote nodes without your approval.",
-  "plan.ack_waiting_tab": "⏸ A multi-agent plan is waiting for your approval in this tab: open it with 🤖.",
+  "plan.ack_waiting_tab": "⏸ A multi-agent plan is waiting for your approval in this tab: open it with Agents.",
   "plan.ack_waiting_tip": "This tab has a multi-agent plan waiting for your approval",
   "plan.grew": "➕ The plan grows: [{id}] {goal}",
   "plan.solo": "🧭 The plan was a single task: the model does it itself, step by step, instead of handing it to a sub-agent.",
@@ -2436,5 +2436,13 @@
   "vault.err_failed": "The password could not be changed: {message}",
   "vault.err_unreachable": "The HOPLITA server does not answer at {url}. Start it and try again.",
   "vault.cli_intro": "Changes the vault password of the HOPLITA server running at {url}.",
-  "inject.journal_gate": "[HOPLITA] This turn changed code in '{cat}' and wrote nothing to its memory. If something in it must outlive this session — a decision taken, a trap found, a truth that changed — write it: project_journal('{cat}', entry=<what happened and why>); a truth that changed also fixes its line in 'spec' (project_write note='spec'); a line of 'future' you finished is closed with project_write('{cat}', note='future', text=<its line>, done=true). A routine edit is none of that: then reply exactly: {token}"
+  "inject.journal_gate": "[HOPLITA] This turn changed code in '{cat}' and wrote nothing to its memory. If something in it must outlive this session — a decision taken, a trap found, a truth that changed — write it: project_journal('{cat}', entry=<what happened and why>); a truth that changed also fixes its line in 'spec' (project_write note='spec'); a line of 'future' you finished is closed with project_write('{cat}', note='future', text=<its line>, done=true). A routine edit is none of that: then reply exactly: {token}",
+  "strip.history": "History",
+  "strip.save": "Save",
+  "strip.tabs": "Tabs",
+  "strip.canvas": "Canvas",
+  "strip.machine": "Machine",
+  "strip.agents": "Agents",
+  "strip.code": "Code",
+  "strip.council": "Council"
 }
