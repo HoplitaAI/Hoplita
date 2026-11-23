@@ -13407,13 +13407,11 @@ def code_judge(req: CodeJudgeReq):
 def call_tool(req: ToolCallReq):
     if req.tool == "use_tool":
         _a = req.arguments if isinstance(req.arguments, dict) else {}
-        _inner = _a.get("arguments", {})
-        if isinstance(_inner, str):
-            try:
-                _inner = json.loads(_inner)
-            except Exception:
-                _inner = {}
         _real = str(_a.get("name", "") or "").strip()
+        import fed_agent as _fa
+        _inner, _bad = _fa.call_args_or_complaint(_a.get("arguments", {}), _real or "use_tool")
+        if _bad:
+            return {"tool": _real or req.tool, "duration_s": 0, "result": _bad}
         if not _real or _real == "use_tool":
             return {"tool": req.tool, "duration_s": 0,
                     "result": {"error": "use_tool needs `name` (a tool from the catalogue) "

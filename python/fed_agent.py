@@ -658,18 +658,41 @@ BACKGROUND_NEVER = frozenset({
     "plan_and_orchestrate", "call_council", "sticky_note"})
 
 
+def call_args_or_complaint(raw, name, cut=False):
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return {}, None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as e:
+            out = {"error": f"the arguments of this call to '{name}' are not valid "
+                            f"JSON ({e.msg} at character {e.pos} of {len(raw)}). "
+                            "Nothing was done.",
+                   "it_ended_with": raw[-120:]}
+            if cut:
+                out["cut"] = True
+                out["hint"] = ("your reply was cut by the output limit before this "
+                               "call closed: send what it carries in smaller pieces")
+            else:
+                out["hint"] = ("re-send the call with its arguments as one valid JSON "
+                               "object: quotes, backslashes and line breaks inside "
+                               "strings escaped")
+            return None, out
+        if raw is None:
+            return {}, None
+    if not isinstance(raw, dict):
+        return None, {"error": f"the arguments of this call to '{name}' must be a JSON "
+                               f"object; they came as {_kind_of(raw)}. Nothing was done."}
+    return raw, None
+
+
 def _unwrap_background(args):
     if not isinstance(args, dict):
         return "", {}, "", "background_run needs `tool` and `arguments`."
     real = str(args.get("tool", "") or "").strip()
-    inner = args.get("arguments", {})
-    if isinstance(inner, str):
-        try:
-            inner = json.loads(inner) if inner.strip() else {}
-        except Exception:
-            inner = {}
-    if not isinstance(inner, dict):
-        inner = {}
+    inner, bad = call_args_or_complaint(args.get("arguments", {}), real or "background_run")
+    if bad:
+        return real, {}, "", bad["error"]
     label = str(args.get("label", "") or "").strip()[:80]
     if real == "use_tool":
         real = str(inner.get("name", "") or "").strip()
@@ -2515,26 +2538,37 @@ def run_agentic_turn(user_message=None, history=None, system=None,
             fn = tc.get("function", {})
             name = fn.get("name", "")
             raw_args = fn.get("arguments", "{}")
-            try:
-                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except Exception:
-                args = {}
+            args, _bad_args = call_args_or_complaint(raw_args, name,
+                                                     cut=finish_reason == "length")
             call_id = tc.get("id") or f"call_{iteration}_{name}"
+            if not _bad_args and name == "use_tool" and "arguments" in args:
+                _ureal = str(args.get("name", "") or "").strip()
+                _ui, _bad_args = call_args_or_complaint(
+                    args["arguments"], _ureal or name, cut=finish_reason == "length")
+                if not _bad_args:
+                    args = dict(args, arguments=_ui)
+            if _bad_args:
+                result = json.dumps(_bad_args, ensure_ascii=False)
+                emit({"event": "tool_result", "tool": name, "delegated": False,
+                      "result_preview": result[:200], "duration_s": 0.0})
+                tool_trace.append({"tool": name, "args": {"raw": str(raw_args)[:500]},
+                                   "result": result})
+                messages.append({"role": "tool", "tool_call_id": tc.get("id", name),
+                                 "content": result})
+                _sterile_tools += 1
+                continue
 
             if name == "use_tool":
                 _real = (str((args or {}).get("name", "")).strip()
                          if isinstance(args, dict) else "")
                 _inner = ((args or {}).get("arguments", {})
                           if isinstance(args, dict) else {})
-                if isinstance(_inner, str):
-                    try:
-                        _inner = json.loads(_inner)
-                    except Exception:
-                        _inner = {}
                 if not _real:
                     result = json.dumps(
                         {"error": "use_tool needs `name` (a tool from the "
-                                  "catalogue) and `arguments` (an object)"},
+                                  "catalogue) and `arguments` (an object)",
+                         "you_sent": sorted(args) if isinstance(args, dict) else [],
+                         "it_came_as": json.dumps(args, ensure_ascii=False)[:200]},
                         ensure_ascii=False)
                     emit({"event": "tool_result", "tool": name,
                           "delegated": False, "result_preview": result[:200],
