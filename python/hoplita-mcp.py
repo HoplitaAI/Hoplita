@@ -15600,6 +15600,7 @@ class AgentQAReq(BaseModel):
     endpoint: Optional[Dict[str, Any]] = None
     prior: List[Dict[str, Any]] = []
     given: str = ""
+    asides: List[Dict[str, Any]] = []
 
 
 @app.post("/agent/qa")
@@ -15616,7 +15617,7 @@ def agent_qa(req: AgentQAReq):
         return {"ok": True, "why": "", "next": ""}
     ok, why, nxt, mode = fed_agent._run_qa(
         req.request, req.tool_trace, req.reply, chat,
-        given=req.given, prior=req.prior)
+        given=req.given, prior=req.prior, asides=req.asides)
     return {"ok": ok, "why": why, "next": nxt, "mode": mode}
 
 

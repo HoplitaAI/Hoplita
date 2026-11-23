@@ -1424,7 +1424,8 @@ def _worth_reviewing(tool_trace, reply=""):
 _QA_LAST = threading.local()
 
 
-def _run_qa(request, tool_trace, reply, chat, goal="", given="", prior=None):
+def _run_qa(request, tool_trace, reply, chat, goal="", given="", prior=None,
+            asides=None):
     _QA_LAST.said = ""
     try:
         def _failed(res):
@@ -1516,10 +1517,19 @@ def _run_qa(request, tool_trace, reply, chat, goal="", given="", prior=None):
                     "sentences to strip (the substance around them may "
                     "already be right and must be kept).\n\n")
         full_evidence = "\n\n".join(_full) or "(no tools used)"
+        _said = []
+        for _a in (asides or []):
+            _who = ("a background job of the agent reported"
+                    if _a.get("kind") == "background" else "the USER said")
+            _said.append(f"- {_who}: {_a.get('text', '')}")
+        asides_block = ("SAID DURING THE TURN — what reached the agent while "
+                        "it worked, in order. This is EVIDENCE, and what the "
+                        "user said here is part of the request:\n"
+                        + "\n".join(_said) + "\n\n") if _said else ""
         def _compose(ev):
             return (f"{goal_block}{prior_block}"
                     f"REQUEST (may include what earlier sub-tasks handed over):\n{request}"
-                    f"\n\n{given_block}"
+                    f"\n\n{given_block}{asides_block}"
                     f"STEPS THE AGENT TOOK:\n{ev}"
                     f"\n\nPROPOSED ANSWER:\n{reply}")
         user = _compose(full_evidence)
@@ -1978,6 +1988,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
     _resume_chase_at = -1
     _resume_snapshot = None
     _injected_any = False
+    _asides = []
     _resume_chased = False
     _look_asked = set()
     _look_asks = 0
@@ -2052,6 +2063,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 "inject.mid_turn" if _kind != "background" else "inject.background",
                 text=_msg)})
             _injected_any = True
+            _asides.append({"kind": _kind, "text": _msg})
             if _kind == "background":
                 _progress()
             emit({"event": "injected", "message": _msg, "n": iteration,
@@ -2458,7 +2470,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                 emit({"event": "qa_run", "round": qa_rounds, "iterations": iteration})
                 qa_ok, qa_why, qa_next, qa_level = _run_qa(
                     _req, tool_trace, reply, qa_chat or chat, _goal, given,
-                    prior=qa_verdicts)
+                    prior=qa_verdicts, asides=_asides)
                 if is_cancelled():
                     emit({"event": "cancelled", "iterations": iteration,
                           "turn_record": render_turn_record(
@@ -2484,7 +2496,7 @@ def run_agentic_turn(user_message=None, history=None, system=None,
                       "iterations": iteration})
                 qa_ok, qa_why, _qn, qa_level = _run_qa(
                     _req, tool_trace, reply, qa_chat or chat, _goal, given,
-                    prior=qa_verdicts)
+                    prior=qa_verdicts, asides=_asides)
                 if is_cancelled():
                     emit({"event": "cancelled", "iterations": iteration,
                           "turn_record": render_turn_record(

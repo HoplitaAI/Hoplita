@@ -346,7 +346,7 @@ GUI sends when a tab is reset or closed. A turn with no `session` computes the
 blocks each time and places them at the end.
 
 ## `POST /agent/qa`
-`{request, reply, tool_trace, endpoint}` → `{ok, why, next, mode}`. Reviews an
+`{request, reply, tool_trace, endpoint, given?, prior?, asides?}` → `{ok, why, next, mode}`. `asides` is what reached the agent while it worked, `[{"kind": "user"|"background", "text"}]`, shown to the reviewer as evidence. Reviews an
 answer produced **outside** the loop. A broken reviewer never blocks a good
 answer: any failure is a pass.
 
