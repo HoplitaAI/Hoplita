@@ -6554,6 +6554,17 @@ enabled = true
     _TAB_MAX_W = 300
     _TAB_CHROME_W = 34
 
+    _STRIP_ICON_PX = 15
+    _STRIP_ICONS = {"strip.history": "strip_history", "strip.save": "strip_save",
+                    "strip.tabs": "strip_tabs", "strip.canvas": "tab_canvas",
+                    "strip.machine": "strip_machine", "strip.agents": "tab_agents",
+                    "strip.code": "strip_code", "strip.council": "tab_council"}
+
+    def _strip_icon(self, btn, key, color):
+        from PyQt6.QtCore import QSize
+        btn.setIcon(self._svg_icon(self._STRIP_ICONS[key], color, self._STRIP_ICON_PX))
+        btn.setIconSize(QSize(self._STRIP_ICON_PX, self._STRIP_ICON_PX))
+
     def _strip_controls_w(self):
         got = getattr(self, "_strip_ctrl_w", 0)
         if got:
@@ -6561,7 +6572,8 @@ enabled = true
         fm = QFontMetrics(self.font())
         keys = ("strip.history", "strip.save", "strip.tabs", "strip.canvas",
                 "strip.machine", "strip.agents", "strip.code", "strip.council")
-        return sum(fm.horizontalAdvance(t(k)) + 28 for k in keys) + 40
+        return sum(fm.horizontalAdvance(t(k)) + 28 + self._STRIP_ICON_PX + 6
+                   for k in keys) + 40
 
     def _chat_tabs_fit(self):
         tabs = list(self._chat_tabs)
@@ -6730,6 +6742,7 @@ enabled = true
                 "QPushButton { background:#1e293b; color:#cbd5e1; border:1px solid #334155; "
                 "border-radius:8px; padding:5px 10px; margin-left:4px; } "
                 "QPushButton:hover { background:#334155; color:#e6edf7; }")
+            self._strip_icon(b, key, "#cbd5e1")
             b.clicked.connect(slot)
             lay.addWidget(b)
         if getattr(self, "_overview_page_idx", None) is not None:
@@ -6738,6 +6751,7 @@ enabled = true
             _b = len(getattr(self, "_working_seen", ()) or ())
             oon = self._chat_stack.currentIndex() == self._overview_page_idx
             ob = QPushButton(f"{t('strip.tabs')} {_b}/{_n}" if _b else t("strip.tabs"))
+            self._strip_icon(ob, "strip.tabs", ocol)
             ob.setCursor(Qt.CursorShape.PointingHandCursor)
             ob.setToolTip(t("ovw.toggle_tip"))
             ob.setStyleSheet(
@@ -6753,6 +6767,7 @@ enabled = true
             _crec = self._canvas(self._active_tab_id)
             vcol = "#f5b800" if _crec["unseen"] and not _crec["open"] else "#93c5fd"
             vb = QPushButton(t("strip.canvas"))
+            self._strip_icon(vb, "strip.canvas", vcol)
             vb.setCursor(Qt.CursorShape.PointingHandCursor)
             vb.setToolTip(t("canvas.toggle_tip"))
             vb.setStyleSheet(
@@ -6768,6 +6783,7 @@ enabled = true
             mcol = "#93c5fd"
             mon = bool(getattr(self, "_machine_on", False))
             mb = QPushButton(t("strip.machine"))
+            self._strip_icon(mb, "strip.machine", mcol)
             mb.setCursor(Qt.CursorShape.PointingHandCursor)
             mb.setToolTip(t("machine.toggle_tip"))
             mb.setStyleSheet(
@@ -6785,6 +6801,7 @@ enabled = true
                        and self._chat_stack.currentIndex() == 1)
             col = "#a855f7"
             tgl = QPushButton(f"{t('strip.agents')} {n}" if n else t("strip.agents"))
+            self._strip_icon(tgl, "strip.agents", col)
             tgl.setCursor(Qt.CursorShape.PointingHandCursor)
             tgl.setToolTip(t("agents.toggle_tip"))
             if showing:
@@ -6803,6 +6820,7 @@ enabled = true
             ccol = "#38bdf8"
             on = self._chat_stack.currentIndex() == self._code_page_idx
             cb = QPushButton(t("strip.code"))
+            self._strip_icon(cb, "strip.code", ccol)
             cb.setCursor(Qt.CursorShape.PointingHandCursor)
             cb.setToolTip(t("code.toggle_tip"))
             cb.setStyleSheet(
@@ -6828,6 +6846,7 @@ enabled = true
                 kcol = "#f5b800"
             kon = self._chat_stack.currentIndex() == self._council_page_idx
             kb = QPushButton(f"{t('strip.council')} {len(_seated)}" if _seated else t("strip.council"))
+            self._strip_icon(kb, "strip.council", kcol)
             kb.setCursor(Qt.CursorShape.PointingHandCursor)
             kb.setToolTip(t("council.ack_waiting_tip") if _waiting
                           else t("council.toggle_tip"))
@@ -14393,7 +14412,7 @@ enabled = true
 
     def _svg_icon(self, name, color="#f1f5f9", size=20):
         from PyQt6.QtGui import QPixmap, QIcon, QPainter
-        from PyQt6.QtCore import Qt as _Qt, QByteArray
+        from PyQt6.QtCore import Qt as _Qt, QByteArray, QRectF
         from PyQt6.QtSvg import QSvgRenderer
         base = os.path.dirname(os.path.abspath(__file__))
         for _cand in (os.path.join(base, "icons", f"{name}.svg"),
@@ -14408,10 +14427,15 @@ enabled = true
                 svg = f.read()
             svg = svg.replace("currentColor", color)
             renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-            pix = QPixmap(size, size)
+            try:
+                dpr = max(1.0, float(self.devicePixelRatioF()))
+            except Exception:
+                dpr = 1.0
+            pix = QPixmap(round(size * dpr), round(size * dpr))
+            pix.setDevicePixelRatio(dpr)
             pix.fill(_Qt.GlobalColor.transparent)
             p = QPainter(pix)
-            renderer.render(p)
+            renderer.render(p, QRectF(0, 0, size, size))
             p.end()
             return QIcon(pix)
         except Exception:

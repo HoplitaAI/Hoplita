@@ -673,7 +673,7 @@ a singleton, and it only exists from the moment a cron fires or you open it.
 
 ## The 🏛 COUNCIL — several models, one matter, and a vote
 
-It is not a tab. It is a **page of the chat**, reached with 🏛 in the tab strip,
+It is not a tab. It is a **page of the chat**, reached with **Council** in the tab strip,
 next to **Agents** and **Code**, so it shares the chat's input, `/commands`, history and
 loop. What you type with the page open does not go to the chat model: it goes
 to the bench.
@@ -739,7 +739,7 @@ before stopping and handing you the disagreement.
 
 **When a turn is stuck, it is offered.** The model can convene a council on its own with `call_council`. With two or more models and the tool not blocked, the metacognition's first question in a stall offers it explicitly: tell them what you are doing, what keeps happening and what you have, and ask whether to stop or what else to try. It is offered, not forced, because the question alone often unblocks the turn. One model talking to itself is no council, so with a single model it is not offered.
 
-Conversations save themselves. 💬 in the tab strip lists them, newest
+Conversations save themselves. **History** in the tab strip lists them, newest
 first, each with its size and date: Restore opens one in a new tab, Delete
 removes it from every machine, and the bar above deletes by date. The star on
 a card keeps that conversation at the top of the list whatever its date, on
