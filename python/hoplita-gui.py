@@ -6299,6 +6299,7 @@ enabled = true
         self.fed_status = FedStatusLine()
         self.fed_status.clicked.connect(self._open_federation_tab)
         parent_layout.addWidget(self.fed_status)
+        self._strip_ctrls_layout = self.fed_status.tail
         self._plan_timer = QTimer(self)
         self._plan_timer.timeout.connect(self._refresh_plan)
         self._plan_timer.start(60000)
@@ -6565,21 +6566,13 @@ enabled = true
         btn.setIcon(self._svg_icon(self._STRIP_ICONS[key], color, self._STRIP_ICON_PX))
         btn.setIconSize(QSize(self._STRIP_ICON_PX, self._STRIP_ICON_PX))
 
-    def _strip_controls_w(self):
-        got = getattr(self, "_strip_ctrl_w", 0)
-        if got:
-            return got + 40
-        fm = QFontMetrics(self.font())
-        keys = ("strip.history", "strip.save", "strip.tabs", "strip.canvas",
-                "strip.machine", "strip.agents", "strip.code", "strip.council")
-        return sum(fm.horizontalAdvance(t(k)) + 28 + self._STRIP_ICON_PX + 6
-                   for k in keys) + 40
+    _STRIP_PLUS_W = 40
 
     def _chat_tabs_fit(self):
         tabs = list(self._chat_tabs)
         bar = getattr(self, "_chat_tab_bar", None)
         room = max(200, (bar.width() if bar is not None and bar.width() > 50
-                         else self.width()) - self._strip_controls_w())
+                         else self.width()) - self._STRIP_PLUS_W)
         per = room // max(1, len(tabs))
         if per >= self._TAB_MIN_W:
             return tabs, [], max(40, min(self._TAB_MAX_W, per) - self._TAB_CHROME_W)
@@ -6614,7 +6607,6 @@ enabled = true
                 w.hide()
                 w.deleteLater()
         _shown, _hidden, _title_w = self._chat_tabs_fit()
-        _shown_hidden_before = _hidden
         _fm = QFontMetrics(self.font())
         for tab in _shown:
             active = tab["id"] == self._active_tab_id
@@ -6731,7 +6723,13 @@ enabled = true
         lay.addSpacing(8)
         lay.addWidget(plus, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addStretch()
-        _right_from = lay.count()
+        lay = self._strip_ctrls_layout
+        while lay.count():
+            it = lay.takeAt(0)
+            w = it.widget()
+            if w:
+                w.hide()
+                w.deleteLater()
         for key, tip, slot in (
                 ("strip.history", t("sess.history_tip"), self._open_sessions_dialog),
                 ("strip.save", t("sess.save_tip"), self._save_current_session)):
@@ -6740,7 +6738,7 @@ enabled = true
             b.setToolTip(tip)
             b.setStyleSheet(
                 "QPushButton { background:#1e293b; color:#cbd5e1; border:1px solid #334155; "
-                "border-radius:8px; padding:5px 10px; margin-left:4px; } "
+                "border-radius:8px; padding:3px 10px; margin-left:4px; } "
                 "QPushButton:hover { background:#334155; color:#e6edf7; }")
             self._strip_icon(b, key, "#cbd5e1")
             b.clicked.connect(slot)
@@ -6756,10 +6754,10 @@ enabled = true
             ob.setToolTip(t("ovw.toggle_tip"))
             ob.setStyleSheet(
                 (f"QPushButton {{ background:{self._hex_rgba(ocol, 0.18)}; color:{ocol}; "
-                 f"border:1px solid {ocol}; border-radius:8px; padding:5px 12px; "
+                 f"border:1px solid {ocol}; border-radius:8px; padding:3px 12px; "
                  f"font-weight:700; }}") if oon else
                 (f"QPushButton {{ background:#1e293b; color:{ocol}; border:1px solid {ocol}; "
-                 f"border-radius:8px; padding:5px 12px; }} "
+                 f"border-radius:8px; padding:3px 12px; }} "
                  f"QPushButton:hover {{ background:#334155; }}"))
             ob.clicked.connect(self._toggle_overview)
             lay.addWidget(ob)
@@ -6772,10 +6770,10 @@ enabled = true
             vb.setToolTip(t("canvas.toggle_tip"))
             vb.setStyleSheet(
                 (f"QPushButton {{ background:{self._hex_rgba(vcol, 0.18)}; color:{vcol}; "
-                 f"border:1px solid {vcol}; border-radius:8px; padding:5px 12px; "
+                 f"border:1px solid {vcol}; border-radius:8px; padding:3px 12px; "
                  f"font-weight:700; }}") if _crec["open"] else
                 (f"QPushButton {{ background:#1e293b; color:{vcol}; border:1px solid {vcol}; "
-                 f"border-radius:8px; padding:5px 12px; }} "
+                 f"border-radius:8px; padding:3px 12px; }} "
                  f"QPushButton:hover {{ background:#334155; }}"))
             vb.clicked.connect(self._toggle_canvas)
             lay.addWidget(vb)
@@ -6788,10 +6786,10 @@ enabled = true
             mb.setToolTip(t("machine.toggle_tip"))
             mb.setStyleSheet(
                 (f"QPushButton {{ background:{self._hex_rgba(mcol, 0.18)}; color:{mcol}; "
-                 f"border:1px solid {mcol}; border-radius:8px; padding:5px 12px; "
+                 f"border:1px solid {mcol}; border-radius:8px; padding:3px 12px; "
                  f"font-weight:700; }}") if mon else
                 (f"QPushButton {{ background:#1e293b; color:{mcol}; border:1px solid {mcol}; "
-                 f"border-radius:8px; padding:5px 12px; }} "
+                 f"border-radius:8px; padding:3px 12px; }} "
                  f"QPushButton:hover {{ background:#334155; }}"))
             mb.clicked.connect(self._toggle_machine)
             lay.addWidget(mb)
@@ -6808,11 +6806,11 @@ enabled = true
                 tgl.setStyleSheet(
                     f"QPushButton {{ background:{self._hex_rgba(col, 0.18)}; "
                     f"color:{col}; border:1px solid {col}; border-radius:8px; "
-                    f"padding:5px 12px; font-weight:700; }}")
+                    f"padding:3px 12px; font-weight:700; }}")
             else:
                 tgl.setStyleSheet(
                     f"QPushButton {{ background:#1e293b; color:{col}; "
-                    f"border:1px solid {col}; border-radius:8px; padding:5px 12px; }} "
+                    f"border:1px solid {col}; border-radius:8px; padding:3px 12px; }} "
                     f"QPushButton:hover {{ background:#334155; }}")
             tgl.clicked.connect(self._toggle_agents_view)
             lay.addWidget(tgl)
@@ -6825,10 +6823,10 @@ enabled = true
             cb.setToolTip(t("code.toggle_tip"))
             cb.setStyleSheet(
                 (f"QPushButton {{ background:{self._hex_rgba(ccol, 0.18)}; color:{ccol}; "
-                 f"border:1px solid {ccol}; border-radius:8px; padding:5px 12px; "
+                 f"border:1px solid {ccol}; border-radius:8px; padding:3px 12px; "
                  f"font-weight:700; }}") if on else
                 (f"QPushButton {{ background:#1e293b; color:{ccol}; border:1px solid {ccol}; "
-                 f"border-radius:8px; padding:5px 12px; }} "
+                 f"border-radius:8px; padding:3px 12px; }} "
                  f"QPushButton:hover {{ background:#334155; }}"))
             cb.clicked.connect(self._toggle_code_view)
             lay.addWidget(cb)
@@ -6853,24 +6851,13 @@ enabled = true
             kb.setStyleSheet(
                 (f"QPushButton {{ background:{self._hex_rgba(kcol, 0.18)}; "
                  f"color:{kcol}; border:1px solid {kcol}; border-radius:8px; "
-                 f"padding:5px 12px; font-weight:700; }}") if kon else
+                 f"padding:3px 12px; font-weight:700; }}") if kon else
                 (f"QPushButton {{ background:#1e293b; color:{kcol}; "
                  f"border:1px solid {kcol}; border-radius:8px; "
-                 f"padding:5px 12px; }} "
+                 f"padding:3px 12px; }} "
                  f"QPushButton:hover {{ background:#334155; }}"))
             kb.clicked.connect(self._toggle_council_view)
             lay.addWidget(kb)
-        _cw = sum(lay.itemAt(i).widget().sizeHint().width() + lay.spacing()
-                  for i in range(_right_from, lay.count()) if lay.itemAt(i).widget())
-        _before = getattr(self, "_strip_ctrl_w", 0)
-        self._strip_ctrl_w = _cw
-        if _before != _cw and not getattr(self, "_strip_refit", False):
-            self._strip_refit = True
-            try:
-                if self._chat_tabs_fit()[1] != _shown_hidden_before:
-                    self._render_chat_tabs()
-            finally:
-                self._strip_refit = False
         self._start_pin_pulse()
         self._start_work_pulse()
 

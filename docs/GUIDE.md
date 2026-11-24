@@ -620,7 +620,7 @@ The main window's tabs:
 | **CRON** | Scheduled tasks (`fixed`/`interval`/`daily`/`weekly`/`startup`). Agentic execution with its own log. `startup` («When HOPLITA starts») runs once each time the app opens — for a machine that is not on all day |
 | **Tools** | The firewall: enable/disable tools globally |
 | **Memory** | Sub-tabs **Facts**, **Lessons**, **Experience**, **Conversations** and **Proposals**. Facts shows **Live** and **Archive** apart, each with its count; the archive with its size and **Empty archive…**. Proposals lists what the memory pass did on its own, each with **↩ Undo**, and **🔎 Curate memory** runs the pass over the whole store. It refreshes when you click the tab |
-| **Canvas** | The agent's free visual surface, one per chat tab, as a curtain that slides over its transcript from the right (**Canvas** in the tab strip shows or hides it; ⤢ on its bar puts it over the whole page): charts, pages, generated pictures (as figures; **Save as…** writes them to files); `canvas_eval`/`canvas_see` let the model check what it drew |
+| **Canvas** | The agent's free visual surface, one per chat tab, as a curtain that slides over its transcript from the right (**Canvas** on the federation line, the line above the chat tabs, shows or hides it; ⤢ on its bar puts it over the whole page): charts, pages, generated pictures (as figures; **Save as…** writes them to files); `canvas_eval`/`canvas_see` let the model check what it drew |
 | **Terminal** | An embedded terminal (Linux/macOS) |
 | **Contacts** | Federation: identity, contacts, presence, permissions |
 
@@ -673,7 +673,7 @@ a singleton, and it only exists from the moment a cron fires or you open it.
 
 ## The 🏛 COUNCIL — several models, one matter, and a vote
 
-It is not a tab. It is a **page of the chat**, reached with **Council** in the tab strip,
+It is not a tab. It is a **page of the chat**, reached with **Council** on the federation line,
 next to **Agents** and **Code**, so it shares the chat's input, `/commands`, history and
 loop. What you type with the page open does not go to the chat model: it goes
 to the bench.
@@ -739,7 +739,7 @@ before stopping and handing you the disagreement.
 
 **When a turn is stuck, it is offered.** The model can convene a council on its own with `call_council`. With two or more models and the tool not blocked, the metacognition's first question in a stall offers it explicitly: tell them what you are doing, what keeps happening and what you have, and ask whether to stop or what else to try. It is offered, not forced, because the question alone often unblocks the turn. One model talking to itself is no council, so with a single model it is not offered.
 
-Conversations save themselves. **History** in the tab strip lists them, newest
+Conversations save themselves. **History** on the federation line lists them, newest
 first, each with its size and date: Restore opens one in a new tab, Delete
 removes it from every machine, and the bar above deletes by date. The star on
 a card keeps that conversation at the top of the list whatever its date, on
@@ -748,7 +748,7 @@ you keep coming back to never sinks under a thousand passing chats.
 
 ## The machine over the transcript
 
-**Machine** in the tab strip slides an instrument over the transcript, from its right
+**Machine** on the federation line slides an instrument over the transcript, from its right
 edge, that shows what
 the active tab is doing as it does it. A dial: every tool the tab has used
 is a slot around the arc with its count, the model's own rounds the first
@@ -912,7 +912,7 @@ same mark the overview page draws, so a tab you are not looking at still
 tells you it is busy; nothing else of the tab moves for it. ⏸ in amber is a
 tab waiting for your OK.
 
-**Tabs** at the right of the strip (it reads `Tabs 2/5` when two of five tabs are
+**Tabs** on the federation line (it reads `Tabs 2/5` when two of five tabs are
 working) opens every tab on one page: down the left, one row per tab with
 its colour, whether it works, waits or rests and for how long, and its title;
 at the right, the tab you pick (the page opens on the one you are in): its
@@ -945,7 +945,7 @@ max_threads` caps how many may be alive at once.
 
 Work in one tab never takes the screen from you. Every chat tab has a canvas
 of its own: a curtain that slides over its transcript from the right edge (**Canvas**
-in the tab strip shows or hides it; drag its left edge for its width, which is
+on the federation line shows or hides it; drag its left edge for its width, which is
 kept) and holds the page its turns drew, with whatever the model built in it
 by `canvas_eval` still running when you come back. The curtain covers and takes
 no width: the transcript is never laid out again for it, however long the

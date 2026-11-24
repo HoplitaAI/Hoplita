@@ -132,6 +132,10 @@ class FedStatusLine(QWidget):
         self._meters_at = h.count()
         self.meter_w = []
         h.addStretch(1)
+        self.tail = QHBoxLayout()
+        self.tail.setContentsMargins(0, 0, 0, 0)
+        self.tail.setSpacing(4)
+        h.addLayout(self.tail)
         self.state = "none"
         self.level = 0
         self.set_quota(None)
