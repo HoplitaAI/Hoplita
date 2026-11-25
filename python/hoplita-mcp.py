@@ -13326,6 +13326,17 @@ def hot_tools(n=None):
     return _out
 
 
+_CODE_HOT = frozenset((
+    "code_index", "code_search", "code_symbols", "code_outline",
+    "code_references", "code_definition", "code_deps",
+    "code_read_smart", "code_read_range",
+    "code_apply_patch", "code_write_file", "code_undo",
+    "code_diagnostics", "code_lint", "code_propose_verify",
+    "git_status", "git_diff", "git_log", "git_show",
+    "git_branch", "git_switch", "git_commit", "git_merge",
+))
+
+
 def _hot_tools_compute(n=None):
     if n is None:
         n = CONFIG.getint("AGENTIC", "hot_tools", fallback=12) if CONFIG else 12
@@ -13338,7 +13349,7 @@ def _hot_tools_compute(n=None):
     _proj = []
     if _turn_project():
         _proj = sorted(k for k in allowed
-                       if (k.startswith(("code_", "git_"))
+                       if (k in _CODE_HOT
                            or k in ("fed_code_incoming", "fed_code_take",
                                     "add_task", "task_depends",
                                     "update_task_progress",
