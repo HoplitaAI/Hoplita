@@ -644,6 +644,7 @@ USE_TOOL = {
 
 _on_tool_used = None
 _consent = None
+_args_rewrite = None
 _background = None
 
 
@@ -704,6 +705,11 @@ def _unwrap_background(args):
         return real, inner, label, (f"'{real}' cannot run in the background: "
                                     "call it directly.")
     return real, inner, label, ""
+
+
+def configure_args_rewrite(fn):
+    global _args_rewrite
+    _args_rewrite = fn
 
 
 def configure_consent(fn):
@@ -1140,6 +1146,11 @@ def _execute_tool(name, arguments, consented=False):
         return json.dumps({"error": f"tool '{name}' does not exist. Do not guess "
                                     "names: use one from the catalogue."})
     arguments = unwrap_call_envelope(name, arguments)
+    if _args_rewrite is not None and isinstance(arguments, dict):
+        try:
+            arguments = _args_rewrite(name, arguments)
+        except Exception:
+            pass
     if _consent is not None and not consented:
         try:
             refusal = _consent(name, arguments)

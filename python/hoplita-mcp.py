@@ -3728,7 +3728,13 @@ def tool_search_web(query):
         return {"error": f"[{provider}] {e}"}
 
 
+def _cmd_cwd(cwd):
+    c = _project_path(cwd) if cwd else _turn_project()
+    return c if c and os.path.isdir(c) else (cwd or None)
+
+
 def tool_run_command(command, cwd=None, timeout=60):
+    cwd = _cmd_cwd(cwd)
     for danger in ('rm -rf /', 'format c:', 'mkfs', 'dd if=/dev/zero'):
         if danger in command.lower():
             return {"error": "Blocked"}
@@ -3745,7 +3751,7 @@ def tool_run_command(command, cwd=None, timeout=60):
 
 
 def tool_exec_command(command, cwd=None, timeout=600):
-    return hoplita_background.run_shell(command, cwd or None, timeout)
+    return hoplita_background.run_shell(command, _cmd_cwd(cwd), timeout)
 
 
 def _turn_conv_tab(turn_id=""):
@@ -8482,6 +8488,131 @@ def tool_code_worktree(op="", path=None, name=None, others=None, force=False):
             _git(["branch", "-D", info["branch"]], main)
         return {"ok": True, "removed": root, "branch_deleted": info["ours"] and info["branch"]}
     return {"error": f"unknown op '{op}'."}
+
+
+_SUB_APPLY_LOCK = threading.Lock()
+_SUB_IDENT = {"GIT_AUTHOR_NAME": "HOPLITA", "GIT_AUTHOR_EMAIL": "hoplita@localhost",
+              "GIT_COMMITTER_NAME": "HOPLITA", "GIT_COMMITTER_EMAIL": "hoplita@localhost"}
+_SUB_COPY_MAX = 20 * 1024 * 1024
+_SUB_SCREEN_TOOLS = ("sticky_note", "render_html", "dashboard_render", "canvas_undo",
+                     "canvas_see", "canvas_eval", "alert")
+
+
+def _git_full(args, cwd):
+    try:
+        r = subprocess.run(["git"] + args, capture_output=True, text=True,
+                           timeout=60, cwd=cwd,
+                           **__import__("hoplita_paths").no_console())
+        return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def _sub_worktree_open(folder, tag):
+    root = _git_root(folder)
+    if not root:
+        return None, "not a git repository"
+    main = _wt_main_root(root) or root
+    branch = f"{_WT_PREFIX}sub-{tag}"
+    where = os.path.join(_wt_home(main), f"sub-{tag}")
+    os.makedirs(os.path.dirname(where), exist_ok=True)
+    ok, out = _git_full(["worktree", "add", "-b", branch, where, "HEAD"], root)
+    if not ok:
+        return None, out[:300]
+    _, diff = _git(["diff", "HEAD", "--binary"], root, raw=True)
+    if diff.strip():
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile("w", suffix=".patch", delete=False,
+                                    encoding="utf-8") as fh:
+            fh.write(diff)
+        okp, outp = _git_full(["apply", "--binary", "--whitespace=nowarn", fh.name], where)
+        os.unlink(fh.name)
+        if not okp:
+            _git(["worktree", "remove", "--force", where], main)
+            _git(["branch", "-D", branch], main)
+            return None, f"the folder's changes did not carry over: {outp[:300]}"
+    _, others = _git(["ls-files", "--others", "--exclude-standard", "-z"], root, raw=True)
+    for rel in (others or "").split("\0"):
+        if not rel:
+            continue
+        src = os.path.join(root, rel)
+        try:
+            if os.path.isfile(src) and os.path.getsize(src) <= _SUB_COPY_MAX:
+                dst = os.path.join(where, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+        except OSError:
+            pass
+    _git(["add", "-A"], where)
+    _git(["commit", "-q", "--allow-empty", "--no-verify", "-m", "the folder as the sub-task found it"],
+         where, env=_SUB_IDENT)
+    _, start = _git(["rev-parse", "HEAD"], where)
+    rel = os.path.relpath(os.path.abspath(folder), root)
+    return (where if rel == "." else os.path.join(where, rel)), {
+        "root": root, "main": main, "where": where, "branch": branch, "start": start}
+
+
+def _sub_remap(value):
+    rm = getattr(_TURN_SESSION, "remap", None)
+    if not rm or not isinstance(value, str) or not value:
+        return value
+    src, dst = rm
+    if any(c.isspace() for c in value):
+        return value
+    v = os.path.expanduser(value)
+    if v == src or v.startswith(src + os.sep):
+        return dst + v[len(src):]
+    return value
+
+
+def _sub_remap_args(name, args):
+    rm = getattr(_TURN_SESSION, "remap", None)
+    if not rm:
+        return args
+    src, dst = rm
+    out = {}
+    for k, v in args.items():
+        if isinstance(v, str):
+            if k in ("command", "cmd", "script") and src in v:
+                v = re.sub(re.escape(src) + r"(?=$|[/\\\s'\";:&|)])", dst.replace("\\", "\\\\"), v)
+            else:
+                v = _sub_remap(v)
+        elif isinstance(v, list):
+            v = [_sub_remap(x) for x in v]
+        out[k] = v
+    return out
+
+
+def _sub_worktree_drop(st):
+    _git(["worktree", "remove", "--force", st["where"]], st["main"])
+    _git(["branch", "-D", st["branch"]], st["main"])
+
+
+def _sub_worktree_close(st, label, keep=True):
+    where = st["where"]
+    _git(["add", "-A"], where)
+    _, names = _git(["diff", "--cached", "--name-only", st["start"]], where)
+    files = [f for f in (names or "").splitlines() if f]
+    if not keep:
+        _sub_worktree_drop(st)
+        return {"dropped": files}
+    if not files:
+        _sub_worktree_drop(st)
+        return {"applied": []}
+    _, patch = _git(["diff", "--cached", "--binary", st["start"]], where, raw=True)
+    import tempfile as _tf
+    with _tf.NamedTemporaryFile("w", suffix=".patch", delete=False, encoding="utf-8") as fh:
+        fh.write(patch)
+    try:
+        with _SUB_APPLY_LOCK:
+            ok, out = _git_full(["apply", "--binary", "--whitespace=nowarn", fh.name], st["root"])
+    finally:
+        os.unlink(fh.name)
+    if ok:
+        _sub_worktree_drop(st)
+        return {"applied": files}
+    _git(["commit", "-q", "--no-verify", "-m", f"sub-task: {label}"[:200]], where, env=_SUB_IDENT)
+    return {"kept": st["branch"], "where": where, "files": files, "why": out[:300]}
 
 
 def tool_git_commit(path=None, message="", files=None, allow_main=False):
@@ -15476,7 +15607,7 @@ def _subagent_remote(target, prompt, terminal=False, ctx=None):
 
 def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
                     messages=None, given="", event_sink=None, tool_names=None,
-                    seat=False):
+                    seat=False, project=None, remap=None):
     import fed_agent
     base_url, api_key, model = _orch_model_endpoint(model_name, ctx)
     qa_url, qa_key, qa_model = _orch_role_endpoint("qa", ctx)
@@ -15544,6 +15675,13 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
     _prev = {k_: getattr(_TURN_SESSION, k_, None) for k_ in _TURN_SNAPSHOT_FIELDS}
     for k_, v_ in _snap.items():
         setattr(_TURN_SESSION, k_, v_)
+    _deleg_names = ctx.delegate_names
+    _TURN_SESSION.remap = None
+    if project:
+        _TURN_SESSION.project = project
+        if isinstance(remap, tuple):
+            _TURN_SESSION.remap = remap
+        _deleg_names = _SUB_SCREEN_TOOLS if ctx.delegate_names else ()
     _has_conv = bool(_turn_messages_of(
         (getattr(ctx, "turn_id", "") or "").strip()))
     _names = set(tool_names if tool_names is not None
@@ -15561,7 +15699,7 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
             given=given, max_iterations=max_iter,
             on_event=on_event, cancel=ctx.cancel,
             turn_id=f"{ctx.turn_id}~{sid}", llm_chat=chat,
-            delegate=delegate, delegate_names=ctx.delegate_names,
+            delegate=delegate, delegate_names=_deleg_names,
             is_blocked=_sub_is_blocked,
             qa=qa_mode, qa_chat=qa_chat, qa_max_rounds=1,
             qa_self=(qa_model or "").strip() == (model or "").strip(),
@@ -15573,6 +15711,7 @@ def _subagent_local(prompt, profile, model_name, ctx, sid, terminal=False,
         fed_agent.forget_turn(f"{ctx.turn_id}~{sid}")
         for k_, v_ in _prev.items():
             setattr(_TURN_SESSION, k_, v_)
+        _TURN_SESSION.remap = None
     try:
         _n_tools = len([t for t in (res.get("tool_trace") or [])
                         if (t.get("tool") or "") != "intent"])
@@ -15714,8 +15853,57 @@ def tool_plan_and_orchestrate(task, solo_single=False):
                 "args": {"target": target}}})
             out = _subagent_remote(target, prompt, terminal, ctx)
         else:
-            out = _subagent_local(prompt, profile, model_name, ctx,
-                                  uuid.uuid4().hex[:6], terminal)
+            _sid = uuid.uuid4().hex[:6]
+            _sub_path, _st = (None, None)
+            if _wt_parallel:
+                _sub_path, _st = _sub_worktree_open(
+                    _ctx_proj, f"{_wt_slug(getattr(ctx, 'turn_id', '') or 'plan')[:12]}-{_sid}")
+                if _sub_path:
+                    ctx.emit({"event": "orch", "orch": {
+                        "type": "note", "key": "orch.sub_worktree",
+                        "args": {"goal": goal[:70]}}})
+                else:
+                    ctx.emit({"event": "orch", "orch": {
+                        "type": "note", "key": "orch.sub_no_worktree",
+                        "args": {"goal": goal[:70], "why": str(_st)[:200]}}})
+                    _st = None
+            _ok_sub = False
+            if _st:
+                prompt = (f"{prompt}\n\n[You work in {_sub_path}, a git worktree of the "
+                          f"project made for this sub-task: read, edit and run there. "
+                          f"The project's folder {_st['root']} is shared with the other "
+                          f"sub-tasks; your changes reach it when you finish.]")
+            try:
+                out = _subagent_local(prompt, profile, model_name, ctx, _sid,
+                                      terminal, project=_sub_path,
+                                      remap=((_st["root"], _st["where"]) if _st else None))
+                _ok_sub = bool(out) and not out.startswith(
+                    ("[sub-agent error", "[stopped by the user]"))
+            finally:
+                if _st:
+                    _home = _sub_worktree_close(_st, goal[:120], keep=_ok_sub)
+                    if _home.get("dropped"):
+                        ctx.emit({"event": "orch", "orch": {
+                            "type": "note", "key": "orch.sub_dropped",
+                            "args": {"goal": goal[:70], "n": len(_home["dropped"])}}})
+                    elif _home.get("kept"):
+                        ctx.emit({"event": "orch", "orch": {
+                            "type": "note", "key": "orch.sub_kept",
+                            "args": {"goal": goal[:70], "branch": _home["kept"],
+                                     "where": _home["where"],
+                                     "files": ", ".join(_home["files"][:8])}}})
+                        out = (out or "") + (
+                            f"\n\n[Its changes did not apply over the project folder "
+                            f"as it is now ({_home['why'][:160]}); they are committed on "
+                            f"the branch {_home['kept']}, in {_home['where']}: "
+                            f"{', '.join(_home['files'][:8])}.]")
+                    elif _home.get("applied"):
+                        ctx.emit({"event": "orch", "orch": {
+                            "type": "note", "key": "orch.sub_applied",
+                            "args": {"goal": goal[:70], "n": len(_home["applied"])}}})
+                        out = (out or "") + (
+                            f"\n\n[Its changes are in the project folder: "
+                            f"{', '.join(_home['applied'][:12])}.]")
         if not out or out.startswith("[sub-agent error") \
                 or out.startswith("[stopped by the user]"):
             raise RuntimeError(out or "empty result")
@@ -15751,9 +15939,13 @@ def tool_plan_and_orchestrate(task, solo_single=False):
             else (lambda k, d: d))
     _par = _int("multi_max_parallel", 4)
     _ctx_proj = getattr(ctx, "code_project", "")
+    _wt_parallel = False
     if _ctx_proj and _par > 1:
-        progress_fn({"type": "note", "key": "orch.serial_code", "args": {"n": _par}})
-        _par = 1
+        if _git_root(_ctx_proj):
+            _wt_parallel = True
+        else:
+            progress_fn({"type": "note", "key": "orch.serial_code", "args": {"n": _par}})
+            _par = 1
     orch = Orchestrator(
         llm_fn, agent_fn, progress_fn,
         max_parallel=_par,
@@ -18580,6 +18772,7 @@ if __name__ == "__main__":
             _side_chat.label = _background_model_name
             fed_agent.configure_side_chat(_side_chat)
             fed_agent.configure_consent(_fed_consent)
+            fed_agent.configure_args_rewrite(_sub_remap_args)
             if CONFIG.getboolean("AGENTIC", "defer_tool_schemas", fallback=True):
                 _load_tool_uses()
                 fed_agent.configure_deferred(hot=hot_tools,
