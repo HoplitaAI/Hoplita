@@ -779,6 +779,19 @@ from Notes, and such a note is yours: it rides with the four, under its title
 and id, read as coming from you (a request left there gets done), and the model
 may edit or delete it but not rename it into a new title.
 
+**Two tabs, one repository: each its own worktree.** The first tab that opens a
+repository works in its folder. A tab that opens the same repository while another
+open tab works in that folder gets a git worktree of its own, beside the repository
+(`<name>.worktrees/`), on a branch `hoplita/<tab>-xxxx` made from the last commit of
+the branch the folder is on (what is not committed there is not in it), and the chat
+says so. Its build, its tests and its edits are its own, and its memory, journal and
+specs are the project's. **± Changes** then shows the worktree's box: its branch, what
+it holds against the branch it came from, **Branch diff**, **Merge into …** (into that
+branch, in the repository's folder; it refuses, saying why, with changes not committed
+on either side, with the folder on another branch, or on conflict, which is aborted
+clean) and **Discard** (asks, then removes the worktree and its branch, and the tab
+leaves the project). Tool `code_worktree`.
+
 **The left bar: one view at a time**, and pressing the active icon again folds the
 side panel away and gives you the code full screen.
 

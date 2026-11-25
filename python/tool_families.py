@@ -24,6 +24,7 @@ _EXACT = {
     "add_task": "tasks", "update_task_progress": "tasks",
     "task_depends": "tasks",
     "get_todo_context": "tasks", "project_journal": "tasks",
+    "project_journal_search": "tasks",
     "project_write": "tasks",
     "sticky_note": "chat",
     "render_html": "canvas", "dashboard_render": "canvas",

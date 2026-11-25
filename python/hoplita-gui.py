@@ -9747,6 +9747,27 @@ enabled = true
         _pc = QWidget(); pc = QVBoxLayout(_pc)
         pc.setContentsMargins(0, 0, 0, 0); pc.setSpacing(6)
         pc.addWidget(_title(t("code.changed_files").upper()))
+        self._code_wt_box = QWidget()
+        _wtl = QVBoxLayout(self._code_wt_box)
+        _wtl.setContentsMargins(8, 6, 8, 6); _wtl.setSpacing(4)
+        self._code_wt_box.setObjectName("code_wt_box")
+        self._code_wt_box.setStyleSheet(
+            "#code_wt_box { background:#132033; border:1px solid #2b4a6f; "
+            "border-radius:8px; }")
+        self._code_wt_label = QLabel("")
+        self._code_wt_label.setWordWrap(True)
+        self._code_wt_label.setStyleSheet("QLabel { color:#cfe3ff; font-size:12px; }")
+        self._code_wt_label.setToolTip(t("code.wt_tip"))
+        _wtl.addWidget(self._code_wt_label)
+        _wtr = QHBoxLayout(); _wtr.setSpacing(4)
+        _wtr.addWidget(_btn(t("code.wt_diff"), self._code_wt_diff))
+        self._code_wt_merge_btn = _btn(t("code.wt_merge", base="…"), self._code_wt_merge, green=True)
+        _wtr.addWidget(self._code_wt_merge_btn)
+        _wtr.addWidget(_btn(t("code.wt_discard"), self._code_wt_discard))
+        _wtl.addLayout(_wtr)
+        self._code_wt_box.setVisible(False)
+        self._code_wt = None
+        pc.addWidget(self._code_wt_box)
         self.code_only_mine = QCheckBox(t("code.only_mine"))
         self.code_only_mine.setChecked(True)
         self.code_only_mine.setToolTip(t("code.only_mine_hint"))
@@ -12397,6 +12418,7 @@ enabled = true
         p = self.code_project_edit.text().strip()
         if not p:
             return
+        p = self._code_claim_folder(p)
         self._code_project = p
         ctx = getattr(self, "_chat_ctxs", {}).get(getattr(self, "_active_tab_id", None))
         if ctx is not None:
@@ -12488,6 +12510,100 @@ enabled = true
         self._code_open_in_tab(path)
         self._code_load_tree()
         self._code_say(t("code.new_ok", name=name))
+
+    def _code_claim_folder(self, p):
+        me = getattr(self, "_active_tab_id", None)
+        others = [getattr(c, "code_project", "") for tid, c in
+                  (getattr(self, "_chat_ctxs", {}) or {}).items()
+                  if tid != me and getattr(c, "code_project", "")]
+        if not others:
+            return p
+        title = next((x.get("title", "") for x in getattr(self, "_chat_tabs", [])
+                      if x.get("id") == me), "") or "tab"
+        ok, r, err = self._mcp_try("code_worktree", {"op": "claim", "path": p,
+                                                     "name": title, "others": others},
+                                   timeout=60)
+        if not ok:
+            self.add_message(t("code.wt_failed", err=err), "system")
+            return p
+        if r.get("worktree"):
+            self.code_project_edit.setText(r["path"])
+            self.add_message(t("code.wt_claimed", path=r["path"], branch=r.get("branch", ""),
+                               base=r.get("base", ""), main=r.get("main", "")), "system")
+            return r["path"]
+        return p
+
+    def _code_wt_paint(self, info):
+        self._code_wt = info if isinstance(info, dict) else None
+        box = getattr(self, "_code_wt_box", None)
+        if box is None:
+            return
+        if not self._code_wt:
+            box.setVisible(False)
+            return
+        i = self._code_wt
+        text = t("code.wt_label", branch=i.get("branch", ""), base=i.get("base", "") or "?",
+                 ahead=i.get("ahead", 0))
+        if i.get("dirty"):
+            text += t("code.wt_dirty", n=len(i["dirty"]))
+        self._code_wt_label.setText(text)
+        self._code_wt_merge_btn.setText(t("code.wt_merge", base=i.get("base", "") or "?"))
+        self._code_wt_merge_btn.setEnabled(bool(i.get("ahead")) and not i.get("dirty"))
+        box.setVisible(True)
+
+    def _code_wt_diff(self):
+        project = self._code_project
+
+        def done(res):
+            ok, r, err = res if isinstance(res, tuple) else (False, {}, "")
+            if project != self._code_project:
+                return
+            if not ok:
+                self._code_say(err, bad=True)
+                return
+            self.code_diff.setHtml(self._render_diff_html(r.get("diff", "") or "", reject=False))
+            self._code_say(t("code.wt_diff_shown", stat=(r.get("stat", "") or "").splitlines()[-1:][0]
+                             if r.get("stat") else "0"))
+        self._bg(lambda: self._mcp_try("code_worktree", {"op": "diff", "path": project},
+                                       timeout=30), done)
+
+    def _code_wt_merge(self):
+        project = self._code_project
+
+        def done(res):
+            ok, r, err = res if isinstance(res, tuple) else (False, {}, "")
+            if ok:
+                self.add_message(t("code.wt_merged", branch=r.get("branch", ""),
+                                   base=r.get("into", ""), n=len(r.get("commits") or [])),
+                                 "system")
+            else:
+                extra = ", ".join((r or {}).get("conflicts") or (r or {}).get("main_dirty") or [])
+                self.add_message(t("code.wt_failed", err=err + (f" ({extra})" if extra else "")),
+                                 "system")
+            self._code_refresh()
+        self._bg(lambda: self._mcp_try("code_worktree", {"op": "merge", "path": project},
+                                       timeout=60), done)
+
+    def _code_wt_discard(self):
+        i = self._code_wt or {}
+        project = self._code_project
+        if not project:
+            return
+        yes = QMessageBox.question(
+            self, t("code.wt_discard"),
+            t("code.wt_discard_q", path=project, branch=i.get("branch", "")),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if yes != QMessageBox.StandardButton.Yes:
+            return
+        ok, r, err = self._mcp_try("code_worktree", {"op": "discard", "path": project,
+                                                     "force": True}, timeout=60)
+        if not ok:
+            self.add_message(t("code.wt_failed", err=err), "system")
+            return
+        self.add_message(t("code.wt_discarded", path=project), "system")
+        self._code_wt_paint(None)
+        self._code_close_project(silent=True)
 
     def _code_close_project(self, silent=False):
         ctx = getattr(self, "_chat_ctxs", {}).get(
@@ -12614,6 +12730,7 @@ enabled = true
         self.code_diff.clear()
         self._code_reload_clean_bufs()
         if not self._code_project:
+            self._code_wt_paint(None)
             self._code_welcome()
             if then:
                 then()
@@ -12627,6 +12744,13 @@ enabled = true
             ok, st, err = self._mcp_try("git_status", {"path": project})
             if not ok:
                 return {"stage": "status", "err": err}
+            okw, wi, _ = self._mcp_try("code_worktree", {"op": "info", "path": project})
+            wt = wi if okw and wi.get("branch") else None
+            r = work_diff(st)
+            r["wt"] = wt
+            return r
+
+        def work_diff(st):
             ok, dd, err = self._mcp_try(
                 "git_diff", {"path": project, "since_checkpoint": mine},
                 timeout=30)
@@ -12646,6 +12770,7 @@ enabled = true
             if gen != getattr(self, "_code_refresh_gen", 0) \
                     or project != self._code_project:
                 return
+            self._code_wt_paint((r or {}).get("wt") if isinstance(r, dict) else None)
             self._code_refresh_paint(r if isinstance(r, dict) else {})
             if then:
                 then()

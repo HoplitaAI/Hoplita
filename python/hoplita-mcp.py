@@ -8324,6 +8324,166 @@ def tool_git_merge(path=None, branch="", into="main", delete_branch=False):
     return res
 
 
+_WT_PREFIX = "hoplita/"
+
+
+def _wt_main_root(root):
+    ok, common = _git(["rev-parse", "--path-format=absolute", "--git-common-dir"], root)
+    if not (ok and common):
+        return None
+    common = os.path.normpath(common)
+    if os.path.basename(common) == ".git":
+        return os.path.dirname(common)
+    return None
+
+
+def _wt_slug(text):
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:32] or "tab"
+
+
+def _wt_home(main):
+    parent = os.path.dirname(main)
+    home = os.path.join(parent, os.path.basename(main) + ".worktrees")
+    if os.access(parent, os.W_OK):
+        return home
+    return os.path.join(hoplita_base(), "worktrees", os.path.basename(main))
+
+
+def _wt_info(root):
+    main = _wt_main_root(root)
+    if not main or os.path.normpath(main) == os.path.normpath(root):
+        return None
+    _, branch = _git(["branch", "--show-current"], root)
+    base = ""
+    if branch:
+        _, base = _git(["config", "--get", f"branch.{branch}.hoplitabase"], root)
+    ahead = 0
+    if base:
+        ok, n = _git(["rev-list", "--count", f"{base}..HEAD"], root)
+        ahead = int(n) if ok and n.isdigit() else 0
+    _, st = _git(["status", "--porcelain"], root, raw=True)
+    dirty = [l[3:] for l in (st or "").splitlines() if l.strip()]
+    return {"path": root, "main": main, "branch": branch, "base": base,
+            "ahead": ahead, "dirty": dirty[:30],
+            "ours": branch.startswith(_WT_PREFIX)}
+
+
+def tool_code_worktree(op="", path=None, name=None, others=None, force=False):
+    op = (op or "").strip()
+    if op not in ("claim", "info", "diff", "merge", "discard", "list"):
+        return {"error": f"unknown op '{op}'; one of claim, info, diff, merge, discard, list."}
+    p = os.path.abspath(os.path.expanduser(path or "."))
+    if op == "claim":
+        root = _git_root(p)
+        if not root:
+            return {"path": p, "worktree": False, "reason": "not a git repository"}
+        main = _wt_main_root(root)
+        if not main or os.path.normpath(root) != os.path.normpath(main):
+            return {"path": p, "worktree": False, "reason": "already a worktree"}
+        busy = False
+        for o in (others or []):
+            o_root = _git_root(str(o or "")) if o else None
+            if o_root and os.path.normpath(o_root) == os.path.normpath(main):
+                busy = True
+                break
+        if not busy:
+            return {"path": p, "worktree": False, "reason": "the folder is free"}
+        _, base = _git(["branch", "--show-current"], main)
+        if not base:
+            _, base = _git(["rev-parse", "HEAD"], main)
+        branch = f"{_WT_PREFIX}{_wt_slug(name)}-{os.urandom(2).hex()}"
+        where = os.path.join(_wt_home(main), branch.split("/", 1)[1])
+        os.makedirs(os.path.dirname(where), exist_ok=True)
+        ok, out = _git(["worktree", "add", "-b", branch, where, "HEAD"], main)
+        if not ok:
+            return {"error": f"git could not make the worktree: {(out or '').strip()[:300]}",
+                    "path": p}
+        _git(["config", f"branch.{branch}.hoplitabase", base], main)
+        rel = os.path.relpath(p, main)
+        return {"path": where if rel == "." else os.path.join(where, rel),
+                "worktree": True, "branch": branch, "base": base, "main": main,
+                "note": "made from the last commit; changes not committed in "
+                        "the main folder are not in it"}
+    root = _git_root(p)
+    if not root:
+        return {"error": "Not a git repository.", "path": p}
+    if op == "list":
+        main = _wt_main_root(root) or root
+        _, out = _git(["worktree", "list", "--porcelain"], main)
+        rows = []
+        for block in (out or "").split("\n\n"):
+            wp = next((l[9:] for l in block.splitlines() if l.startswith("worktree ")), "")
+            if wp and os.path.normpath(wp) != os.path.normpath(main):
+                i = _wt_info(wp) if os.path.isdir(wp) else None
+                rows.append(i or {"path": wp, "missing": not os.path.isdir(wp)})
+        return {"main": main, "worktrees": rows}
+    info = _wt_info(root)
+    if info is None:
+        return {"error": "this folder is the repository's main checkout, not a worktree.",
+                "path": root}
+    if op == "info":
+        return info
+    base = info["base"]
+    if op == "diff":
+        if not base:
+            return {"error": "the base this worktree was made from is not recorded.", **info}
+        _, diffstat = _git(["diff", "--stat", f"{base}...HEAD"], root)
+        _, diff = _git(["diff", f"{base}...HEAD"], root, raw=True)
+        text, cut = _cap(diff or "")
+        return {**info, "stat": diffstat, "diff": text, "truncated": cut}
+    if op == "merge":
+        if _is_off("git_merge"):
+            return {"error": "merging is blocked by the firewall (git_merge)."}
+        if info["dirty"]:
+            return {"error": "the worktree has changes not committed; commit them "
+                             "(git_commit) or drop them before merging.", **info}
+        if not info["ahead"]:
+            return {"error": "the worktree has no commits beyond its base; nothing to merge.", **info}
+        main = info["main"]
+        _, cur = _git(["branch", "--show-current"], main)
+        if cur != base:
+            return {"error": f"the main folder is on '{cur or 'a detached HEAD'}', not on "
+                             f"'{base}', the branch this worktree came from; it is "
+                             f"merged where that branch is checked out.", **info}
+        _, st = _git(["status", "--porcelain"], main, raw=True)
+        mdirty = [l[3:] for l in (st or "").splitlines() if l.strip() and not l.startswith("??")]
+        if mdirty:
+            return {"error": "the main folder has changes not committed; a merge "
+                             "there would mix them in.", "main_dirty": mdirty[:20], **info}
+        _, before = _git(["rev-parse", "HEAD"], main)
+        ok, out = _git(["merge", "--no-edit", info["branch"]], main)
+        if not ok:
+            _, conflicted = _git(["diff", "--name-only", "--diff-filter=U"], main)
+            _git(["merge", "--abort"], main)
+            return {"error": f"merging '{info['branch']}' into '{base}' conflicts; the "
+                             f"merge was aborted and the main folder is as it was.",
+                    "conflicts": (conflicted or "").splitlines()[:30],
+                    "hint": f"in the worktree, merge '{base}' into its branch, fix, "
+                            f"commit, and merge again.", **info}
+        _, after = _git(["rev-parse", "HEAD"], main)
+        _, log = _git(["log", "--oneline", f"{before}..{after}"], main)
+        return {"ok": True, "into": base, "branch": info["branch"], "main": main,
+                "commits": (log or "").splitlines()[:20]}
+    if op == "discard":
+        if (info["dirty"] or info["ahead"]) and not force:
+            _merged = False
+            if info["ahead"]:
+                ok_m, _ = _git(["merge-base", "--is-ancestor", "HEAD", base], root) if base else (False, "")
+                _merged = ok_m
+            if info["dirty"] or not _merged:
+                return {"error": "the worktree holds work not merged; force=true "
+                                 "throws it away.", **info}
+        main = info["main"]
+        ok, out = _git(["worktree", "remove", "--force", root], main)
+        if not ok:
+            return {"error": f"git could not remove the worktree: {(out or '').strip()[:300]}"}
+        if info["ours"]:
+            _git(["branch", "-D", info["branch"]], main)
+        return {"ok": True, "removed": root, "branch_deleted": info["ours"] and info["branch"]}
+    return {"error": f"unknown op '{op}'."}
+
+
 def tool_git_commit(path=None, message="", files=None, allow_main=False):
     root, err = _git_or_error(path)
     if err:
@@ -10918,6 +11078,8 @@ def register_tools():
                                    "fn": lambda a: tool_git_switch(a.get("path"), a.get("name", ""))},
         "git_merge":              {"desc": "Merge your work branch INTO the trunk (main by default): how a branch opened with git_branch comes home once its work is committed and verified. Refuses with uncommitted changes or conflicts, saying which files; a conflicting merge is aborted clean. Ends on the trunk.",
                                    "fn": lambda a: tool_git_merge(a.get("path"), a.get("branch", ""), a.get("into", "main"), bool(a.get("delete_branch", False)))},
+        "code_worktree":          {"desc": "The tab's own git worktree, when another tab has the folder: info, diff against its base, merge into it, discard, list; claim is the window's.",
+                                   "fn": lambda a: tool_code_worktree(a.get("op"), a.get("path"), a.get("name"), a.get("others"), a.get("force", False))},
         "git_commit":             {"desc": "Record a commit. By default it commits ONLY the files you edited this session, not everything dirty in the tree — the user's work-in-progress is not yours to sign. NEVER pushes. Refuses to commit on main/master unless the user explicitly asked (allow_main), because the trunk is the user's decision, not the loop's.",
                                    "fn": lambda a: tool_git_commit(a.get("path"), a.get("message", ""),
                                                                    a.get("files"), a.get("allow_main", False))},
@@ -11435,6 +11597,7 @@ def register_tool_params():
                                                   "sha": {"type": "string", "description": "The commit to show (from git_log)."}},
                                    "required": ["sha"]},
         "git_switch":             {"properties": {"path": {"type": "string"}, "name": {"type": "string", "description": "An existing branch to go to (e.g. main)."}}, "required": ["name"]},
+        "code_worktree":          {"properties": {"op": {"type": "string", "enum": ["claim", "info", "diff", "merge", "discard", "list"]}, "path": {"type": "string"}, "name": {"type": "string"}, "others": {"type": "array", "items": {"type": "string"}}, "force": {"type": "boolean"}}, "required": ["op"]},
         "git_merge":              {"properties": {"path": {"type": "string"}, "branch": {"type": "string", "description": "The work branch to merge."}, "into": {"type": "string", "description": "The target branch. Default main."}, "delete_branch": {"type": "boolean", "description": "Delete the work branch after a successful merge. Default false."}}, "required": ["branch"]},
         "git_branch":             {"properties": {"path": {"type": "string"},
                                                   "name": {"type": "string", "description": "Create this branch and switch to it. Omit to just list."},
@@ -13328,7 +13491,7 @@ def _unavailable_tools():
     return set(_PICTURE_TOOLS) if not _image_cfg()[0] else set()
 
 
-_SAME_DOOR = {"exec_command": "run_command"}
+_SAME_DOOR = {"exec_command": "run_command", "code_worktree": "git_branch"}
 
 
 def _door_of(name):
@@ -14011,7 +14174,25 @@ def _project_category(root):
                 return str(alias)
     except Exception:
         pass
+    main = _worktree_main_of(root)
+    if main:
+        return _project_category(main)
     return os.path.basename(root)
+
+
+def _worktree_main_of(root):
+    try:
+        with open(os.path.join(root, ".git"), encoding="utf-8") as f:
+            line = f.readline().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    gd = os.path.normpath(os.path.join(root, line[7:].strip()))
+    parts = gd.split(os.sep)
+    if len(parts) >= 3 and parts[-3] == ".git" and parts[-2] == "worktrees":
+        return os.sep.join(parts[:-3]) or None
+    return None
 
 
 def _project_notes(root):
