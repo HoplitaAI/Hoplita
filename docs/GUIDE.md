@@ -930,6 +930,12 @@ The tab keeps Claude Code's session: the next turn, and the tab reopened from
 History, resume the same conversation. A project open in the tab is its working
 folder (a worktree of its own when another tab has the folder).
 
+**Its context is its own.** Claude Code keeps and folds its conversation itself:
+the meter shows the window it reports for its model, HOPLITA's compaction never
+runs on the tab, `/compact` typed there is Claude Code's own, and when it folds,
+on its own or asked, the chat says so. The model is the one your `claude` is
+set to.
+
 **Your plan, your sign-in.** It uses the `claude` you installed and signed in to,
 or `ANTHROPIC_API_KEY`; HOPLITA never shows a Claude sign-in and never reads or
 stores your credentials. It needs Anthropic's Claude Code SDK, which is not part

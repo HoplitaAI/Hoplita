@@ -120,6 +120,11 @@ def run_turn(prompt, emit, should_stop, cwd="", session_id="", door_blocked=None
 
     def on_message(m):
         if isinstance(m, S.SystemMessage):
+            if m.subtype == "compact_boundary":
+                meta = (m.data or {}).get("compact_metadata") or {}
+                emit({"event": "engine_compacted", "trigger": meta.get("trigger", ""),
+                      "pre_tokens": meta.get("pre_tokens") or 0})
+                return
             if m.subtype == "init":
                 d = m.data or {}
                 state["session_id"] = d.get("session_id") or state["session_id"]
@@ -174,11 +179,14 @@ def run_turn(prompt, emit, should_stop, cwd="", session_id="", door_blocked=None
             elif m.result and not state["reply"]:
                 state["reply"] = m.result
             u = m.usage or {}
-            pt = int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) \
-                + int(u.get("cache_creation_input_tokens") or 0)
+            last = (u.get("iterations") or [u])[-1] or {}
+            pt = int(last.get("input_tokens") or 0) + int(last.get("cache_read_input_tokens") or 0) \
+                + int(last.get("cache_creation_input_tokens") or 0)
+            win = max([int((v or {}).get("contextWindow") or 0)
+                       for v in (m.model_usage or {}).values()] or [0])
             if pt:
                 emit({"event": "tokens", "prompt_tokens": pt, "iteration": m.num_turns,
-                      "estimated": False})
+                      "estimated": False, "context_limit": win})
 
     async def go():
         async with S.ClaudeSDKClient(options=S.ClaudeAgentOptions(**opts)) as client:

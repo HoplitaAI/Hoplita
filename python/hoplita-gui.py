@@ -16898,6 +16898,8 @@ enabled = true
         ctx = self._chat_ctxs.get(tab_id or self._active_tab_id)
         if ctx is None or ctx.compacting or prompt_tokens <= 2000:
             return
+        if getattr(ctx, "engine", ""):
+            return
         if getattr(ctx, "ctx_measured", False):
             return
         ctx.ctx_measured = True
@@ -17142,6 +17144,12 @@ enabled = true
             self._handle_why_command(msg[4:].strip())
         elif msg.strip() == "/context":
             self._run_in_tab(_tab, self._handle_context_command)
+        elif msg.strip() == "/compact" and getattr(self._view_ctx(), "engine", ""):
+            self.conversation_history.append({"role": "user", "content": msg})
+            if not self._spawn_turn(self._active_tab_id, self.call_normal_ai, msg):
+                self._msg_queue.append((msg, []))
+                self._update_queue_label()
+                self.add_message(t("queue.turn_busy"), "system")
         elif msg.strip() == "/compact":
             self._compact_now()
         elif msg.startswith("/notes "):
@@ -19319,6 +19327,10 @@ enabled = true
                             _prep_seen = True
                     elif et == "orch":
                         self._paint_orch_event(ev.get("orch") or {})
+                    elif et == "engine_compacted":
+                        self.thread_msg(t("claude.compacted",
+                                          n=f"{int(ev.get('pre_tokens') or 0):,}"), "system",
+                                        keep=True)
                     elif et == "council":
                         self._paint_council_event(ev.get("council") or {})
                     elif et == "council_ack":

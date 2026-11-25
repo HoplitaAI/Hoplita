@@ -315,6 +315,7 @@
   "claude.tab_born": "This tab is answered by Claude Code ({cli}). What you write here goes to Anthropic through it; a project open in the tab is its working folder.",
   "claude.cli_bundled": "the SDK's own binary",
   "claude.no_sign_in": "No Claude sign-in or API key was found on this machine: run `claude` once in a terminal and sign in, or set ANTHROPIC_API_KEY.",
+  "claude.compacted": "Claude Code folded its conversation into a summary (it was {n} tokens).",
   "claude.turn_cost": "Claude Code: this turn's cost as reported, ${cost}",
   "chat.context_full": "[⚠ CONTEXT FULL — the model could not write anything: the prompt is {pt} tokens and the completion was cut at once. Nothing to redo. Reset or compact this conversation, or open a new tab, and ask again.]",
   "chat.tool_call_cut": "[⚠ TOOL CALL CUT — the model began a call to `{tool}` and the output limit cut it after {ct} completion tokens (max_tokens {cm}): its reasoning spent the budget before the call closed, and the server passed the fragment on as text. Nothing to redo. Raise [CHAT] max_tokens or lower the model's reasoning effort, and ask again.]",

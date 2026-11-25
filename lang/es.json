@@ -315,6 +315,7 @@
   "claude.tab_born": "Esta pestaña la contesta Claude Code ({cli}). Lo que escribas aquí va a Anthropic a través de él; un proyecto abierto en la pestaña es su carpeta de trabajo.",
   "claude.cli_bundled": "el binario propio del SDK",
   "claude.no_sign_in": "No hay sesión de Claude ni clave de API en esta máquina: ejecuta `claude` una vez en una terminal e inicia sesión, o define ANTHROPIC_API_KEY.",
+  "claude.compacted": "Claude Code ha resumido su conversación (tenía {n} tokens).",
   "claude.turn_cost": "Claude Code: coste de este turno según informa, ${cost}",
   "chat.context_full": "[⚠ CONTEXTO LLENO — el modelo no ha podido escribir nada: el prompt son {pt} tokens y la respuesta se cortó de inmediato. No hay nada que rehacer. Resetea o compacta esta conversación, o abre otra pestaña, y vuelve a preguntar.]",
   "chat.tool_call_cut": "[⚠ LLAMADA CORTADA — el modelo empezó una llamada a `{tool}` y el tope de salida la cortó tras {ct} tokens de respuesta (max_tokens {cm}): su razonamiento gastó el presupuesto antes de cerrar la llamada, y el servidor pasó el fragmento como texto. No hay nada que rehacer. Sube [CHAT] max_tokens o baja el esfuerzo de razonamiento del modelo, y vuelve a preguntar.]",
