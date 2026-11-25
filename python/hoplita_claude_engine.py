@@ -129,6 +129,11 @@ def run_turn(prompt, emit, should_stop, cwd="", session_id="", door_blocked=None
             return
         if isinstance(m, S.AssistantMessage):
             sub = bool(m.parent_tool_use_id)
+            if getattr(m, "error", None) and not sub:
+                state["error"] = " ".join(b.text for b in (m.content or [])
+                                          if isinstance(b, S.TextBlock)).strip() \
+                    or str(m.error)
+                return
             for b in m.content or []:
                 if isinstance(b, S.ThinkingBlock) and (b.thinking or "").strip():
                     emit({"event": "thought", "text": b.thinking})
@@ -161,11 +166,13 @@ def run_turn(prompt, emit, should_stop, cwd="", session_id="", door_blocked=None
         if isinstance(m, S.ResultMessage):
             state["session_id"] = m.session_id or state["session_id"]
             state["cost"] = m.total_cost_usd
-            if m.result and not state["reply"]:
-                state["reply"] = m.result
             if m.is_error:
-                state["error"] = "; ".join(str(e) for e in (m.errors or [])) \
-                    or (m.subtype or "error")
+                state["error"] = state["error"] or "; ".join(str(e) for e in (m.errors or [])) \
+                    or (m.result or "").strip() or (m.subtype or "error")
+                if not state["n_tools"] and not state["reply"]:
+                    state["session_id"] = session_id or ""
+            elif m.result and not state["reply"]:
+                state["reply"] = m.result
             u = m.usage or {}
             pt = int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) \
                 + int(u.get("cache_creation_input_tokens") or 0)

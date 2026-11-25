@@ -16589,8 +16589,12 @@ def _engine_turn_worker(req, turn_id, put, cancel_ev, said):
              "engine_session": r.get("session_id", "")})
         return
     if r.get("error") and not r.get("reply"):
+        st = _ce.status()
+        hint = ("" if (st.get("signed_in") or st.get("api_key")) else
+                " No Claude sign-in nor API key on this machine: run `claude` once "
+                "in a terminal and sign in, or set ANTHROPIC_API_KEY.")
         put({"event": "error", "iterations": r.get("tools", 0),
-             "error": f"Claude Code: {r['error']}",
+             "error": f"Claude Code: {r['error']}{hint}",
              "engine_session": r.get("session_id", "")})
         return
     reply = r.get("reply", "")
