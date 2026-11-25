@@ -16220,6 +16220,8 @@ class AgentTurnReq(BaseModel):
     pinned_skills: List[Dict[str, Any]] = []
     code_project: str = ""
     blocked_tools: List[str] = []
+    engine: str = ""
+    engine_session: str = ""
     local_only: bool = False
     rag_docs: int = 0
 
@@ -16303,6 +16305,12 @@ def _agent_turn_events(req):
             return getattr(self._q, n)
 
     events = _LoggedQueue(events)
+
+    if (req.engine or "").strip() == "claude_code":
+        threading.Thread(target=_engine_turn_worker,
+                         args=(req, turn_id, events.put, cancel_ev, _said),
+                         daemon=True, name=f"engine-turn-{turn_id}").start()
+        return _turn_stream(req, events, turn_id, cancel_ev, _said)
 
     ep = req.endpoint or {}
     _conv_key = (req.session or req.session_uuid or "").strip()
@@ -16514,7 +16522,11 @@ def _agent_turn_events(req):
 
     threading.Thread(target=_worker, daemon=True,
                      name=f"agent-turn-{turn_id}").start()
+    return _turn_stream(req, events, turn_id, cancel_ev, _said)
 
+
+def _turn_stream(req, events, turn_id, cancel_ev, _said):
+    import fed_agent
     _hb_stop = threading.Event()
 
     def _heartbeat():
@@ -16552,6 +16564,53 @@ def _agent_turn_events(req):
             fed_agent.forget_turn(turn_id)
 
     return _stream()
+
+
+def _engine_turn_worker(req, turn_id, put, cancel_ev, said):
+    import hoplita_claude_engine as _ce
+    put({"event": "turn_start", "turn_id": turn_id, "tools": 0, "engine": "claude_code"})
+    if _turn_local_only(req.local_only, req.code_project):
+        put({"event": "error", "iterations": 0,
+             "error": "this conversation is local-only, and Claude Code sends "
+                      "what it is given to Anthropic: it does not answer here."})
+        return
+    if not _ce.sdk_available():
+        put({"event": "error", "iterations": 0,
+             "error": "the Claude Code engine is not installed "
+                      "(POST /agent/engine/claude/install)."})
+        return
+    _blocked = set(req.blocked_tools or [])
+    r = _ce.run_turn(said or "", put, cancel_ev.is_set,
+                     cwd=(req.code_project or "").strip(),
+                     session_id=(req.engine_session or "").strip(),
+                     door_blocked=lambda d: _is_off(d, _blocked))
+    if cancel_ev.is_set():
+        put({"event": "cancelled", "iterations": r.get("tools", 0),
+             "engine_session": r.get("session_id", "")})
+        return
+    if r.get("error") and not r.get("reply"):
+        put({"event": "error", "iterations": r.get("tools", 0),
+             "error": f"Claude Code: {r['error']}",
+             "engine_session": r.get("session_id", "")})
+        return
+    reply = r.get("reply", "")
+    if r.get("error"):
+        reply += f"\n\n[Claude Code ended with an error: {r['error']}]"
+    put({"event": "reply", "reply": reply, "iterations": r.get("tools", 0),
+         "engine": "claude_code", "engine_session": r.get("session_id", ""),
+         "engine_cost_usd": r.get("cost_usd"), "turn_record": "", "transcript": []})
+
+
+@app.get("/agent/engine/claude/status")
+def engine_claude_status():
+    import hoplita_claude_engine as _ce
+    return _ce.status()
+
+
+@app.post("/agent/engine/claude/install")
+def engine_claude_install():
+    import hoplita_claude_engine as _ce
+    return _ce.install()
 
 
 class AgentToolResultReq(BaseModel):

@@ -40,6 +40,8 @@ paint as it happens.
 | `rag_docs` | `0` | How much the caller's knowledge base holds for this conversation (attached documents, URLs, dumped notes). With something loaded, `search_rag` rides among the hot tools — the tool the cut of a long document points at must not sit on the shelf. |
 | `blocked_tools` | `[]` | Tool names THIS turn may not see or run, on top of the global firewall. The GUI sends the calling tab's own policy (right-click on the tab → firewall): the model is not offered them, a delegated call to one is refused before the `client_tool_call` event leaves, and every sub-agent the turn spawns inherits the same set. Empty keeps the turn on the global firewall alone. |
 | `local_only` | `false` | The calling tab's lock (🔒 on the conversation). A locked turn is offered no `fed_*` tool, its sub-agents neither, and the model is told why; the project folder's own local-only mark has the same effect, and either one suffices. |
+| `engine` | `""` | Who answers: `""` is HOPLITA's loop; `"claude_code"` is the user's own Claude Code through Anthropic's Agent SDK (`hoplita_claude_engine`). Its turn takes the last thing the user said, runs in `code_project` (else the home folder) with Claude Code's own tools, sub-agents and memory, and streams the same events a turn of the loop does: `llm_call`, `thought`, `tool_call`/`tool_result` (never delegated), `intent` from its to-do list, `tokens`, and `reply` carrying `engine_session` and `engine_cost_usd` (the cost Claude Code reports). Every tool it would run is decided by the HOPLITA door it opens (Bash → `run_command`, Edit/Write → the code write tools, Read/Grep/Glob → the readers, WebFetch/WebSearch → the web ones), with `blocked_tools` and the global firewall, in a hook that runs for every tool; an open door is a yes. A local-only turn is refused, as Claude Code sends what it is given to Anthropic. Without the SDK the turn ends in an `error` saying so. |
+| `engine_session` | `""` | The Claude Code session to resume; the face keeps the one each `reply`, `cancelled` or `error` hands back. |
 | `ack_mode` | `""` | `"stream"` = you read this stream and will answer a `plan_ack`. Anything else means nobody can approve, and a plan resolves without blocking (local runs, remote is cancelled). |
 | `unattended` | `false` | Nobody in front of the screen (a cron). Never blocks on approval. |
 | `orchestrate` | — | Run the multi-agent orchestrator DIRECTLY as this turn, instead of letting the model decide. This is `/multi`. |
@@ -572,7 +574,8 @@ offer the same screens.
 `POST /agent/plan_ack` · `POST /agent/council_ack` · `POST /agent/stop` ·
 `POST /agent/inject` · `GET /agent/background` · `POST /agent/background/watch` · `POST /agent/background/stop` · `POST /agent/background/done` · `POST /agent/hands` · `POST /agent/memory_snapshot` ·
 `POST /agent/qa` · `GET /agent/context_limit` · `GET /agent/prompt_budget` ·
-`POST /agent/context_map` · `POST /code/judge` · `POST /call`.
+`POST /agent/context_map` · `POST /code/judge` · `POST /call` ·
+`GET /agent/engine/claude/status` (the SDK, the user's `claude`, a sign-in or key by presence only; nothing secret is read) · `POST /agent/engine/claude/install` (pip installs the SDK into the MCP's Python, some 180 MB: `{ok, output}`).
 
 **Another of your machines** — `/tied/<device>/<path>`, any method: the same
 request, asked of the server of one of your own machines (`device` is its

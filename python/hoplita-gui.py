@@ -1850,6 +1850,8 @@ class ChatCtx:
         self.agents = []
         self.intent = []
         self.code_project = ""
+        self.engine = ""
+        self.engine_session = ""
         self.blocked_tools = set()
         self.code_bufs = {}
         self.code_bufs_order = []
@@ -6674,6 +6676,9 @@ enabled = true
             if _bgn:
                 _tips.append(t("bg.tab_tip", n=_bgn, names=", ".join(
                     getattr(self._chat_ctxs.get(tab["id"]), "bg_labels", []) or [])))
+            if getattr(self._chat_ctxs.get(tab["id"]), "engine", "") == "claude_code":
+                btn.setIcon(self._svg_icon("engine_claude", "#d97757", 14))
+                _tips.append(t("claude.tab_tip"))
             btn.setToolTip("\n".join(_tips))
             frame.setStyleSheet(self._chat_tab_css(col, active))
             if working:
@@ -6720,6 +6725,9 @@ enabled = true
             "min-height:22px; max-height:22px; } "
             "QPushButton:hover { background:#3b82f6; color:#ffffff; }")
         plus.clicked.connect(self._new_local_tab)
+        plus.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        plus.customContextMenuRequested.connect(
+            lambda pos, b=plus: self._new_tab_menu(b.mapToGlobal(pos)))
         lay.addSpacing(8)
         lay.addWidget(plus, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addStretch()
@@ -8192,6 +8200,8 @@ enabled = true
             "local_only": bool(getattr(ctx, "local_only", False)),
             "qa_override": getattr(ctx, "qa_override", "") or "",
             "blocked_tools": sorted(getattr(ctx, "blocked_tools", ()) or ()),
+            "engine": getattr(ctx, "engine", "") or "",
+            "engine_session": getattr(ctx, "engine_session", "") or "",
         }
         return sess
 
@@ -8711,6 +8721,8 @@ enabled = true
             ctx.user_fixed_context = sess.get("user_fixed_context") or []
             ctx.pinned_skills = sess.get("pinned_skills") or []
             ctx.code_project = sess.get("code_project") or ""
+            ctx.engine = sess.get("engine") or ""
+            ctx.engine_session = sess.get("engine_session") or ""
             ctx.pinned_device = sess.get("pinned_device") or None
             ctx.sync_id = sess.get("sync_id") or ctx.sync_id
             ctx.verify_cmd = sess.get("verify_cmd") or ""
@@ -8955,6 +8967,63 @@ enabled = true
                                 "title": title, "history_ref": True})
         self._render_chat_tabs()
         return tid
+
+    def _new_tab_menu(self, gpos):
+        m = QMenu(self)
+        m.addAction(t("chat.tab_new_chat"), self._new_local_tab)
+        m.addAction(t("claude.new_tab"), self._new_claude_tab)
+        m.exec(gpos)
+
+    def _new_claude_tab(self):
+        try:
+            st = requests.get(f"{self._mcp_url}/agent/engine/claude/status", timeout=15).json()
+        except Exception as e:
+            self.add_message(t("claude.status_fail", e=e), "error")
+            return
+        if not st.get("sdk"):
+            yes = QMessageBox.question(
+                self, t("claude.new_tab"), t("claude.install_q"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if yes != QMessageBox.StandardButton.Yes:
+                return
+            self.add_message(t("claude.installing"), "system")
+
+            def work():
+                try:
+                    return requests.post(f"{self._mcp_url}/agent/engine/claude/install",
+                                         timeout=1200).json()
+                except Exception as e:
+                    return {"ok": False, "output": str(e)}
+
+            def done(r):
+                r = r if isinstance(r, dict) else {}
+                if not r.get("ok"):
+                    self.add_message(t("claude.install_failed",
+                                       out=str(r.get("output", ""))[-400:]), "error")
+                    return
+                self.add_message(t("claude.installed"), "system")
+                self._make_claude_tab(st)
+            self._bg(work, done)
+            return
+        self._make_claude_tab(st)
+
+    def _make_claude_tab(self, st):
+        tid = self._make_local_tab(title=t("claude.tab_title"))
+        ctx = self._chat_ctxs.get(tid)
+        if ctx is not None:
+            ctx.engine = "claude_code"
+        self._render_chat_tabs()
+        self.add_message(t("claude.tab_born", cli=(st or {}).get("cli") or t("claude.cli_bundled")),
+                         "system")
+        if not ((st or {}).get("signed_in") or (st or {}).get("api_key")):
+            self.add_message(t("claude.no_sign_in"), "system")
+
+    def _engine_session_keep(self, tab, ev):
+        sid = (ev or {}).get("engine_session")
+        c = getattr(self, "_chat_ctxs", {}).get(tab)
+        if sid and c is not None:
+            c.engine_session = sid
 
     def _new_local_tab(self):
         self._make_local_tab()
@@ -19049,6 +19118,8 @@ enabled = true
         payload.setdefault("blocked_tools",
                            sorted(getattr(_c, "blocked_tools", ()) or ()))
         payload.setdefault("local_only", bool(getattr(_c, "local_only", False)))
+        payload.setdefault("engine", getattr(_c, "engine", "") or "")
+        payload.setdefault("engine_session", getattr(_c, "engine_session", "") or "")
         payload.setdefault("session", getattr(_c, "sync_id", "")
                            or getattr(_c, "tab_id", "") or "")
         payload.setdefault("session_uuid", getattr(_c, "session_uuid", "") or "")
@@ -19191,7 +19262,8 @@ enabled = true
                         self._turn_ctx().turn_id = turn_id
                         self._set_tab_intent([])
                         if not (payload.get("orchestrate")
-                                or payload.get("council")):
+                                or payload.get("council")
+                                or ev.get("engine")):
                             _shelf = ev.get("shelf", 0)
                             self.thread_msg(
                                 t("chat.agentic_tools_shelf",
@@ -19503,6 +19575,11 @@ enabled = true
                                 f"[{float(ev.get('duration_s') or 0):.1f}s]: {_prev[:200]}",
                                 "error" if _failed else "system")
                     elif et == "reply":
+                        self._engine_session_keep(tab, ev)
+                        if ev.get("engine_cost_usd") is not None:
+                            self.thread_msg(t("claude.turn_cost",
+                                              cost=f"{float(ev['engine_cost_usd']):.3f}"),
+                                            "system")
                         if not (payload.get("orchestrate")
                                 or payload.get("council")):
                             self.thread_msg(t("chat.completed", n=ev.get("iterations", 0)))
@@ -19513,6 +19590,7 @@ enabled = true
                             _sc.turn_last_user = ev.get("last_user_sent")
                         return ev.get("reply", "")
                     elif et == "cancelled":
+                        self._engine_session_keep(tab, ev)
                         _was_stopped["v"] = True
                         _sc = getattr(self, "_chat_ctxs", {}).get(tab)
                         if _sc is not None:
@@ -19540,6 +19618,7 @@ enabled = true
                     elif et == "error":
                         err = ev.get("error", "?")
                         _sc = getattr(self, "_chat_ctxs", {}).get(tab)
+                        self._engine_session_keep(tab, ev)
                         if _sc is not None:
                             _sc.turn_last_user = ev.get("last_user_sent")
                             _sc.turn_transcript = ev.get("transcript") or []

@@ -918,6 +918,31 @@ minutes, in its own tab») and the job becomes a worker:
 
 Jobs run while HOPLITA's window is open: the scheduler lives in it.
 
+## Claude Code tabs — your Claude Code, in a tab
+
+Right click on **+** in the tab strip → **New Claude Code tab**: a tab whose turns
+are answered by your own Claude Code instead of HOPLITA's loop. Claude Code
+brings everything it is — its tools, its sub-agents, its prompts, its
+`CLAUDE.md` and skills — and the tab paints it the way it paints any turn: the
+steps in the turn's panel and the machine, its to-do list on the intent strip,
+its thinking when it hands it over, the context meter, and the cost it reports.
+The tab keeps Claude Code's session: the next turn, and the tab reopened from
+History, resume the same conversation. A project open in the tab is its working
+folder (a worktree of its own when another tab has the folder).
+
+**Your plan, your sign-in.** It uses the `claude` you installed and signed in to,
+or `ANTHROPIC_API_KEY`; HOPLITA never shows a Claude sign-in and never reads or
+stores your credentials. It needs Anthropic's Claude Code SDK, which is not part
+of HOPLITA's install (some 180 MB, as it carries a Claude Code of its own): the
+first Claude Code tab asks, and installs it.
+
+**The firewall is the permission.** Every tool Claude Code would run is decided
+by the HOPLITA door it opens — Bash is `run_command`, Edit and Write the code
+write tools, Read, Grep and Glob the readers, WebFetch and WebSearch the web
+ones — with the general firewall and the tab's own; an open door is a yes,
+including what Claude Code would otherwise stop to ask. A conversation kept
+local-only is not sent to it: Claude Code sends what it is given to Anthropic.
+
 ## Tabs that show they are working, and the overview
 
 A tab with a turn running wears a small arc turning before its title, the
