@@ -169,8 +169,10 @@ so. A click on it opens Contacts. From the chat: «what is my quota?»
 
 Your machines share one identity, and with it one sealed snapshot on the
 server: notes, tasks, appointments, crons, credentials, facts, lessons,
-experience, sessions, canvases, whiteboards, local children's packs and the
-activity log. The snapshot is sealed to your own key. The guide explains how
+experience, sessions, canvases, whiteboards, local children's packs, the
+activity log, your **Tools** firewall settings, and the record of what was
+deleted, so a deletion made on one machine wins over a stale copy on another.
+The snapshot is sealed to your own key. The guide explains how
 deletions and long absences are handled ([Federation](GUIDE.md#federation-optional)).
 
 What does **not** travel:
@@ -478,6 +480,21 @@ A chat tab has the same choice: right-click the tab → **📓 This tab's
 logging** → **🔒 Local only**. The tab is saved and learns on this machine,
 and its session never rides the federation.
 
+### 5.8 More from the chat
+
+| Request | Tool |
+|---|---|
+| «send bob my note "Budget" from the folder work» | `fed_share_note` |
+| «save the note bob sent me» (it lands in its own category, the sender in its title) | `fed_accept_note` |
+| «stop sharing the folder recipes» / «remove bob from the project launch» (the owner can drop one member; your copy stays) | `fed_unshare_folder`, `fed_unshare_project` |
+| «which appointments are waiting for me?» / «accept the appointment "Review" from bob» | `fed_list_incoming_appointments`, `fed_accept_appointment` |
+| «what has bob done in what I share?» / «clear bob's activity» (only the log goes) | `fed_activity`, `fed_activity_clear` |
+| «what is shared, and with whom?» | `fed_shared_overview` |
+| «am I logged in to the federation?» | `fed_status` |
+| «what has been shared with me?» | `fed_inbox` |
+| «how is folder sync doing?» (also what it turned away lately, and why) | `fed_sync_status` |
+| «any notices from the server?» / «the server's message of the day» | `fed_notices`, `fed_motd` |
+
 ## 6. Ask a contact's agent, and tie a tab to one of your machines
 
 ### A one-off task, or a whole session
@@ -540,6 +557,11 @@ decides:
 - no: the request is declined. The agent treats a decline as final and does
   not retry.
 
+Two more are turned away whatever the permission, and both sides are told: a
+request that arrives more than 15 minutes after it was sent (their machine
+was off or offline; send it again), and one whose time is ahead of their
+machine's clock (check the date and time on both machines).
+
 **Stopping it.** **Stop** on your side ends the turn within seconds, also while
 it waits on their agent, and also when the work is a sub-agent of a plan that
 you sent to a contact. The stop crosses to their machine. A request still
@@ -569,7 +591,8 @@ This works between machines that share your identity (step 2).
 4. `/pin ?` says which machine the tab is tied to. `/pin off` unties it.
 
 The tied machine must be running and logged in to the federation. If it is
-not, the tab says *Could not reach "…"*.
+not, the tab says the tied machine could not be reached, or that it did not
+answer within 15 minutes.
 
 ### Use a contact's model, and lend yours
 
@@ -588,12 +611,15 @@ anything on the network, and their key never leaves their machine.
    HOPLITA asks you once per model they add, in the same dialog a session
    request uses), *no*.
 3. You see every use: the federation line shows «lending qwen → alice» while
-   a call is in flight, with the day's count on hover; the chat says when a
+   a call is in flight, otherwise *lent: N call(s) today*, and on hover each
+   contact and model since this window opened; the chat says when a
    contact starts using a model (once, then again after ten minutes); the 📊
    meter has a row `qwen → alice`; **Contacts** → right-click the contact →
    **Models you lend them…** lists what you granted, what they used per day,
    and takes it all back in one click. What they send to your model, your
-   server sees; what runs is the model, never a tool.
+   server sees; what runs is the model, never a tool. Chat: «what do I lend,
+   and to whom?» (`fed_lend_usage`), «stop lending qwen to alice»
+   (`fed_revoke_lent_model`; without a model, everything).
 
 **Using (your side).**
 
@@ -601,13 +627,17 @@ anything on the network, and their key never leaves their machine.
    be online). Pick one → **Add to my pool**. With *review* on their side the
    dialog waits for their yes, up to five minutes.
 2. The model appears in **Configuration** → **Models** as «qwen · lent by
-   bob@hoplita.net», with no server and no key, and in `/model` as
-   `qwen-bob (lent by bob@hoplita.net)`. `/model qwen-bob` pins it.
+   bob», with no server and no key, and in `/model` as
+   `qwen-bob (lent by bob)`. `/model qwen-bob` pins it.
 3. While they are offline `/model` lists it with «offline» and refuses to pin
    it; the router leaves it out; a turn already pinned to it falls to a model
    of your own, said in the chat. A local-only conversation or project (🔒)
    never goes to a contact's model: the lock wins and the chat says so.
 4. **Remove from my pool** in the same dialog takes it out.
+
+Chat: «which models does bob lend me?» (`fed_lent_models`), «add bob's qwen to
+my pool» (`fed_add_lent_model`), «take qwen-bob out of my pool»
+(`fed_remove_lent_model`).
 
 What travels: each call carries the conversation it needs (up to ~2.8 MB) to
 their machine and the answer comes back whole, so the first token shows when
@@ -689,6 +719,8 @@ a pool model, or one of its own) and optionally your web search. The kit is
 sealed to the token, so the server cannot read it (7c, *What travels*). The
 answer gives a command for a container and one line for any other machine.
 The token is single use and valid for 60 minutes, and it is not shown again.
+The child's handle is your handle plus the name: `server-1` becomes
+`alice-server-1`, the name you give it work under from then on.
 
 **On the child machine: one line.** Paste the line from the answer, as the
 user the child will run as. Nothing needs installing first (Linux or macOS):
@@ -798,7 +830,7 @@ agent's commands can read it too:
 `spawn_kit` mints a plain token with no kit. Set `[API]` in the child's
 `config.ini` by hand, start its MCP, and enroll it with the CLI
 (`python install.py --cli` builds it):
-`cli/dist/hoplita-cli --spawn --server https://hoplita.net --token <TOKEN> --handle server-1`.
+`cli/dist/hoplita-cli --spawn --server https://hoplita.net --token <TOKEN> --handle alice-server-1`.
 
 **Back on your machine.** The child appears in **Contacts** as an accepted
 contact with presence. Its trust is `open` both ways, because it is yours. Chat:
@@ -807,9 +839,9 @@ contact with presence. Its trust is `open` both ways, because it is yours. Chat:
 **Give it work:**
 
 - **💬 Open session** on it,
-- Chat: «ask server-1 to …» (`fed_ask_agent`),
-- a plan target `child:server-1`,
-- a CRON job with target `child:server-1`. Such a job fires only while the
+- Chat: «ask alice-server-1 to …» (`fed_ask_agent`),
+- a plan target `child:alice-server-1`,
+- a CRON job with target `child:alice-server-1`. Such a job fires only while the
   child is online.
 
 **Give it folders.** Sharing works as with any contact (5.1). The child has no
@@ -821,14 +853,14 @@ GUI to press **Accept**, so tell it to accept:
 **Emancipate a pack to it.**
 
 1. Open a local child's pack (7a).
-2. Set **Runs on** to the node (🖥 server-1), then **Save**.
+2. Set **Runs on** to the node (🖥 alice-server-1), then **Save**.
 3. The pack is sent sealed to the node. The node wears it on incoming turns:
    its role and its tool list. A node only accepts a pack from its owner.
 4. Saving again re-sends the pack. Setting **Runs on** back to *here, as a
    sub-agent* brings it home.
 
 **Revoke it.** In the **Contacts** tab a federated child carries 👶; right-click
-it → **🗑 Revoke child**. Or from the chat: «revoke my child server-1»
+it → **🗑 Revoke child**. Or from the chat: «revoke my child alice-server-1»
 (`fed_revoke_child`).
 
 - Its session dies at once, and its identity and contact are deleted.
@@ -914,7 +946,7 @@ folder or send it in a session. It can install an MCP server itself through its
 own config tools.
 
 **Server.** Only a server that lists `spawn_kit` in its protocol answer can carry
-the kit. An older server still mints a plain token. **Create and start here**
+the kit. An older server still mints a plain token. **Start here, in a container**
 refuses on such a server, because the container would have no model.
 
 ## 8. Troubleshooting
@@ -927,17 +959,18 @@ refuses on such a server, because the container would have no model.
 | *Registration failed: That handle already exists* | The handle is taken | Pick another handle |
 | *Login failed: … verif…* with a `fed_verify` next step | The email was never verified | Verify with the PIN (step 2.4) |
 | *This server has no account for this handle…* | The account was deleted on the server, or you are on the wrong server | Leave with the local-only option (step 2, *Leave the federation*), then register again |
-| *Verification failed: Wrong PIN* / *PIN expired* | Typo, or more than 15 minutes have passed | Ask the operator for a new PIN. Do not register again |
+| *Verification failed: Wrong PIN* | Typo | Check the PIN in the email and verify again. Do not register again |
+| *Verification failed: the PIN expired.* | More than 15 minutes have passed | Trying the expired PIN mails a new one to the same address (at most one a minute: if the reply says none was sent, wait a minute and try the same PIN again). Ask the operator only if no mail arrives. Do not register again |
 | *Could not add contact: Handle not found* | Wrong handle, or the contact is on another server | Type the bare handle, on the same server |
 | *⚠ The public key for 'bob' does NOT match…* — BLOCKED | The key the server returns is not the one you signed | Compare fingerprints with bob over another channel (section 4). If bob really reset their identity, remove bob and add the contact again |
 | *This server speaks protocol … and your HOPLITA speaks … Update HOPLITA (install.py --update)…* | The server no longer serves your version of HOPLITA | Update: `python3 install.py --update` ([INSTALL.md](INSTALL.md)) |
+| *The federation server speaks protocol …, older than this HOPLITA's 4…* | The server is older than your HOPLITA: this HOPLITA does not talk to it | Ask the server's operator to update it, or use another server |
 | *Your live socket is … — contacts see YOU offline…* | The live connection is down; everything else uses REST | Check that a proxy or firewall allows WebSocket to the server, and that `websocket-client` is installed in HOPLITA's venv |
 | *📴 Sync: can't reach the server (offline)…* with the cause underneath | No network, the server is down, or it did not answer in time (the line says which, how long it took and the size) | Nothing is lost. Sync runs again later. The same line is in the MCP's log as `[SYNC] push failed after …` |
-| *⚠️ Your last automatic upload didn't go through…* (at start) | A background upload of the last session failed, for the reason that follows | Press **⇈ Push** |
+| *⚠️ Your last automatic upload didn't go through…* (at start) | An automatic upload (the periodic one, or the one made when the window closed) failed, for the reason that follows | Press **⇈ Push** |
 | *🔑 Sync: couldn't decrypt the server snapshot…* | This machine has a different identity from the one that pushed | Use the same identity file on both machines (step 2) |
 | *⚠ Sync: the server refused the upload twice…* | Two machines pushed at the same moment | Press **⇊ Pull**, then **⇈ Push** |
 | *🚫 Quota exceeded (…)* | Your plan's limit on the server: the **☁** line over the chat shows which one, in red | Prune heavy stores (`fed_sync_breakdown`), or ask the server's operator |
-| *⚠️ Your last upload on close didn't go through…* | The push on close failed | Press **⇈ Push** |
 | *The folder '…' is marked LOCAL-ONLY…* | The folder is locked (5.7) | Lift the lock first, if you really want to share it |
 | *Appointment rejected — You don't have permission…* | The recipient's **Appointments** permission for you is **no** or not set | Ask them to set it to auto-accept or review |
 | *That invite has not fully arrived yet.* / *This transfer died half-way…* | A code transfer is incomplete | Wait, or discard it and ask for a new invite (5.5) |
@@ -945,5 +978,5 @@ refuses on such a server, because the container would have no model.
 | *❌ The MCP is not responding at …* (`--spawn`) | The child's MCP is not running | Start it (7b, *An older server*), then run `--spawn` again |
 | *Enrollment failed: …* naming an invalid, used or expired token | Tokens are single use and live 60 minutes | Create a new token |
 | *This instance already has a federated identity…* | A child must enroll into a clean vault | Use a fresh install or data folder for the child |
-| *Could not reach "…"* on a tied tab | The tied machine is off or not logged in | Start it and log it in, or `/pin off` |
+| *the tied machine could not be reached* or *… did not answer within 15 minutes* on a tied tab | The tied machine is off or not logged in | Start it and log it in, or `/pin off` |
 | A federation request does nothing, and the agent says the tool is blocked | The **Tools** firewall blocks the *Federation: …* families | Unblock them in the **Tools** tab |

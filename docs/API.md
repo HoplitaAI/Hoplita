@@ -72,7 +72,8 @@ Non-terminal, in no guaranteed order except that `turn_start` is first:
 | `tools_expanded` | `tools`, `total` | The model asked for schemas with `load_tools`. The manual travels in the tool RESULT (a message at the bottom); the tools block up top is NOT rebuilt — it is the prompt's prefix and it is built once per turn. The model calls a catalogue tool through the static bridge `use_tool(name, arguments)`, which the loop unwraps before every gate (firewall, profile, sterile cut, delegation, record). `total` is the size of the unchanged block. |
 | `max_iterations` | `max`, `was` | The budget changed **mid-turn**: `[CHAT] agentic_max_iterations` was edited and reloaded while this turn was running. The loop re-reads it every round, so a raise reaches the turn already spinning. |
 | `llm_call` / `llm_done` | `model`, `n_messages`, `n_tools`, `payload_kb` / `duration_s` | **Label the call with `model`, never with your own config.** Only the MCP knows where the turn went: when its router picks a pool specialist the client has no endpoint at all. |
-| `tokens` | `prompt_tokens`, `estimated` | For the context meter. |
+| `tokens` | `prompt_tokens`, `estimated`, `iteration`, `context_limit`, `model` | For the context meter. `context_limit` is the window of `model`, the model that served the turn (pinned or routed), so the meter measures against the right window. |
+| `engine_compacted` | `trigger`, `pre_tokens` | Claude Code turns only (`engine: "claude_code"`): Claude Code folded its own conversation, asked or on its own when the window filled (`trigger`), and it held `pre_tokens` before. |
 | `tool_call` / `tool_result` | `tool`, `args_preview` / `result_preview`, `delegated` | Ran **here**. |
 | `thought` | `iteration`, `chars`, `text` | The round's reasoning as the model produced it (`reasoning_content`, `reasoning`, or a think block in the content), before its calls or before its answer. For the screen: the `transcript` already carries it for the prefix. |
 | `client_tool_call` | `call_id`, `tool`, `args` | Ran **by you**. Answer on `/agent/tool_result` with **exactly this `call_id`** — a sub-agent's is prefixed (`<sid>~<id>`) because parallel sub-agents would collide, and echoing anything else means the loop waits for an answer that reached nobody. |
@@ -106,7 +107,7 @@ Non-terminal, in no guaranteed order except that `turn_start` is first:
 | `model_unavailable` | `model`, `handle`, `why`, `fallback` | The model chosen for the turn is a contact's (a pool line with `via`) and cannot serve it: `why: "local_only"` (the conversation is locked to this machine and must not travel) or `"offline"` (its owner is away). `fallback` names the model of this machine's own that answers instead; empty, none is configured and the turn fails. Said before the first call, never a silent swap. |
 | `model_lent` | `peer`, `alias`, `model` | By `GET /agent/session-events` (direction `in`), not the turn stream: a contact started using one of this machine's lent models through the federation. Once per contact and model, then again after ten minutes of use. |
 | `model_lent_done` | `peer`, `alias`, `status`, `prompt_tokens`, `completion_tokens`, `seconds` | By `GET /agent/session-events`: one call of a lent model ended, with what it cost. Every call; the window counts them on the federation line, and the meter has a row `<alias> → <peer>`. |
-| `reply` | `reply`, `iterations`, `turn_record`, `transcript`, `last_user_sent`?, `verified`? | The terminal event. `last_user_sent` is the newest question AS IT WAS SENT to the model when `inject` glued this turn's blocks in front of it (the skill chosen, the working-memory inventory): **store it in place of the bare question**, or the next prompt diverges right there. Also on `cancelled` and `iteration_limit`. `transcript` is every message the loop appended this turn — assistant tool calls, tool results, the reviewer's notes, rejected drafts, framed asides — exactly as the model saw them. **Keep it in your history, before the final answer, verbatim**: the next prompt is then the last one plus one message, and the backend's prefix cache serves. Assistant messages in it are **as the model generated them**: content untouched, `reasoning_content` (or `reasoning`, whichever key the server used) and `tool_calls` as returned — a re-entered turn rendered into different tokens is a prefix cut exactly there. Keep the fields; never strip the reasoning. When no `transcript` comes, fuse `turn_record` into the answer instead. `verified` reports the definition of done (`verify`) when the turn had one. |
+| `reply` | `reply`, `iterations`, `turn_record`, `transcript`, `last_user_sent`?, `from_final_pass`? | The terminal event. `last_user_sent` is the newest question AS IT WAS SENT to the model when `inject` glued this turn's blocks in front of it (the skill chosen, the working-memory inventory): **store it in place of the bare question**, or the next prompt diverges right there. Also on `cancelled` and `iteration_limit`. `transcript` is every message the loop appended this turn — assistant tool calls, tool results, the reviewer's notes, rejected drafts, framed asides — exactly as the model saw them. **Keep it in your history, before the final answer, verbatim**: the next prompt is then the last one plus one message, and the backend's prefix cache serves. Assistant messages in it are **as the model generated them**: content untouched, `reasoning_content` (or `reasoning`, whichever key the server used) and `tool_calls` as returned — a re-entered turn rendered into different tokens is a prefix cut exactly there. Keep the fields; never strip the reasoning. When no `transcript` comes, fuse `turn_record` into the answer instead. `from_final_pass: true` means the answer came from the tool-free final pass (the tool budget ran out, or `metacog_close`). The event carries no verdict of the definition of done: read it from the `verify_result` events (`ok`, `blocked`). A Claude Code turn's `reply` also carries `engine`, `engine_session` and `engine_cost_usd`. |
 | `context_full` | `prompt_tokens`, `completion_tokens`, `iterations` | The completion was cut by length with (almost) nothing written: the context is full. An `error` follows at once — nothing is reviewed or redone, because a redo cannot buy tokens. |
 | `tool_call_unread` | `cut`, `tool`, `completion_tokens`, `chars`, `iteration` | The reply is a tool call written as text that nobody read: `cut` true, the output limit cut it before it closed (the reasoning spent the budget) and the server passed the fragment on as content; `cut` false, it arrived whole in a shape neither the server nor the loop's rescue reads. The loop reads the usual text shapes itself (a JSON object, a `<tool_call>` block with JSON or key/value pairs, a `<function=name>` block, `[TOOL_CALLS]`) and runs them as calls; this event is what is left. An `error` follows at once — a fragment of a call is not an answer, and a redo of a cut cannot buy tokens. |
 | `metacog_close` | `n`, `sterile_tools` | Nobody to hand the turn to, the model was asked twice (the question, then a firmer `metacog_nudge` with `reason: "last"`) and stayed sterile: one tool-free pass follows whose words — what it tried, what blocks it, what it would need — are the `reply`. |
@@ -114,16 +115,17 @@ Non-terminal, in no guaranteed order except that `turn_start` is first:
 | `image_not_seen` | `model`, `server`, `path`, `n` | A picture could not be shown to `model` and nobody described it: the model is declared without vision, or (`server` true) its server says it takes no images, or turned a request away for carrying one (that request is repeated without the picture, and the model is remembered as blind). The picture is kept as a file at `path`, the model is given that path, and the person is told once per turn. |
 | `qa_skipped` | `why`, `iterations` | `why: "self"`: the reviewer would have been the very model that did the work (no `[CHAT] qa_model`, or the same one), and a model grading itself approves itself — so the turn was not reviewed, and the face says so. |
 | `escalate_failed` | `why` | There was somebody to hand it to and the hand-over itself failed. Said, not swallowed; the turn carries on with the model it has. |
-| `verify_run` / `verify_result` | `command`, `attempt` / `ok`, `output_preview` | The definition of done. |
-| `qa_run` / `qa_result` | `round` / `ok`, `why`, `next`, `mode`, `reviewed`, `said` | The reviewer. `ok` is `true` (passed), `false` (failed, a redo follows) or `null` (NO verdict: the reviewer answered without an object or failed — the answer stands unreviewed, never approved). `why`/`next` are the reviewer's reason and what it asks for, on a pass too. `reviewed` is the answer it judged, whole; `said` is the reviewer's own text as it wrote it. `mode` is `grounded` (it read every step whole) or `contract` (the work did not fit `qa_budget_chars`: it read the steps only). |
+| `verify_run` / `verify_result` | `command`, `attempt`, `iterations` / `ok`, `attempt`, `output_preview`, `blocked`? | The definition of done. `blocked: true` (with `ok: null`): the check could not run. |
+| `qa_run` / `qa_result` | `round`, `iterations` / `ok`, `round`, `why`, `next`, `mode`, `reviewed`, `said` | The reviewer. `ok` is `true` (passed), `false` (failed, a redo follows) or `null` (NO verdict: the reviewer answered without an object or failed — the answer stands unreviewed, never approved). `why`/`next` are the reviewer's reason and what it asks for, on a pass too. `reviewed` is the answer it judged, whole; `said` is the reviewer's own text as it wrote it. `mode` is `grounded` (it read every step whole), `contract` (the work did not fit `qa_budget_chars`: it read the steps only) or `echo` (no reviewer ran: the reply was the internal turn record pasted as the answer, so `ok` is `false` and `round` is `0`, and the model is asked again). |
 | `orch` | `orch:{type,…}` | The orchestrator. Types: `start`, `plan`, `snapshot`, `subtask_start/done/retry/failed`, `subtask_acted` (`id`, `tools`: how many tool calls it made; `seat: true` on a council seat, whose job is its words), `expansion_requested/approved/rejected` (a running plan asking to grow, see `allow_expand`), `replanning`, `synthesis_done`, `complete`, `cancelled`, `tick` (heartbeat, paint nothing), `note` (an i18n key again), `intent` (a sub-agent's own list, `id` + `items`), `step` / `step_done` (a sub-agent's tool call — `id`, `tool`, `args`, `background` — and its end — `duration_s`, `ok`: what the window's overview draws under each sub-agent). |
 | `plan_ack` | `ack_id`, `turn_id`, `subtasks` | **A plan is blocked waiting for you.** Answer on `/agent/plan_ack`. |
-| `canvas` | `html`, `tool` | **The shared canvas.** A `render_html`/`dashboard_render` from inside a federated session does not go to the MCP: it becomes this, and it reaches the executor's GUI AND the originator's, so BOTH paint the same page, each on the session tab's own canvas. A local child (a headless agent on this machine) emits it too. |
+| `canvas` | `html`, `tool`, `append` | **The shared canvas.** A `render_html`/`dashboard_render` from inside a federated session does not go to the MCP: it becomes this, and it reaches the executor's GUI AND the originator's, so BOTH paint the same page, each on the session tab's own canvas. A local child (a headless agent on this machine) emits it too. |
 | `alert` | `title`, `message` | Same shape, same reason: the popup fires on both screens instead of running in the MCP with no visible effect. |
 | `council` | `council:{type,…}` | The council deliberating (`members`, `first`, and `round`, `member` on the per-seat types). Types: `convene`, `speak_start`, `speak_done` (carries the member's whole text and `produced`, which is false when it spoke and produced NOTHING), `speak_failed`, `vote` (`verdict` is `placet`, `no` or `""` — and `""` is never counted as agreement), `round_done`, `note` (an i18n key), `done`, `cancelled`. |
 | `council_ack` | `ack_id`, `round`, `answer`, `dissent[]` | **A council's vote came back split and it is blocked at its gate.** Answer on `/agent/council_ack`. It is never an approval to START — a council is convened deliberately — only whether to spend ANOTHER round. |
 
-A council's terminal `reply` also carries `turn_record`: the
+A council's terminal `reply` also carries `deliberated: true`, `placet`
+(whether the last vote was unanimous) and `turn_record`: the
 DELIBERATION — who examined the answer, what they argued, who voted and
 why. It goes to the conversation's CONTEXT, not to the screen, which is the
 same split `/multi` uses, so the model can answer «why did that member not
@@ -144,8 +146,11 @@ terminal to intercept.
 
 Three rules that are not optional:
 
-- **`plan_and_orchestrate` is never delegated**, whatever you ask for
-  (`fed_agent.NEVER_DELEGATE`): the orchestrator lives in the MCP only.
+- **`plan_and_orchestrate`, `intent`, `call_council` and `edit_my_config` are
+  never delegated**, whatever you ask for (`fed_agent.NEVER_DELEGATE`): the
+  orchestrator, the turn's intent list, the council and the config writer's
+  consent live in the MCP only. Neither is any `wb_*` tool (the whiteboard
+  store and its drawing jobs are the MCP's).
 - **`hands_*` tools are never delegated** either: they keep turn state on the
   server (the machine's one hands session, the element ids they hand out, the
   events they emit), and through a client's bare `/call` every call would be a
@@ -184,10 +189,13 @@ archives a volatile fact silent for `[MEMORY] volatile_days` (3) as action
 `fade`, and turns a relevant one silent for `ask_after_days` (30) into a
 pending `ask` proposal: accepting it archives the fact, rejecting keeps it and
 restarts its clock. "Silent" = not stored again, not returned by a search, not
-spoken of in the log. No model call for that.
+spoken of in the log. No model call for that. This clock is not run by
+`/memory/curate`: what it faded or asked is reported by `/memory/review`
+under `expired`.
 Every model call here waits as long as the chat does (`[CHAT] timeout`), never
 less than 60-90 s.
-Returns `{asked, checked, faded, proposals[], reviewed[], no_trace[], pending}` —
+Returns `{asked, checked, traced, untraced, proposals[], reviewed[], no_trace[],
+pool, pool_stats, pending}` (plus `errors` and `error_last` when reviews failed) —
 including what it looked at and got nothing from, because a review that only
 shows its hits cannot be judged. It writes nothing to memory: everything it
 finds lands in the proposals below.
@@ -222,7 +230,8 @@ review_every_hours / review_facts` in config.ini (see CONFIG.md).
 `{"limit": 0}` (facts per pass, same meaning as in `/memory/curate`) →
 `{at, lessons:{looked_at, merged[], deactivated}, sorted, expired:{faded, asked[]},
 facts:{…as /memory/curate},
-duplicates:{looked_at, proposed[]}}`. The «🔎 Curate memory» button runs THIS
+duplicates:{looked_at, proposed[]}, applied}` — `applied` is what the pass
+applied of its own proposals. The «🔎 Curate memory» button runs THIS
 endpoint.
 
 ## `GET /memory/review/progress`
@@ -255,7 +264,7 @@ when no section names it). Shown by the **📊 Usage** header button.
 ## `GET /memory/autolog` · `POST /memory/autolog/{entry_id}/undo`
 
 What the pass did **by itself**, newest first, each with what it takes to put
-it back: `{entries[], pending_undo, last_run}`.
+it back: `GET /memory/autolog?limit=20` → `{entries[], pending_undo, last_run}`.
 
 `POST …/undo` reverses one entry whole — the merged rule is removed and the
 rules it superseded go active again → `{ok, reactivated, removed}`. An entry
@@ -325,15 +334,17 @@ Work that goes on without the turn (`hoplita_background.py`): a tool started wit
 
 - `GET /agent/background?conv=&tab=` → `{jobs, ceiling}`: every job, or a conversation's (id, kind, label, tool, state `live|done|failed|stopped|lost`, age, rounds, fires, last probe, output file).
 - `POST /agent/background/watch` `{conv, tab, label, every_s, file | command [+cwd] | tool + arguments, wake, until_s}` → `{job_id, label, every_s, wake, now}`: the person's `/watch`, bound to the tab the face names.
-- `POST /agent/background/stop` `{job_id}` or `{conv, tab}` → `{stopped: [ids]}`: one job, or every live job of a conversation (its tab closed).
-- `POST /agent/background/done` `{job_id, result, error?}`: the face ran a delegated job's tool and this is its result. Refused (`accepted: false`) for a job stopped meanwhile: its result has nowhere to go, as asked.
+- `POST /agent/background/stop` `{job_id}` → `{stopped: [ids], found}` or `{conv, tab}` → `{stopped: [ids]}`: one job, or every live job of a conversation (its tab closed).
+- `POST /agent/background/done` `{job_id, result, error?}` → `{accepted, state}`: the face ran a delegated job's tool and this is its result. Refused (`accepted: false`) for a job stopped meanwhile: its result has nowhere to go, as asked.
 - `GET /agent/background/events?conv=&tab=` → `{events, live}`: ONE conversation's pending reports, for a face that holds that conversation and has no tab strip to drain everything for (the CLI polls it between turns). Polling it claims the conversation for half a minute, so the general drain on `session-events` leaves its events alone.
 - The poll `GET /agent/session-events` carries `background` (the reports no live turn took, each with `conv`, `tab`, `what`, `text`, and `message` already framed for a new turn) and `background_live` (`[{conv, tab, n, labels}]`, for the strip's eye). Jobs survive a restart: watches are re-armed, runs alive at the time are reported as lost.
 
 ## `POST /agent/inject`
-`{turn_id, message}` → `{injected}`. Says something to a turn that is **already
+`{turn_id, message, kind}` → `{injected}`. Says something to a turn that is **already
 running**: the text is appended as a user message at the top of the next
-iteration and the stream emits `injected`. `{injected: false}` means that turn
+iteration and the stream emits `injected`. `kind` is `user` (the default:
+what the person typed, framed as an aside) or `background` (a background
+job's report the face hands to the live turn, framed as such). `{injected: false}` means that turn
 is not running — queue the message instead. `{turn_id, message, withdraw: true}`
 → `{withdrawn}` takes a message of the person's back out of the mailbox while
 the loop has not read it; `withdrawn: false` means it already reached the model
@@ -351,20 +362,25 @@ blocks each time and places them at the end.
 
 ## `POST /agent/qa`
 `{request, reply, tool_trace, endpoint, given?, prior?, asides?}` → `{ok, why, next, mode}`. `asides` is what reached the agent while it worked, `[{"kind": "user"|"background", "text"}]`, shown to the reviewer as evidence. Reviews an
-answer produced **outside** the loop. A broken reviewer never blocks a good
-answer: any failure is a pass.
+answer produced **outside** the loop. A reviewer that fails or answers without
+an object gives `ok: null` (no verdict, never an approval); with no model to
+review at all the answer is `{ok: true, why: "", next: ""}`, so a missing
+reviewer never blocks a good answer.
 
 ## `GET /agent/context_limit`
 `?base_url=&api_key=&model=` → `{limit, source}`. In order: `[MODEL:x]
-context_length` for the pinned alias, then the server itself (llama-server
-`/props`, then vLLM `/v1/models`), then `[CHAT] context_length` as a last
-resort. That order matters with a pool: one global number cannot describe
+context_length` for the pinned alias, then what was already found for that
+endpoint and model (`source: "cache"`), then the server itself (llama-server
+`/props`, Ollama `/api/ps`, `/v1/models` as vLLM and other OpenAI-shaped
+servers answer it, then text-generation-inference `/info`), then `[CHAT]
+context_length` as a last resort. A leftover `[CHAT] num_ctx` is not read:
+it answers `limit: 0` with a `source` saying to rename it. That order matters with a pool: one global number cannot describe
 several windows. Cached per endpoint+model.
 `limit: 0` means it could not tell — fall back, do not invent.
 
 ## `GET /agent/prompt_budget`
 
-`?text=hello` → `{total_tokens, deferred_schemas, messages:{tokens,chars,blocks},
+`?text=hello` → `{question, total_tokens, deferred_schemas, messages:{tokens,chars,blocks},
 tools:{carried,of,tokens,heaviest[]}, by_block[]}`. **Where the tokens of a
 «hello» go**, before blaming any part of it. Runs the real `prepare_turn_messages`
 and assembles the tool payload the turn would actually carry — with deferred
@@ -424,9 +440,11 @@ Same judge the agentic loop's `verify_goal` uses.
 The page the CODE tab's 🧭 whiteboard page loads, and its reads, all at a whiteboard's pinned commits.
 - `GET /wb/app?id=<id>&lang=<xx>` the canvas (no id: the list, the project at `root=` first); `GET /wb/static/…` its assets; `GET /wb/api/strings?lang=` the page's words (keys `wbc.*` of `lang/*.json`).
 - `GET /wb/api/list[?project=|?root=]` · `GET /wb/api/{id}?version=` · `GET /wb/api/{id}/history`.
-- `GET /wb/api/find?root=&what=` the whiteboard of that kind for that project (`overview`, `commit` at HEAD, `changes`), if one with content exists, and the job drawing that kind right now — what the page's buttons open before drawing anything.
-- `GET /wb/api/{id}/staleness` has the code moved on: `{kind: overview|changes|commit|scratchpad, updatable, stale, pinned, current, ahead, worktreeChanged}` — a review of one commit is never `updatable`.
-- `POST /wb/api/draw {root, what, model?, whiteboardId?}` an agent draws one in the background with `model` (a pool alias; `base` or empty = the base) (`what`: `changes` · `commit` · `overview` · `update` with `whiteboardId`, which brings that whiteboard up to date and is done only when it is no longer behind · `redraw` with `whiteboardId`, which draws it again from scratch reusing nothing read before, as a new version; one job per project and kind at a time) · `GET /wb/api/draw?root=` the jobs (`state` running/done/failed/cancelled, `whiteboardId` as soon as it exists, `alias` and `model` it draws with, `error`: `no_changes` / `no_parent` / `model_unknown` / `up_to_date` / `not_updatable` / `still_behind` / `empty` (it read and wrote nothing; the empty whiteboard is removed) or the reason) · `POST /wb/api/draw/{job}/cancel`.
+- `GET /wb/api/find?root=&what=[&ref=][&since=&until=]` → `{whiteboardId, running, head}`: the whiteboard of that kind for that project (`overview`, `commit` at HEAD or at `ref`, `changes`, `incoming` at `ref`, `history` over `since`–`until`), if one with content exists, and the job drawing that kind right now — what the page's buttons open before drawing anything.
+- `GET /wb/api/months?root=` → `{months}`: the months the checkout's history has commits in, what a `history` may span. `GET /wb/api/{id}/periods` → `{periods, grain}`: a history whiteboard's periods, each with its commits.
+- The repository itself, no whiteboard needed: `GET /wb/api/repo/log?root=&skip=0&n=60` → `{commits: [{sha, parents, author, date, subject, whiteboardId}], more}` (newest first, `whiteboardId` the one that explains that commit, if any; `n` at most 200) · `GET /wb/api/repo/files?root=&commit=` the files one commit changed against its parent (`commit=worktree`: the uncommitted work against HEAD) · `GET /wb/api/repo/filediff?root=&commit=&path=` → `{path, mode, status, previousPath, rows, bands}`.
+- `GET /wb/api/{id}/staleness` has the code moved on: `{kind: overview|changes|commit|history|scratchpad, updatable, stale, pinned, current, ahead, worktreeChanged}` — a review of one commit is never `updatable`.
+- `POST /wb/api/draw {root, what, model?, whiteboardId?, ref?, since?, until?, blocked?, remoteOk?}` an agent draws one in the background with `model` (a pool alias; `base` or empty = the base) (`what`: `changes` · `commit` (`ref`: a commit sha, else HEAD) · `overview` · `incoming` (`ref`: a branch under `refs/hoplita/incoming/`) · `history` (`since`, `until`) · `update` with `whiteboardId`, which brings that whiteboard up to date and is done only when it is no longer behind · `redraw` with `whiteboardId`, which draws it again from scratch reusing nothing read before, as a new version; one job per project and kind at a time) · `GET /wb/api/draw?root=` the jobs (`state` running/done/failed/cancelled, `whiteboardId` as soon as it exists, `alias` and `model` it draws with, `error`: `no_changes` / `no_parent` / `model_unknown` / `up_to_date` / `not_updatable` / `still_behind` / `empty` (it read and wrote nothing; the empty whiteboard is removed) or the reason) · `POST /wb/api/draw/{job}/cancel`.
 - `GET /wb/api/{id}/watch` NDJSON: the snapshot (with `activity`) at once, then one line per change; a slow reader gets only the newest.
 - `GET /wb/api/{id}/peek?file&startSide&startLine&endSide&endLine[&repositoryId&head&base]` the aligned rows of one selection ±3 (structural with diffr, else textual).
 - `GET /wb/api/{id}/files` · `GET /wb/api/{id}/filediff?path=` every row of a file with diffr's collapsed bands · `GET /wb/api/{id}/file?file&side` · `GET /wb/api/{id}/commits`.
@@ -440,7 +458,7 @@ A turn that creates or opens a whiteboard emits `tool_progress` with key `wb.ope
 Everything the harness itself tells the model — a nudge, a gate, the final-answer pass, the date block — is a `user`-role message (chat templates such as llama.cpp's and MLX's accept one system message only), so it opens with a tag that says who is speaking: `<INTERNAL HARNESS MESSAGE — no human wrote this; …>`, and the QA reviewer's verdicts with `<AUTONOMOUS QA REVIEWER, NOT THE USER>`. `fed_agent.harness_msg(text)` builds one, `is_harness(message)` recognises one, and `user_said(message)` is the single reader that returns only the words a person typed in a message (no memory catalogue, no date block, no attachments' text). A third face that injects its own blocks should mark them the same way; the date rides as a bracketed `[TODAY]` block in front of the question.
 
 ## `POST /call`
-`{tool, arguments, code_project?, turn_id?}` → `{tool, result, duration_s}`. One tool, no
+`{tool, arguments, code_project?, turn_id?, background_job?}` → `{tool, result, duration_s}`. One tool, no
 loop. If the tool turns out to be an orchestration it gets the safe context:
 nobody to ask, so a local plan runs and one reaching other machines is
 cancelled. `code_project` is the project open in the calling tab: with it, the
@@ -449,7 +467,9 @@ code/git tools and the shell-family file tools read an empty, `.` or relative
 reaches `/call` in its own request, so the turn's project has to travel with
 it — the GUI sends it on every call. `turn_id` ties a delegated call to the
 turn it belongs to, so tools that need the turn's state (attached images, the
-working memory) find it.
+working memory) find it. `background_job` is the id of the background job a
+delegated `background_run` tool runs for, so a stop of that job reaches its
+process.
 
 ## `GET /tools` · `GET /health`
 `/tools`: the firewalled tool list in OpenAI format. `/health`: liveness and
@@ -473,6 +493,11 @@ answered in ONE place. A face offering to build a child (a headless agent of
 yours) shows the starting point those words mean without keeping its own copy
 of the mapping.
 
+## `POST /child/design`
+`{description, name?}` → the child created, or `{error}`. A local child from a
+description: the model writes its pack (name, role, capabilities, folders and
+projects, chosen from what exists) and it is created.
+
 ## Federated sessions
 `/agent/session-send`, `/agent/session-inject`, `/agent/session-stop`,
 `/agent/session-close-inbound`, `/agent/session-events`,
@@ -490,9 +515,10 @@ vault (identity and keys) lives there.
   originator gets `session_closed`, the running turn is cancelled).
 - `GET /agent/session-events` → `{events, shares, wake, background, background_live, lend_live}`: everything buffered
   since the last call, in both directions, delivered once. Poll it.
-- `GET /agent/pending-approvals` → `{pending: [{id, peer, message, analyze}]}`:
-  incoming requests waiting for your yes; `POST /agent/resolve-approval
-  {peer, approved}` answers one.
+- `GET /agent/pending-approvals` → `{pending: [{id, peer, message, analyze}], expired}`:
+  incoming requests waiting for your yes, and the ids of those that ran out
+  of time (so a dialog still open can say so); `POST /agent/resolve-approval
+  {peer, approved, id?}` answers one (`id` names which request; without it, that peer's oldest).
 - `POST /fed/contact-verified {handle, verified}` marks a contact as checked
   (or not) after the person compared the safety code with them
   (`fed_safety_code`). For the window only: it is not a tool, so no model can
@@ -501,8 +527,12 @@ vault (identity and keys) lives there.
 Besides the loop's own events, session events include `session_open`
 (`peer`, `session_id`), `user_message` (`from`, `text`: what the other side
 typed), `queued` (`peer`: the peer's turn waits behind another one),
-`session_closed` (`by`) and `status` (`text`: e.g. the server asking to slow
-down).
+`session_closed` (`by`), `status` (`text`: e.g. the server asking to slow
+down), `session_ack` (`state`: `awaiting_approval`, then `accepted`; `by`: the
+handle of the side that received it), sent back to the originator of a new
+session so its tab can tell sent from open, and `session_refused` (`why`:
+`not_contact`, `no_permission`, `unverified`, `too_old` or `clock`), shown on
+the side that turned a request away, which otherwise would see nothing.
 
 A turn a peer asks for can orchestrate too, but strictly: `unattended`, no ack
 channel, so a local plan runs and one that would reach a **third** machine is
@@ -573,7 +603,7 @@ offer the same screens.
 
 **The turn and its controls** — `POST /agent/turn` · `POST /agent/tool_result` ·
 `POST /agent/plan_ack` · `POST /agent/council_ack` · `POST /agent/stop` ·
-`POST /agent/inject` · `GET /agent/background` · `POST /agent/background/watch` · `POST /agent/background/stop` · `POST /agent/background/done` · `POST /agent/hands` · `POST /agent/memory_snapshot` ·
+`POST /agent/inject` · `GET /agent/background` · `GET /agent/background/events` · `POST /agent/background/watch` · `POST /agent/background/stop` · `POST /agent/background/done` · `POST /agent/hands` · `POST /agent/memory_snapshot` ·
 `POST /agent/qa` · `GET /agent/context_limit` · `GET /agent/prompt_budget` ·
 `POST /agent/context_map` · `POST /code/judge` · `POST /call` ·
 `GET /agent/engine/claude/status` (the SDK, the user's `claude`, a sign-in or key by presence only; nothing secret is read) · `POST /agent/engine/claude/install` (pip installs the SDK into the MCP's Python, some 180 MB: `{ok, output}`).
@@ -620,7 +650,7 @@ above lists the calls of this machine's own lent models in flight
 | `POST /reload-config` | `{}` → `{reloaded, api_model, api_url, warnings[]}`. Re-reads `config.ini` (see CONFIG.md); `warnings` says when a change needs a restart (`[MCP_SERVERS]`). |
 | `POST /shutdown` | Closes the vault and exits cleanly. From localhost only (403 otherwise). |
 | `POST /vault/password` | `{current, new}` → `{ok, backup, notes, unreadable}`. Changes this machine's vault password with the server running, all or nothing: a copy of the database and of the identity file goes to `backups/` first (it opens with the old password); the identity file sealed under the new password is written beside the old one and read back; the database is re-keyed in one transaction with its note bodies; the identity file takes its new seal in one rename. A step that fails leaves everything under the old password (500 with the reason). Another machine carrying the same identity keeps its own password. Refused with 400 and a code (`wrong_current`, `same`, `empty`, `open_vault`, `busy`, `no_store`); from localhost only (403 otherwise), never across machines, never a tool. The window (Configuration → App) and `python/hoplita_passwd.py` call it. |
-| `POST /child/tools_for` | See above. |
+| `POST /child/tools_for` · `POST /child/design` | See above. |
 | `POST /spawn/enroll` | `{server_url, token, handle}`: enrolls THIS instance as a child (a headless agent of its owner) with a spawn token generated in the owner's GUI. The CLI calls it at start with `--spawn`. |
 
 **Memory: facts**
@@ -660,6 +690,16 @@ above lists the calls of this machine's own lent models in flight
 | `POST /notes/search` | `{query, category?, n_results: 5}` → `{results: [{category, title, id, score, content}]}`. Skills are notes too. |
 | `POST /data` | `{manager, method, args[], kwargs{}}` → `{result}` or `{error}`. Direct access to the stores behind the GUI's screens: `manager` is `todo`, `notes`, `cred` (the credential vault) or `cron`, and `method` one of that store's methods. A change to a shared task or note is pushed to the contact it is shared with. |
 
+**The code view** — the GUI's file tree and editor over the open project:
+
+| Endpoint | Body → answer |
+|---|---|
+| `GET /code/tree?root=&limit=4000` | → `{root, exists, dirs[], files[], truncated}`: the project's folders and files as relative paths, leaving out `.git`, virtual environments, caches and build output. |
+| `GET /code/file?path=` | → `{path, b64, mtime}`: one file's bytes as the editor loads it (404 when it cannot be read). |
+| `POST /code/stat` | `{paths[]}` → `{stat: {path: {exists, isdir, mtime, empty}}}`. |
+| `POST /code/mkdir` | `{path}` → `{ok, path}` (400 with the reason). |
+| `POST /code/git` | `{path, action}` → `{is_git}` for `check` (the default), `{ok, out}` for `init`; 404 for a folder that does not exist. |
+
 **Token meter** — `GET /stats/tokens` · `POST /stats/tokens/reset` · `POST /stats/tokens/add` (see above).
 
 **Federated sessions** — `POST /agent/session-send` · `POST /agent/session-inject` ·
@@ -668,7 +708,8 @@ above lists the calls of this machine's own lent models in flight
 `POST /agent/resolve-approval` · `POST /fed/contact-verified` (see above).
 
 **Whiteboard** — `GET /wb/app` · `GET /wb/host/{action}` · `GET /wb/static/{name}` ·
-`GET /wb/api/strings` · `GET /wb/api/list` · `GET /wb/api/find` ·
+`GET /wb/api/strings` · `GET /wb/api/list` · `GET /wb/api/find` · `GET /wb/api/months` ·
+`GET /wb/api/repo/log|files|filediff` ·
 `POST|GET /wb/api/draw` · `POST /wb/api/draw/{job}/cancel` · `GET /wb/api/{id}` ·
-`GET /wb/api/{id}/staleness|history|watch|peek|files|filediff|file|commits|resource/{rid}` ·
+`GET /wb/api/{id}/staleness|history|periods|watch|peek|files|filediff|file|commits|resource/{rid}` ·
 `GET|POST /wb/api/{id}/progress` · `POST /wb/api/{id}/copy-context` (see above).

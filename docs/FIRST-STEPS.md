@@ -71,8 +71,9 @@ memory and settings live; every later start asks for it again. **Keep it
 safe**: the data is encrypted with it.
 
 To change it later, with the server running: **Configuration** → **App** →
-**Vault** → **Change the password**, or from a terminal
-`python python/hoplita_passwd.py`. The database and the identity file are
+**Vault** → **Change the password…**, or from a terminal with HOPLITA's own
+Python: `~/hoplita/venv/bin/python ~/hoplita/hoplita_passwd.py` (on Windows,
+`%APPDATA%\hoplita\venv\Scripts\python.exe %APPDATA%\hoplita\hoplita_passwd.py`). The database and the identity file are
 sealed again with the new one in place, all or nothing; the backups made
 before that moment still open with the old one. A machine that starts
 unattended with `HOPLITA_VAULT_PASSWORD` needs the new one written there too.

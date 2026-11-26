@@ -50,7 +50,8 @@ The source tree. `install.py` copies the contents of `python/` flat into the ins
 | `python/wb_*.py`, `python/wb_canvas/`, `python/wb_instructions/` | The whiteboard: store, tools, background drawing, sync and its web page |
 | `python/hoplita_federation.py`, `python/fed_*.py`, `python/hoplita_crypto.py` | Federation: identity, end-to-end encryption, sync, shared sessions |
 | `python/hoplita_storage.py` | The single SQLCipher database |
-| `python/hoplita_launch.py` | One-click launcher (MCP, then GUI) used by the Windows shortcut |
+| `python/hoplita_launch.py` | One-click launcher (MCP, then GUI) that the HOPLITA shortcut runs on Linux, macOS and Windows |
+| `python/hoplita_claude_engine.py` | Claude Code tabs and Claude Code sub-tasks: the user's own Claude Code through Anthropic's Agent SDK, with HOPLITA's firewall deciding its tools |
 | `python/hoplita_i18n.py` | i18n module for Python |
 | `python/hoplita_paths.py` | Where HOPLITA lives (`HOPLITA_HOME`, or the folder that has `lang/`) |
 | `cli/main.go` | Go CLI: interactive and one-shot. It does not reason — the loop is the MCP's |
@@ -67,7 +68,7 @@ The source tree. `install.py` copies the contents of `python/` flat into the ins
 | `requirements-browser.txt` | Web browsing stack (Playwright, browser-use, crawl4ai) |
 | `requirements-desktop.txt` | Desktop hands' pixel layer (pyautogui, mss; pywinauto on Windows) |
 | `config.ini.example` | Annotated example config; `install.py` copies it to `config.ini` when there is none |
-| `docs/` | `INSTALL.md` (per system), `FIRST-STEPS.md` (what it needs to start), `COMMANDS.md` (every command), `CONFIG.md` (every key), `TOOLS.md` (every tool), `API.md` (REST API), `DEFINITION-OF-DONE.md` |
+| `docs/` | `INSTALL.md` (per system), `FIRST-STEPS.md` (what it needs to start), `COMMANDS.md` (every command), `CONFIG.md` (every key), `TOOLS.md` (every tool), `API.md` (REST API), `FEDERATION.md` (contacts, sharing, children), `DEFINITION-OF-DONE.md` |
 
 ## Installation
 
@@ -80,7 +81,7 @@ curl -fsSL https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.sh |
 irm https://raw.githubusercontent.com/HoplitaAI/Hoplita/main/install.ps1 | iex   # Windows (PowerShell)
 ```
 
-`install.sh` and `install.ps1` download the source and run `install.py` with a Python 3.11+: the machine's own when it can make a venv, otherwise (and always on Windows) a standalone Python 3.12 fetched with uv into `<install folder>/python`, with no root, no `PATH` change and nothing outside the install folder. Options go after `sh -s --` (or through a script block on Windows, see [docs/INSTALL.md](INSTALL.md)). Running the line again is a full install over the existing one, so new libraries in `requirements.txt` come in too; `--uninstall` removes the fetched Python with the rest.
+`install.sh` and `install.ps1` download the source and run `install.py` with a Python 3.11+: the machine's own on Linux when it can make a venv, otherwise (and always on macOS and Windows) a standalone Python 3.12 fetched with uv into `<install folder>/python`, with no root, no `PATH` change and nothing outside the install folder. Options go after `sh -s --` (or through a script block on Windows, see [docs/INSTALL.md](INSTALL.md)). Running the line again is a full install over the existing one, so new libraries in `requirements.txt` come in too; `--uninstall` removes the fetched Python with the rest.
 
 ### With the installer (Linux, macOS, Windows)
 
@@ -94,7 +95,9 @@ python install.py --lsp              # + Python language server (diagnostics and
 python install.py --desktop          # + desktop hands (requirements-desktop.txt) and a report of what they have
 python install.py --diffr            # + diffr, the structural diff behind the whiteboard's Diff view
 python install.py --system-libs      # + system libraries (QtWebEngine/tray, the hands' packages) — asks for sudo
+python install.py --full             # core + browser + desktop + diffr + lsp: every part that needs neither Go nor root
 python install.py --all              # core + browser + cli + desktop + diffr + lsp + system-libs
+python install.py --child            # a child: no window, no shortcuts, runs as a service of this user (the line its owner is handed)
 python install.py --prefix /path     # install somewhere else
 python install.py --no-shortcuts     # skip the desktop shortcuts
 python install.py --update           # refresh code, languages, assets and CLI of an existing install
@@ -102,7 +105,7 @@ python install.py --update           # refresh code, languages, assets and CLI o
 
 The default install folder is `~/hoplita` on Linux/macOS and `%APPDATA%\hoplita` on Windows: a folder of your own, so installing needs no root. The installer creates a venv inside it, installs `requirements.txt`, copies `python/*.py` (flat), `lang/`, `icons/` and `cli/`, and creates `config.ini` from `config.ini.example` only when there is none (an existing `config.ini` is never overwritten). With `--prefix`, HOPLITA finds its own folder (the one with `lang/` next to the code), or you can set `HOPLITA_HOME`.
 
-`--update` does not touch the venv, the dependencies, `config.ini` or the shortcuts; it rebuilds the CLI when the install already has one, and also runs `--lsp` (or `--all`), `--desktop` or `--diffr` when you add them.
+`--update` does not touch the venv, the dependencies or `config.ini`; on Linux and macOS it re-creates the HOPLITA shortcut (`--no-shortcuts` skips that); it rebuilds the CLI when the install already has one, and also runs `--lsp` (or `--all`), `--desktop` or `--diffr` when you add them.
 
 When a new version adds a library to `requirements.txt` (the Word, Excel and PowerPoint tools need `python-docx`, `openpyxl` and `python-pptx`), install it into the existing venv after the update:
 
@@ -163,7 +166,7 @@ Linux, `HOPLITA.app` on macOS, `HOPLITA.lnk` on Windows). It runs
 asked in a dialog) and then the GUI; an MCP that already answers is used as it is,
 and only the GUI opens. On Linux the same entry also goes to
 `~/.local/share/applications`, so desktops that draw no icons on the desktop (GNOME)
-list it in the activities search, the app grid and the run dialog. The MCP's log is `mcp.log` in the install folder,
+list it in the activities search, the app grid and the run dialog. The MCP's log is `mcp.log` in the install folder on Linux and `hoplita-mcp.log` on macOS and Windows,
 and an update replaces the two shortcuts an earlier install made (MCP and GUI). On macOS the app goes to
 `~/Applications` — Spotlight (⌘ Space → HOPLITA) and Launchpad find it — with a link on
 the desktop; drag it to the Dock to keep it there. An older install's `.command` files
@@ -248,6 +251,9 @@ Every model lives here, one of them elected **base** with `base = <alias>`. Each
 | `profile` | A plain-language description of what it is good at and what it prefers. The router and the planner read this to decide when to use it |
 | `context_length` | Its context window in tokens; empty = asked of the server |
 | `vision` | Whether it sees images (`true`/`false`); empty = `[CHAT] vision` |
+| `council` | Whether it sits on councils (`false` = it gets no chair) |
+| `lend` | Whether contacts with the «models» permission may use it (off unless set) |
+| `via` | The contact who lends it: set when a lent model is added, shown read-only, never typed |
 | `extra_body` | **Passthrough**: a JSON object that rides as-is in the body of every request to that endpoint, for what is not standardised and is not HOPLITA's to translate. Thinking is the case: qwen wants `{"chat_template_kwargs": {"enable_thinking": true}}`, deepseek wants `{"reasoning_effort": "high"}`, and both answer in `reasoning_content`. It is **not inherited** (sent to a model that does not know it, it is a 400) and it cannot override `messages`/`model`/`tools`/`stream`. Editable in the GUI as «Extra options (JSON)» on each model's line (✎); broken JSON is refused on save, never saved silently |
 
 ```ini
@@ -463,6 +469,7 @@ A mailbox is a credential of kind **Mailbox (IMAP)**: address, password, IMAP an
 | Tool | Description |
 |------|-------------|
 | `run_command` | Run a system command (with a minimal blocklist of destructive commands) |
+| `exec_command` | Run a command on its own, outside the shared terminal: its whole output goes to a file and the tail comes back; several can run at once |
 | `read_file` | Read a file |
 | `list_dir` | List a directory |
 | `generate_pdf` | Generate a PDF from text/markdown (fpdf2) |
@@ -593,13 +600,15 @@ All of them, plus the CLI's own commands and flags, on one page: **[docs/COMMAND
 | `/model <name>` | Pin a pool model for the chat (on the fly). Takes priority over the router |
 | `/model base` | Pin the base model; the router is bypassed |
 | `/model auto` | Hand the choice back to the router |
+| `/model opus\|sonnet\|haiku\|<id>\|default` | In a Claude Code tab: the model Claude Code answers with, from the next turn, in the same session |
 | `/verify <cmd>` | This tab's definition of done in commands: while it exits ≠ 0, the loop does not accept «finished». `off` clears it. The same command as on the VERIFY page |
 | `/goal <text>` | The definition of done in words, for what no command checks. The model reads it before starting and the reviewer uses it as the acceptance criterion. `/goal off` clears it, bare `/goal` shows it |
 | `/qa <alias\|off\|auto\|base>` | Who reviews this tab's answers before they are accepted. `<alias>` names a pool model, `base` pins the base model, `off` removes the reviewer here, `auto` returns to the config's judge. Naming a judge does not make that model answer the turn — that is `/model` |
 | `/pin` | Tie this tab to this machine: the conversation stays visible everywhere, and its turns run here, where its files, services and networks are. `/pin off` releases it, `/pin ?` says which machine it is tied to |
 | `/why` | What was put in front of the model on this tab's last turn: the trail behind its answer |
 | `/context` | What the next prompt weighs, block by block, heaviest first: history by role, the fifteen heaviest blocks, the tools carried. The meter gives one figure; this says what the figure is made of |
-| `/compact` | Fold the old part of this tab's context into a summary now, without waiting for the meter. Same routine as the automatic one; it says the size before and after and what the untouched recent window still weighs |
+| `/watch` | This tab's background jobs: `/watch list` shows them, `/watch stop <id\|all>` ends them |
+| `/compact` | In a Claude Code tab it is Claude Code's own `/compact`. Otherwise: fold the old part of this tab's context into a summary now, without waiting for the meter. Same routine as the automatic one; it says the size before and after and what the untouched recent window still weighs |
 | `/queue` | What is waiting in this tab's queue. `/queue <n>` takes message n back into the box to edit it, `/queue del <n>` drops it, `/queue clear` empties the queue (and a pending compaction) |
 | `/alert <message>` | Popup with a sound |
 | `/creds` | Credentials manager (dialog) |
@@ -624,14 +633,14 @@ The main window's tabs:
 | **Terminal** | An embedded terminal (Linux/macOS) |
 | **Contacts** | Federation: identity, contacts, presence, permissions |
 
-Inside the chat, beside the chat tabs, three buttons switch the chat area to a page of
-the active tab, and pressing one again returns to the conversation:
+On the federation line, the line above the chat tabs, three buttons (Agents, Code,
+Council) switch the chat area to a page of the active tab, and pressing one again returns to the conversation:
 
 | Page | What it holds |
 |------|---------------|
 | **Agents** | The multi-agent board: sub-task cards + dependency graph, with the model assigned to each. On top, the 🧭 band with the turn's intent list (metacognition), crossed out live |
 | **Code** | The code view of the active chat tab: project, changes, editor, symbols, history, search, the VERIFY and CO-WORK pages, and the 🧭 whiteboard page. Its own section below |
-| **🏛 Council** | Your models deliberating by turns on whatever you put to them. Its own section below |
+| **Council** | Your models deliberating by turns on whatever you put to them. Its own section below |
 
 And one special chat tab, **⏰ CRON**: where the crons land — their output, and a supervisor scoped to your jobs. It is born when something happens, not at startup.
 
@@ -797,13 +806,14 @@ side panel away and gives you the code full screen.
 
 | View | What it does |
 |---|---|
-| **± Changes** | What has been touched. Diff per file, **per-hunk reject** (keeping part of a change), undo, and the commit — with its message, and on `main`/`master` it **branches first**. The «only mine» checkbox separates what HOPLITA did from what was already dirty in your tree; unchecked, the commit ALSO takes what you edited by hand |
+| **± Changes** | What has been touched. Diff per file, **per-hunk reject** (keeping part of a change), undo, and the commit — with its message, and on `main`/`master` it **branches first**. The «only what HOPLITA did» checkbox separates what HOPLITA did from what was already dirty in your tree; unchecked, the commit ALSO takes what you edited by hand |
 | **📁 Files** | The project tree (lazy: walked the first time you look at it). Ctrl+P opens by name |
 | **ƒ Symbols** | The open file's outline: the LSP's real hierarchy when there is one, and groups with headers when there isn't; glyphs and colour per kind. Cached in the MCP by `(path, hash)` |
 | **✓ Verify** | **The VERIFY page**, below |
 | **🕘 History** | The last commits. Two questions per commit and a checkbox picks which: what that commit changed, or what has changed between it and now (the interdiff you read before saying «this is where it broke») |
 | **🔍 Search** | Search the whole project and jump to the line (Ctrl+Shift+F) |
 | **🤝 Co-work** | Share this project with a contact and see what arrives from them. **Its own page**, below |
+| **🧭 Board** | The whiteboard: a change of this project seen and weighed, or how it works, drawn by an agent in the background and anchored to the code |
 
 **The diff is a document, not a twin panel**: it shares space with the open files
 and is picked with a tab (draggable, with a ● when dirty). The editor has
@@ -819,10 +829,12 @@ recreated it) it tells you instead of showing you something else.
 is being done now → the board (`add_task`, moved with
 `update_task_progress`); a settled truth → `spec`; what is pending → `future`,
 and a line of it finished → closed (`project_write note=future done=true`), which
-moves it to the `journal`; what happened → `journal`. A turn that lands code
-with nothing open on the board and nothing written is asked once whether it
-holds a decision, a trap or a changed truth for the journal, or was a routine
-edit; what a turn did has that door, so it never lands in `future` as done. And the twin task project carries a 💻 badge so you
+moves it to the `journal`; what happened → `journal`. A turn that changes files
+in the project and writes no journal entry is shown the files and asked for one
+entry (per file: what was wrong, what changed, why); it cannot decline, and if
+it still writes none the harness records one itself, naming the files and the
+request, marked as unexplained. What a turn did has that door, so it never
+lands in `future` as done. And the twin task project carries a 💻 badge so you
 can tell which one belongs to the repo.
 
 ### The VERIFY page — a command, what you expect to see, one button
@@ -1476,7 +1488,7 @@ Two different words for two different things.
 |---|---|
 | **Clear** (the chat's ↺) | this tab's transcript, its pinned context, its open project, its agent cards, its intent list **and its council board**. NOT the conversation log: clearing empties a context, it does not say the conversation never happened |
 | **Delete** (a saved session) | the session row, its working memory, **its payload on disk** and **its messages in the searchable log**. It says it never happened |
-| **Notes tab → Conversations → Forget** | the log of one conversation, or all of it. Still there for when you want only that |
+| **Memory tab → Conversations → Forget one… / forget all** | the log of one conversation, or all of it. Still there for when you want only that |
 
 How a deletion behaves:
 
@@ -1527,7 +1539,7 @@ Everything that follows from the same rule:
 
 HOPLITA can use **several models at once**, each on its own endpoint, assigning the most suitable one to each task. The **base model** — elected in the pool (`[MODELS] base`), or `[API]` while none is — is the default brain and has priority.
 
-**Which models, and who uses which.** The config dialog opens on «Models»: first **Your models**, one line per model (name, model, server, whether it sees images, active, the BASE badge; ✎ opens its details, 🔌 tests it), then **Who uses which model**: the base model, whether the chat picks by itself (router), and each job that can use another model — browser and backup browser, background work (memory, curation, lessons, digesting large tool results), planner, answer reviewer, the one that takes over when stuck, the one that describes pictures for a model that cannot see them — plus the hands, said in words; then **Pictures**, the picture model on its own server. Each follows the base (or the conversation's model) until you pick another; the desktop hands always run on the conversation's model. In the INI a role names a pool alias: `[BROWSER] model = coder`. `[API]` is not shown: when the dialog opens, what a pool model inherited from it is written on that model's own line, and its model becomes a pool model. The other tabs are subjects — Conversation, Plans, Web, Search, Hands, Memory, App — not INI sections. GUI, MCP and CLI resolve all of this through one rule (`hoplita_llmcfg.resolve_endpoint`).
+**Which models, and who uses which.** The config dialog opens on «Models»: first **Your models**, one line per model (name, model, server, whether it sees images, active, the BASE badge; ✎ opens its details, 🔌 tests it), then **Who uses which model**: the base model, whether the chat picks by itself (router), and each job that can use another model — browser and backup browser, background work (memory, curation, lessons, digesting large tool results), planner, answer reviewer, the one that takes over when stuck, the one that describes pictures for a model that cannot see them — plus the hands, said in words; then **Pictures**, the picture model on its own server. Each follows the base (or the conversation's model) until you pick another; the desktop hands always run on the conversation's model. In the INI a role names a pool alias: `[BROWSER] model = coder`. `[API]` is not shown: when the dialog opens, what a pool model inherited from it is written on that model's own line, and its model becomes a pool model. The other tabs are subjects — Conversation, Plans, Web, Search, Hands, Memory, App — not INI sections; then **MCPs** (the external MCP servers), **Other** (any remaining key of your config.ini, when there is one) and **INI** (the raw file). GUI, MCP and CLI resolve all of this through one rule (`hoplita_llmcfg.resolve_endpoint`).
 
 **Configuration:** the pool in `[MODELS]` + `[MODEL:name]` sections with a plain-language `profile` (see the config section). Adding a model = adding its section, no code changes.
 
@@ -1554,7 +1566,7 @@ Three layers: the **plan** (before, the orchestrator), the **verification** (aft
 - **A ladder, not a cut**: a stuck model is first **asked**. The stall watch above can ask, or the model can repeat **the same call with the same result four times**; then it is asked which assumption is failing and to try another way, and the count starts again. **With two or more models, that first question also offers a council** (`call_council`), spelled out in the question: tell them what you are doing, what keeps happening and what you have, and ask whether to stop or what else to try. The model decides; the question alone often unblocks it, and a council costs several calls. If it is still sterile **after the question** for `metacog_stall_tools` tools, the turn is **handed to another pool model** (`[CHAT] escalate_model`, «Takes over when stuck» on the Models tab): once per turn, said in the chat. **With a single model, or nobody else to hand it to,** that step is a **second, firmer question**: a truly different approach, or stop and say what blocks it. If it stays sterile after that, the turn **closes honestly**: one tool-free pass in which it tells you what it tried, what blocks it and what it would need, instead of grinding the rest of the budget. If the same call sticks four more times, the turn is cut. Any real progress clears the ladder.
 - **Sterile-streak cut** (`heavy_sterile_cut`, default 3): an expensive tool (the browser) is switched off only when it comes back empty/error/repeated N times **in a row** — that source is not yielding the data that way — and the model is told in the result itself (and you in the chat: ✂). A result that pays resets the streak: if every browse pays, it can do a hundred. There is no fixed numeric cap on how often a tool may be used.
 
-Settings in `[CHAT]`, all hot-reloaded (the GUI editor or the ini): `metacog`, `metacog_stall_seconds`, `metacog_stall_tools`, `heavy_sterile_cut`. Keys: `docs/CONFIG.md` · stream events (`intent`, `metacog_nudge`, `model_escalated`, `metacog_close`): `docs/API.md`.
+Settings in `[CHAT]`, all hot-reloaded (the GUI editor or the ini): `metacog`, `metacog_stall_seconds` (default 120), `metacog_stall_tools` (default 4), `heavy_sterile_cut`. Keys: `docs/CONFIG.md` · stream events (`intent`, `metacog_nudge`, `model_escalated`, `metacog_close`): `docs/API.md`.
 
 ## Tool firewall
 
@@ -1615,12 +1627,13 @@ that moves at the bottom, and nothing above the newest message ever rewritten.
 - **Ctrl+V screenshot** → image to the vision LLM
 - **Multiple Ctrl+V** → a queue of files, all sent when you press Enter
 - **Drag & drop** → same effect
-- Supported: PNG, JPG, GIF, WEBP, PDF, TXT, MD, CSV
+- Supported: PNG, JPG, GIF, WEBP, PDF, TXT, MD, CSV, DOCX, XLSX and PPTX, up to 20 MB each
 - Images → `image_url` data URI to the chat model. A model declared blind never
   receives an image: when a model that sees is at hand (`[CHAT] vision_model`,
   «Vision» on the Models tab), it describes each picture first and the
   description stands in its place
-- PDFs → text extracted with `pdftotext` (first 8,000 characters)
+- PDFs → text extracted with `pdftotext` where it is installed, PyPDF2 otherwise (first 8,000 characters)
+- Office files → their text (first 8,000 characters)
 - Text → inline in the context (first 8,000 characters)
 
 ## Logging
@@ -1751,8 +1764,10 @@ The main endpoints (the full list, with the stream events, is in `docs/API.md`):
 | `/data` | POST | Direct proxy to manager methods: `{manager, method, args, kwargs}` (used by the GUI to manage data without going through the LLM) |
 | `/facts/list` | GET | Every fact with its `status`, plus `total`, `live`, `archived`, `archived_bytes` |
 | `/facts/add` | POST | `{text, tags}` — through the write gate |
-| `/facts/purge` | POST | `{ids}` deletes those; `{archived: true}` empties the archive; `{all: true, confirm: "DELETE ALL"}` everything. Deletions leave tombstones |
+| `/facts/purge` | POST | `{ids}` deletes those; `{archived: true}` empties the archive; `{all: true, confirm: "DELETE ALL"}` (or «BORRAR TODO») everything. Deletions leave tombstones |
 | `/memory/review` | POST | Run the memory pass now: `{limit: -1}` reviews the whole store. Returns what it `applied` |
+| `/memory/review/progress` | GET | Where the running pass is: phase, done/total, seconds since it began |
+| `/facts/{id}` | DELETE | Delete one fact |
 | `/memory/autolog` | GET | What the pass did on its own, newest first |
 | `/memory/autolog/{id}/undo` | POST | Put one of those changes back |
 

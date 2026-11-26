@@ -46,7 +46,7 @@ Everything else follows the base on its own; the other tabs carry sane defaults.
 | Key | Type | Default | What it does |
 |---|---|---|---|
 | `api_key` | text | — | Bearer token (a dummy value works for local servers) |
-| `base_url` | text | `https://api.openai.com/v1` | Endpoint (ends in /v1) the elected base falls back to for an empty URL |
+| `base_url` | text | `https://api.openai.com/v1` (`http://127.0.0.1:8080/v1` in the example) | Endpoint (ends in /v1) the elected base falls back to for an empty URL |
 | `model` | text | — | The base's model while no pool model is elected |
 | `extra_body` | text | — | **Passthrough**: a JSON object that rides AS-IS in the body of every request to this endpoint. For what is not standardised and is not HOPLITA's to translate — qwen wants `{"chat_template_kwargs": {"enable_thinking": true}}`, deepseek wants `{"reasoning_effort": "high"}`, and both answer in `reasoning_content`. It does **not** inherit (sending `enable_thinking` to a model that never heard of it is a 400) and it cannot override `messages`/`model`/`tools`/`stream`; anything else (`temperature`, `max_tokens`, `top_p`…) it can, and it wins. Bad JSON is refused out loud — in the editor on save, in the log at call time — never applied silently. Editable in the GUI as «Extra options (JSON)» on each model's line (✎). |
 
@@ -62,7 +62,7 @@ Everything else follows the base on its own; the other tabs carry sane defaults.
 
 | Key | Type | Default | What it does |
 |---|---|---|---|
-| `agentic_max_iterations` | int | `8` (`20` in the example) | Maximum tool rounds per turn — the per-turn tool limit (Conversation tab, first line). With the key absent, a turn sent by the GUI and a plan's sub-agents use `5` |
+| `agentic_max_iterations` | int | `8` (`20` in the example) | Maximum tool rounds per turn — the per-turn tool limit (Conversation tab, first line). With the key absent, a turn sent by the GUI and a plan's sub-agents use `5`, and the CLI sends `20` |
 | `auto_route_models` | bool | `True` | Router: sends each turn to the pool specialist that fits — «Pick by itself» on the Models tab |
 | `client_tool_timeout` | int | `3600` | Seconds the MCP waits for a tool the GUI executes (the GUI sends it with each turn). Long on purpose: an orchestration's sub-agents delegate their tools here too, and a browse or a build takes minutes |
 | `max_threads` | int | `8` | How many background jobs may be alive at once, over every conversation: tools started with `background_run`, watches (`background_watch`, `/watch`) and the shell runs they hold. One more is refused and told why (Conversation tab) |
@@ -83,7 +83,7 @@ Everything else follows the base on its own; the other tabs carry sane defaults.
 | `metacog` | bool | `True` | Metacognition: when a turn stalls, the model is asked to stop and rethink the path. It asks, never dictates; at most twice per turn, re-armed only by real progress |
 | `metacog_stall_seconds` | int | `120` | Seconds without progress (a new tool result, an intent item crossed out) before the tap. Checked between tools, never inside one: a long browse that brings data home never triggers it |
 | `metacog_stall_tools` | int | `4` | Consecutive tools with nothing new (repeats, errors, empties) before the tap, however fast they run |
-| `multi_max_parallel` | int | `4` | Sub-agents in parallel (raise it for sweeps across contacts) |
+| `multi_max_parallel` | int | `4` | Sub-agents in parallel (raise it for sweeps across contacts). A whiteboard drawing also takes its explorers in parallel from here, at most 3, and `2` when the key is absent |
 | `multi_max_retries` | int | `2` | Retries per failed sub-task |
 | ~~`num_ctx`~~ | — | — | **DEAD: not read.** The window has one name, `context_length`. If `[CHAT] num_ctx` is in your file you get a warning on the first turn: rename it to `context_length`, or delete it and the window is asked of the server. |
 | `plan_approval` | text | `always` | Permission before launching sub-agents: `always` (every plan asks) · `auto` (only remote or above the limit) · `off` |
@@ -99,7 +99,7 @@ Everything else follows the base on its own; the other tabs carry sane defaults.
 | `qa_review` | text | `off` | Review before accepting an answer: `off` (default) · `auto` · `always`. The reviewer sees the WORK: every step whole — the tool, its full arguments (the patch, the file written, the query) and everything it returned — plus the user's saved memory and what reached the turn while it ran (messages typed mid-turn, background job reports), and judges whether the answer is supported by it, and whether code written has visible bugs or leftovers. All or nothing: when the whole does not fit `qa_budget_chars` it reviews the steps only (tool, arguments on one line, ok / failed / empty) and the chat says so. One extra LLM call, max 2 rounds. **Never a model reviewing itself**: when the reviewer would be the model that did the work (no `qa_model`, or the same one) the turn is not reviewed and the chat says so. Naming a judge with `/qa <model>` turns it on for that tab; the event `qa_skipped` (why `self`) says when a review was skipped for this reason. |
 | `history_transcript` | bool | `True` | The history keeps the turn's TRANSCRIPT as the model saw it (tool calls, results, reviewer notes, rejected drafts), not just question and answer. The context grows downward and the server's prefix cache serves from one turn to the next. Turn off to keep only question and answer: shorter, but every turn re-reads the previous one without the cache. |
 | `session_inject_context` | bool | `True` | In a session with **yourself** from another machine (same identity), the agent that runs it works with your facts and lessons; `false` turns that off too. In a session with a **contact** or a **child** they never go in, whatever this says: the answer goes back to the other side. What they need to know is shared on purpose, as a skill or a pack |
-| `timeout` | int | `120` (`1000` in the example) | Seconds to wait on the LLM |
+| `timeout` | int | `120` (`1000` in the example) | Seconds to wait on the LLM. A whiteboard drawing's model calls wait `300` when the key is absent |
 | `vision` | bool | `False` | The general answer to «does it see images?» for a model that declares nothing on its own line (see `[MODEL:<alias>] vision`) |
 
 ## `[RAG]` — Retrieval
@@ -119,6 +119,7 @@ RAG is word search: no model call reads a `[RAG]` endpoint, so the section has n
 | Key | Type | Default | What it does |
 |---|---|---|---|
 | `model` | text | — (the conversation's model) | **Role**: the pool alias that **drives** the browser — «Browser» on the Models tab. Empty = the tab's pinned model, else the base. A raw model id still works (on the base's server) |
+| `base_url` / `api_key` | text | — | A hand-written endpoint for the role above, used with a raw model id in `model`; empty fields fill from the base. Ignored when `model` names a pool alias. The dialog brings such an endpoint into the pool as an inactive model and points the role at it |
 | `default_skill_category` | text | `skills` | Category where skills learned while browsing are stored. It is the DEFAULT, not the only one: any folder can be marked as skills (`skill_folder`, or right-click in the notes list) and joins the index and `use_skill` — a folder a contact shared, one you subscribed to. That mark lives with the notes, so it follows you to your other devices |
 | `skills_index_budget` | int | `6000` | Ceiling for the skills INDEX, in characters. That index rides in the context of EVERY turn, so its size is paid on every message: at ~91 chars per skill, 500 skills is ~12,600 tokens each time. Past the ceiling the index stops being shown whole and the matching ones are SEARCHED instead (by words, weighting the rare ones — no model, no server, no tokens), and it SAYS it is a selection: an index silently truncated makes the model believe the right skill does not exist, which is the exact failure the index exists to prevent. 0 = no ceiling |
 | `fallback_model` | text | — | **Role** («Backup browser» on the Models tab): pool alias that rescues a step when the main model fails. Must be enabled in `[MODELS]`: a disabled alias is ignored and said in the MCP log — off is off on every road |
@@ -130,7 +131,7 @@ RAG is word search: no model call reads a `[RAG]` endpoint, so the section has n
 | `structured_output` | text | `auto` | `force` · `auto` · `off` — force makes the SERVER constrain the JSON (the cure for "Invalid JSON") |
 | `use_thinking` | text | — | `true` · `false` · empty — pass "thinking" mode to the agent (only useful on reasoning models) |
 | `use_vision` | text | `auto` | Whether the browser sends SCREENSHOTS to the model. `true`/`false` force it and **overrule everything below**. `auto` asks the config through the one vision rule (see `[MODEL:<alias>] vision`), never the model's name. |
-| `user_agent` | text | a desktop Chrome on macOS | Browser User-Agent. Empty in the example, which means the built-in one |
+| `user_agent` | text | a desktop Safari on macOS | Browser User-Agent. Empty in the example, which means the built-in one |
 | `viewport_height` | int | `900` (`768` in the example) | Browser window height |
 | `viewport_width` | int | `1366` (`1024` in the example) | Browser window width |
 | `wait_between_actions` | float | `1.2` | Seconds between actions |

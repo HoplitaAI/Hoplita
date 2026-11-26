@@ -141,8 +141,9 @@ turn ends on the model's answer. You are warned earlier too: when you block the
 shell in a tab that has a check, and when you set a check with `/verify` in a
 tab whose shell is blocked.
 
-**The reviewer sees the check as a step with its verdict** («exit 0, PASSED»,
-«exit ≠0, FAILED», «did NOT run») next to the other steps it judges the answer
+**The reviewer sees the check as a step with its verdict** («exit 0 — the
+definition of done PASSED», «exit ≠0 — the definition of done FAILED», «did
+NOT run (refused by the firewall)») next to the other steps it judges the answer
 against. It never reads the test's output: the judge of the expectation does.
 
 ---

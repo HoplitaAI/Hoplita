@@ -223,7 +223,7 @@ one can also be added later.
 | `--desktop` | The desktop hands on Linux and Windows: the model sees and uses your screen (a Mac has them from the plain install) | See the [guide](GUIDE.md) |
 | `--lsp` | Diagnostics and navigation in the code editor | — |
 | `--diffr` | The structural diff in the whiteboard: Linux x86_64, macOS Apple Silicon, Windows x86_64 | — |
-| `--system-libs` | Linux system libraries for the canvas, the tray and the hands | `sudo` |
+| `--system-libs` | Linux system libraries for the canvas and the tray; together with `--desktop`, also the hands' accessibility binding and input helper | `sudo` |
 | `--full` | Every part above that needs neither Go nor root: browser, desktop, lsp, diffr | A large download |
 | `--all` | All of the above | |
 
@@ -248,7 +248,8 @@ not install new Python libraries; when a version adds one to
 %APPDATA%\hoplita\venv\Scripts\python.exe -m pip install -r requirements.txt   # Windows
 ```
 
-A tool whose library is missing says so and prints that same command.
+A tool whose library is missing says so and prints the `pip install` command
+for that package, run with HOPLITA's own Python.
 
 To remove HOPLITA, `python3 install.py --uninstall` deletes the program and
 keeps your data; `--uninstall --purge` deletes the data too.
