@@ -933,8 +933,18 @@ folder (a worktree of its own when another tab has the folder).
 **Its context is its own.** Claude Code keeps and folds its conversation itself:
 the meter shows the window it reports for its model, HOPLITA's compaction never
 runs on the tab, `/compact` typed there is Claude Code's own, and when it folds,
-on its own or asked, the chat says so. The model is the one your `claude` is
-set to.
+on its own or asked, the chat says so.
+
+**Its model.** The tab answers with the model your `claude` is set to;
+`/model opus`, `/model sonnet`, `/model haiku` (or a full model id) changes it
+from the next turn, in the same session, and `/model default` goes back.
+
+**In a plan.** With Claude Code in place and the conversation not local-only,
+a plan's sub-task can go to it: the planner may give one the target `claude`,
+or `claude:<model>`, and the plan's board offers them for every card. It runs
+in the sub-task's worktree like any local sub-task, its steps show on its
+card, and only the doors of the sub-task's capabilities are open to it; its
+work comes home into the folder the same way.
 
 **Your plan, your sign-in.** It uses the `claude` you installed and signed in to,
 or `ANTHROPIC_API_KEY`; HOPLITA never shows a Claude sign-in and never reads or

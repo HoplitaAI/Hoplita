@@ -108,7 +108,8 @@ class Orchestrator:
                  max_parallel=4, max_retries=2, should_stop=None,
                  subtask_timeout=1800,
                  max_expansions=2, max_subtasks=12, base_model_label="",
-                 solo_single=False, model_alias=None):
+                 solo_single=False, model_alias=None,
+                 target_label=None):
         self.llm_fn = llm_fn
         self.agent_fn = agent_fn
         self.progress_fn = progress_fn or (lambda e: None)
@@ -121,6 +122,7 @@ class Orchestrator:
         self.max_subtasks = max_subtasks
         self.solo_single = bool(solo_single)
         self.model_alias = model_alias
+        self.target_label = target_label
         self._lock = threading.Lock()
 
     @staticmethod
@@ -137,7 +139,10 @@ class Orchestrator:
         out = []
         for s in subs:
             d = s.to_dict() if isinstance(s, Subtask) else dict(s)
-            if not d.get("model") and self.base_model_label:
+            _own = self.target_label(d.get("target")) if self.target_label else None
+            if _own:
+                d["model"] = _own
+            elif not d.get("model") and self.base_model_label:
                 d["model"] = self.base_model_label
             out.append(d)
         return out

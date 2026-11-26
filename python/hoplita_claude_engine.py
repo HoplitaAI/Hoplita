@@ -20,6 +20,23 @@ TOOL_DOORS = {
 
 _STATUS = {"pending": "pending", "in_progress": "doing", "completed": "done"}
 
+MODEL_ALIASES = ("opus", "sonnet", "haiku")
+TARGET = "claude"
+
+
+def plan_target(target):
+    t = str(target or "").strip()
+    if t == TARGET:
+        return True, ""
+    if t.startswith(TARGET + ":"):
+        return True, t.split(":", 1)[1].strip()
+    return False, ""
+
+
+def ready():
+    st = status()
+    return bool(st["sdk"] and (st["signed_in"] or st["signed_in"] is None or st["api_key"]))
+
 
 def sdk_available():
     return importlib.util.find_spec("claude_agent_sdk") is not None

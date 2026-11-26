@@ -14425,6 +14425,54 @@ def _turn_local_only(tab_local_only, code_project):
     return bool(tab_local_only) or _project_local_only(code_project)
 
 
+def _engine_target_label(target):
+    import hoplita_claude_engine as _ce
+    eng, model = _ce.plan_target(target)
+    if not eng:
+        return None
+    return "Claude Code" + (f" · {model}" if model else "")
+
+
+def _subagent_engine(prompt, profile, model, ctx, terminal=False, project=None):
+    import hoplita_claude_engine as _ce
+    if getattr(ctx, "local_only", False):
+        return ("[sub-agent error: this conversation is local-only, and Claude Code "
+                "sends what it is given to Anthropic]")
+    if not _ce.sdk_available():
+        return "[sub-agent error: the Claude Code engine is not installed]"
+    try:
+        from hoplita_orchestrator import current_subtask_id
+        _card = current_subtask_id()
+    except Exception:
+        _card = ""
+    _blocked, allowed = _sub_agent_wall(ctx, set(_profile_tool_names(profile, terminal)))
+
+    def emit(ev):
+        et = ev.get("event")
+        if et == "tool_call" and _card:
+            ctx.emit({"event": "orch", "orch": {
+                "type": "step", "id": _card, "tool": ev.get("tool", ""),
+                "args": str(ev.get("args_preview") or "")[:120], "background": ""}})
+        elif et == "tool_result" and _card:
+            ctx.emit({"event": "orch", "orch": {
+                "type": "step_done", "id": _card, "tool": ev.get("tool", ""),
+                "duration_s": ev.get("duration_s") or 0,
+                "ok": not str(ev.get("result_preview") or "").lstrip().startswith('{"error"')}})
+        elif et == "intent" and _card:
+            ctx.emit({"event": "orch", "orch": {
+                "type": "intent", "id": _card,
+                "items": [dict(it) for it in (ev.get("items") or []) if isinstance(it, dict)]}})
+        elif et in ("llm_call", "thought", "tokens"):
+            ctx.emit({"event": "orch", "orch": {"type": "tick", "id": _card or "claude"}})
+
+    r = _ce.run_turn(prompt, emit, ctx.cancel,
+                     cwd=(project or getattr(ctx, "code_project", "") or "").strip(),
+                     door_blocked=lambda d: d not in allowed, model=model)
+    if r.get("error") and not r.get("reply"):
+        return f"[sub-agent error: Claude Code: {r['error']}]"
+    return r.get("reply") or "[sub-agent error: Claude Code gave no answer]"
+
+
 def _sub_agent_wall(ctx, names):
     tab = ctx.blocked
     lock = bool(getattr(ctx, "local_only", False))
@@ -15486,7 +15534,7 @@ def _orch_remote_targets():
     return names
 
 
-def _orch_planner_block():
+def _orch_planner_block(ctx=None):
     block = ""
     pool = _model_pool()
     if pool:
@@ -15502,6 +15550,16 @@ def _orch_planner_block():
         block += "\n\n" + "\n".join([_tr("planner.children_header")]
                                     + [f"  - {n}" for n in kids]
                                     + [_tr("planner.children_rules")])
+    try:
+        import hoplita_claude_engine as _ce
+        _engine = (not getattr(ctx, "local_only", False)) and _ce.ready()
+    except Exception:
+        _engine = False
+    if _engine:
+        block += "\n\n" + "\n".join(
+            [_tr("planner.engines_header")]
+            + [f'  - "{_ce.TARGET}" / ' + " / ".join(f'"{_ce.TARGET}:{m}"' for m in _ce.MODEL_ALIASES)]
+            + [_tr("planner.engines_rules")])
     targets = _orch_remote_targets()
     if targets:
         block += "\n\n" + "\n".join([_tr("planner.targets_header")]
@@ -15823,7 +15881,7 @@ def tool_plan_and_orchestrate(task, solo_single=False):
     if solo_single and ctx.plan_solo:
         return {"orchestrated": False, "result": _tr("msg.plan_single_solo")}
 
-    planner_block = _orch_planner_block()
+    planner_block = _orch_planner_block(ctx)
 
     def llm_fn(system, user):
         base_url, api_key, model = _orch_role_endpoint("planner", ctx)
@@ -15844,7 +15902,9 @@ def tool_plan_and_orchestrate(task, solo_single=False):
         if deps_ctx:
             prompt = (f"{goal}\n\n[Context from previous tasks you must use]:"
                       f"\n{deps_ctx}")
-        if target and target != "local":
+        import hoplita_claude_engine as _ce
+        _eng, _eng_model = _ce.plan_target(target)
+        if target and target != "local" and not _eng:
             _local_child = hoplita_children.find(target) is not None
             ctx.emit({"event": "orch", "orch": {
                 "type": "note",
@@ -15874,9 +15934,13 @@ def tool_plan_and_orchestrate(task, solo_single=False):
                           f"The project's folder {_st['root']} is shared with the other "
                           f"sub-tasks; your changes reach it when you finish.]")
             try:
-                out = _subagent_local(prompt, profile, model_name, ctx, _sid,
-                                      terminal, project=_sub_path,
-                                      remap=((_st["root"], _st["where"]) if _st else None))
+                if _eng:
+                    out = _subagent_engine(prompt, profile, _eng_model, ctx, terminal,
+                                           project=_sub_path)
+                else:
+                    out = _subagent_local(prompt, profile, model_name, ctx, _sid,
+                                          terminal, project=_sub_path,
+                                          remap=((_st["root"], _st["where"]) if _st else None))
                 _ok_sub = bool(out) and not out.startswith(
                     ("[sub-agent error", "[stopped by the user]"))
             finally:
@@ -15954,6 +16018,7 @@ def tool_plan_and_orchestrate(task, solo_single=False):
         max_subtasks=_int("plan_max_subtasks", 12),
         solo_single=solo_single,
         model_alias=_pool_alias,
+        target_label=_engine_target_label,
         subtask_timeout=_int("subtask_timeout", 1800),
         should_stop=ctx.cancel,
         base_model_label=_pool_label_of(
@@ -16222,6 +16287,7 @@ class AgentTurnReq(BaseModel):
     blocked_tools: List[str] = []
     engine: str = ""
     engine_session: str = ""
+    engine_model: str = ""
     local_only: bool = False
     rag_docs: int = 0
 
@@ -16583,7 +16649,8 @@ def _engine_turn_worker(req, turn_id, put, cancel_ev, said):
     r = _ce.run_turn(said or "", put, cancel_ev.is_set,
                      cwd=(req.code_project or "").strip(),
                      session_id=(req.engine_session or "").strip(),
-                     door_blocked=lambda d: _is_off(d, _blocked))
+                     door_blocked=lambda d: _is_off(d, _blocked),
+                     model=(req.engine_model or "").strip())
     if cancel_ev.is_set():
         put({"event": "cancelled", "iterations": r.get("tools", 0),
              "engine_session": r.get("session_id", "")})

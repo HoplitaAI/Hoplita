@@ -1852,6 +1852,7 @@ class ChatCtx:
         self.code_project = ""
         self.engine = ""
         self.engine_session = ""
+        self.engine_model = ""
         self.blocked_tools = set()
         self.code_bufs = {}
         self.code_bufs_order = []
@@ -8202,6 +8203,7 @@ enabled = true
             "blocked_tools": sorted(getattr(ctx, "blocked_tools", ()) or ()),
             "engine": getattr(ctx, "engine", "") or "",
             "engine_session": getattr(ctx, "engine_session", "") or "",
+            "engine_model": getattr(ctx, "engine_model", "") or "",
         }
         return sess
 
@@ -8723,6 +8725,7 @@ enabled = true
             ctx.code_project = sess.get("code_project") or ""
             ctx.engine = sess.get("engine") or ""
             ctx.engine_session = sess.get("engine_session") or ""
+            ctx.engine_model = sess.get("engine_model") or ""
             ctx.pinned_device = sess.get("pinned_device") or None
             ctx.sync_id = sess.get("sync_id") or ctx.sync_id
             ctx.verify_cmd = sess.get("verify_cmd") or ""
@@ -9018,6 +9021,37 @@ enabled = true
                          "system")
         if not ((st or {}).get("signed_in") or (st or {}).get("api_key")):
             self.add_message(t("claude.no_sign_in"), "system")
+
+    def _engine_model_command(self, arg):
+        import hoplita_claude_engine as _ce
+        ctx = self._view_ctx()
+        if not arg:
+            self.add_message(t("claude.model_now",
+                               name=ctx.engine_model or t("claude.model_default"),
+                               names=", ".join(_ce.MODEL_ALIASES)), "system")
+            return
+        ctx.engine_model = "" if arg.lower() in ("default", "base", "auto") else arg
+        self.add_message(t("claude.model_set",
+                           name=ctx.engine_model or t("claude.model_default")), "system")
+        self._render_chat_tabs()
+
+    def _engine_target_names(self):
+        import hoplita_claude_engine as _ce
+        if getattr(self._view_ctx(), "local_only", False):
+            return []
+        now = time.time()
+        c = getattr(self, "_claude_ready_cache", None)
+        if not c or now - c[0] > 60:
+            try:
+                st = requests.get(f"{self._mcp_url}/agent/engine/claude/status", timeout=3).json()
+                ok = bool(st.get("sdk") and (st.get("signed_in") or st.get("signed_in") is None
+                                             or st.get("api_key")))
+            except Exception:
+                ok = False
+            c = self._claude_ready_cache = (now, ok)
+        if not c[1]:
+            return []
+        return [_ce.TARGET] + [f"{_ce.TARGET}:{m}" for m in _ce.MODEL_ALIASES]
 
     def _engine_session_keep(self, tab, ev):
         sid = (ev or {}).get("engine_session")
@@ -18524,7 +18558,8 @@ enabled = true
             return
         self._ack_showing_tab = tab
         panel.set_labels(self._agents_labels())
-        panel.ask_plan(box["subs"], ["local"] + self._remote_target_names(),
+        panel.ask_plan(box["subs"], ["local"] + self._engine_target_names()
+                       + self._remote_target_names(),
                        ["base"] + list(self._model_pool().keys()))
         if getattr(self, "_chat_stack", None) is not None:
             self._chat_stack.setCurrentIndex(1)
@@ -18623,7 +18658,7 @@ enabled = true
             "QScrollArea { border:none; background:transparent; }")
         sc = QScrollArea(); sc.setWidgetResizable(True)
         inner = QWidget(); il = QVBoxLayout(inner); il.setSpacing(8)
-        targets = ["local"] + self._remote_target_names()
+        targets = ["local"] + self._engine_target_names() + self._remote_target_names()
         models = ["base"] + list(self._model_pool().keys())
         rows = []
         for s in subs:
@@ -18977,6 +19012,9 @@ enabled = true
 
     def _handle_model_command(self, arg):
         arg = arg.strip()
+        if getattr(self._view_ctx(), "engine", ""):
+            self._engine_model_command(arg)
+            return
         _parts = arg.split(None, 1)
         if _parts and _parts[0].lower() == "qa":
             self._handle_qa_command(_parts[1] if len(_parts) > 1 else "")
@@ -19128,6 +19166,7 @@ enabled = true
         payload.setdefault("local_only", bool(getattr(_c, "local_only", False)))
         payload.setdefault("engine", getattr(_c, "engine", "") or "")
         payload.setdefault("engine_session", getattr(_c, "engine_session", "") or "")
+        payload.setdefault("engine_model", getattr(_c, "engine_model", "") or "")
         payload.setdefault("session", getattr(_c, "sync_id", "")
                            or getattr(_c, "tab_id", "") or "")
         payload.setdefault("session_uuid", getattr(_c, "session_uuid", "") or "")
